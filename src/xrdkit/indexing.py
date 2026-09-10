@@ -12,13 +12,16 @@ from xrdkit.peaks import Peak
 
 __all__ = [
     "TTB_CELL",
+    "CellFit",
     "IndexedPeak",
     "Reflection",
     "TetragonalCell",
     "generate_reflections",
+    "index_and_refine",
     "index_peaks",
     "indexed_to_csv",
     "indexing_summary",
+    "refine_cell",
 ]
 
 # Maximum difference between corrected and calculated 2theta, in degrees.
@@ -351,3 +354,215 @@ def indexed_to_csv(indexed: list[IndexedPeak], path: str | Path) -> Path:
                 ]
             )
     return path
+
+
+@dataclass
+class CellFit:
+    """The outcome of a least squares cell refinement."""
+
+    cell: TetragonalCell
+    n_peaks: int
+    rms_two_theta: float
+    c_fitted: bool
+
+
+def _two_theta(d_spacing: float, wavelength: float) -> float:
+    """Return the 2theta of a d spacing, or ``nan`` if it cannot diffract."""
+    sin_theta = wavelength / (2.0 * d_spacing)
+    if sin_theta > 1.0:
+        return float("nan")
+    return 2.0 * float(np.degrees(np.arcsin(sin_theta)))
+
+
+def refine_cell(
+    indexed: list[IndexedPeak],
+    wavelength: float | None = None,
+    start_cell: TetragonalCell | None = None,
+) -> CellFit:
+    """Refine a tetragonal cell from indexed peaks by linear least squares.
+
+    For a tetragonal cell 1/d^2 = (h^2 + k^2) A + l^2 C with A = 1/a^2 and
+    C = 1/c^2, so A and C are the coefficients of an ordinary linear least
+    squares problem in the observed 1/d^2. The observed d spacings are
+    recomputed from ``corrected_two_theta`` rather than taken from the peaks, so
+    that any zero point correction already applied is carried through.
+
+    Parameters
+    ----------
+    indexed
+        Result of :func:`index_peaks`; only entries with an assignment are used.
+    wavelength
+        Radiation wavelength in angstroms. :class:`IndexedPeak` does not carry
+        one, so it must be given here.
+    start_cell
+        Cell the indexing started from. Only needed when no peak has ``l != 0``,
+        in which case its ``c`` is kept unchanged.
+
+    Returns
+    -------
+    CellFit
+        The fitted cell, the number of peaks used, the root mean square
+        difference in degrees between their corrected and recalculated 2theta,
+        and whether ``c`` was fitted.
+
+    Raises
+    ------
+    ValueError
+        If ``wavelength`` is None, if fewer than three indexed peaks are
+        available, if ``c`` cannot be fitted and no ``start_cell`` is given, or
+        if the fit returns a coefficient that is not a positive number.
+    """
+    if wavelength is None:
+        raise ValueError(
+            "refine_cell needs a wavelength; IndexedPeak does not carry one"
+        )
+
+    used = [entry for entry in indexed if entry.is_indexed]
+    if len(used) < 3:
+        raise ValueError(
+            f"Need at least 3 indexed peaks to refine a cell, got {len(used)}"
+        )
+
+    positions = np.array([entry.corrected_two_theta for entry in used], dtype=float)
+    d_observed = wavelength / (2.0 * np.sin(np.radians(positions / 2.0)))
+    inverse_squared = 1.0 / d_observed**2
+
+    hk = np.array(
+        [entry.reflection.h**2 + entry.reflection.k**2 for entry in used], dtype=float
+    )
+    ll = np.array([entry.reflection.l**2 for entry in used], dtype=float)
+
+    c_fitted = bool(np.any(ll > 0.0))
+    if c_fitted:
+        design = np.column_stack((hk, ll))
+    else:
+        if start_cell is None:
+            raise ValueError(
+                "No peak with l != 0, so c cannot be fitted; pass start_cell to "
+                "keep its c"
+            )
+        design = hk.reshape(-1, 1)
+
+    solution, *_ = np.linalg.lstsq(design, inverse_squared, rcond=None)
+
+    a_coefficient = float(solution[0])
+    if not a_coefficient > 0.0:
+        raise ValueError(
+            f"Refinement gave a non-positive 1/a^2 of {a_coefficient}; the "
+            "assignments are probably wrong"
+        )
+    a = 1.0 / np.sqrt(a_coefficient)
+
+    if c_fitted:
+        c_coefficient = float(solution[1])
+        if not c_coefficient > 0.0:
+            raise ValueError(
+                f"Refinement gave a non-positive 1/c^2 of {c_coefficient}; the "
+                "assignments are probably wrong"
+            )
+        c = 1.0 / np.sqrt(c_coefficient)
+    else:
+        c = start_cell.c
+
+    cell = TetragonalCell(a=float(a), c=float(c))
+    recalculated = np.array(
+        [
+            _two_theta(cell.d_spacing(*entry.reflection.hkl), wavelength)
+            for entry in used
+        ],
+        dtype=float,
+    )
+    rms = float(np.sqrt(np.mean(np.square(positions - recalculated))))
+
+    return CellFit(cell=cell, n_peaks=len(used), rms_two_theta=rms, c_fitted=c_fitted)
+
+
+def index_and_refine(
+    peaks: list[Peak],
+    start_cell: TetragonalCell,
+    wavelength: float,
+    zero_offset: float = DEFAULT_ZERO_OFFSET,
+    coarse_tolerance: float = 0.15,
+    coarse_two_theta_max: float = 45.0,
+    fine_tolerance: float = DEFAULT_TOLERANCE,
+    space_group: str | None = DEFAULT_SPACE_GROUP,
+    n_cycles: int = 2,
+) -> tuple[list[IndexedPeak], CellFit]:
+    """Index and refine in cycles, starting coarse and low angle.
+
+    The first cycle indexes only the peaks below ``coarse_two_theta_max`` with
+    ``coarse_tolerance``, where a cell that is still some way off can be trusted
+    to put reflections near the right peaks. Every later cycle indexes the whole
+    list with ``fine_tolerance`` against the cell of the previous cycle. Each
+    cycle refines on the peaks that matched exactly one reflection, so an
+    ambiguous peak never chooses between two candidates on the strength of a
+    cell that is not yet converged.
+
+    Parameters
+    ----------
+    peaks
+        Observed peaks to index.
+    start_cell
+        Cell the first cycle indexes against.
+    wavelength
+        Radiation wavelength in angstroms.
+    zero_offset
+        Zero point correction, in degrees, subtracted from each observed peak.
+    coarse_tolerance
+        Tolerance of the first cycle, in degrees.
+    coarse_two_theta_max
+        Upper limit of the first cycle, in corrected degrees.
+    fine_tolerance
+        Tolerance of the later cycles and of the returned indexing, in degrees.
+    space_group
+        Space group whose reflection conditions to apply, or ``None`` for none.
+    n_cycles
+        Number of refinement cycles, at least one.
+
+    Returns
+    -------
+    tuple[list[IndexedPeak], CellFit]
+        The whole peak list indexed against the final cell with
+        ``fine_tolerance``, and the fit of the last cycle.
+
+    Raises
+    ------
+    ValueError
+        If ``n_cycles`` is below one, if no peak falls below
+        ``coarse_two_theta_max``, or if a cycle has too few peaks to refine on.
+    """
+    if n_cycles < 1:
+        raise ValueError(f"Need at least one cycle, got {n_cycles}")
+
+    coarse_peaks = [
+        peak for peak in peaks if peak.two_theta - zero_offset <= coarse_two_theta_max
+    ]
+    if not coarse_peaks:
+        raise ValueError(
+            f"No peak below {coarse_two_theta_max} degrees to start the refinement from"
+        )
+
+    cell = start_cell
+    fit = None
+    for cycle in range(n_cycles):
+        if cycle == 0:
+            candidates = index_peaks(
+                coarse_peaks,
+                cell,
+                wavelength,
+                coarse_tolerance,
+                zero_offset,
+                space_group,
+            )
+        else:
+            candidates = index_peaks(
+                peaks, cell, wavelength, fine_tolerance, zero_offset, space_group
+            )
+        unambiguous = [entry for entry in candidates if len(entry.candidates) == 1]
+        fit = refine_cell(unambiguous, wavelength, cell)
+        cell = fit.cell
+
+    final = index_peaks(
+        peaks, cell, wavelength, fine_tolerance, zero_offset, space_group
+    )
+    return final, fit

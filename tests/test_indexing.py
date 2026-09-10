@@ -11,9 +11,11 @@ from xrdkit import (
     Peak,
     TetragonalCell,
     generate_reflections,
+    index_and_refine,
     index_peaks,
     indexed_to_csv,
     indexing_summary,
+    refine_cell,
 )
 from xrdkit.indexing import _is_allowed
 
@@ -38,17 +40,21 @@ def make_peak(two_theta: float, relative_intensity: float = 50.0) -> Peak:
     )
 
 
-def isolated_reflections(two_theta_max: float = 40.0) -> list:
+def isolated_reflections(
+    two_theta_max: float = 40.0,
+    cell: TetragonalCell = TTB_CELL,
+    separation: float = ISOLATION,
+) -> list:
     """Reflections that are well separated from their neighbours."""
-    reflections = generate_reflections(TTB_CELL, WAVELENGTH, two_theta_max)
+    reflections = generate_reflections(cell, WAVELENGTH, two_theta_max)
     positions = [reflection.two_theta for reflection in reflections]
     return [
         reflection
         for index, reflection in enumerate(reflections)
-        if (index == 0 or positions[index] - positions[index - 1] > ISOLATION)
+        if (index == 0 or positions[index] - positions[index - 1] > separation)
         and (
             index == len(reflections) - 1
-            or positions[index + 1] - positions[index] > ISOLATION
+            or positions[index + 1] - positions[index] > separation
         )
     ]
 
@@ -262,3 +268,121 @@ def test_indexed_to_csv_writes_a_row_per_peak(tmp_path) -> None:
     assert len(blank) == 1
     assert blank[0][5] == "" and blank[0][6] == ""
     assert blank[0][7] == "" and blank[0][8] == ""
+
+
+# The cell the synthetic refinement peaks come from, about 1% larger in a than
+# TTB_CELL so the refinement has something real to recover.
+REFINED_CELL = TetragonalCell(a=12.58, c=3.96)
+
+# Largest synthetic position error, in degrees. Well inside the fine tolerance,
+# so every peak still indexes once the cell is close.
+NOISE = 0.008
+
+# Reflections of REFINED_CELL closer together than this overlap badly enough to
+# be genuinely ambiguous, so they make poor synthetic peaks.
+REFINEMENT_ISOLATION = 0.30
+
+# The 0.13 angstrom gap between TTB_CELL and REFINED_CELL moves peaks by up to
+# 0.3 degrees by 30 degrees 2theta, which the 0.15 degree default cannot bridge.
+BRIDGING_TOLERANCE = 0.5
+
+
+def synthetic_peaks(
+    cell: TetragonalCell = REFINED_CELL,
+    two_theta_max: float = 45.0,
+    seed: int = 20240501,
+) -> tuple[list, list[Peak]]:
+    """Isolated reflections of ``cell`` and the noisy peaks they would produce."""
+    reflections = isolated_reflections(two_theta_max, cell, REFINEMENT_ISOLATION)
+    rng = np.random.default_rng(seed)
+    peaks = [
+        make_peak(round(reflection.two_theta + rng.uniform(-NOISE, NOISE), 3))
+        for reflection in reflections
+    ]
+    return reflections, peaks
+
+
+def test_index_and_refine_recovers_the_cell_the_peaks_came_from() -> None:
+    reflections, peaks = synthetic_peaks()
+
+    indexed, fit = index_and_refine(
+        peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=BRIDGING_TOLERANCE
+    )
+
+    assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
+    assert fit.cell.c == pytest.approx(REFINED_CELL.c, abs=0.005)
+    assert fit.c_fitted
+    assert fit.n_peaks == len(peaks)
+    assert fit.rms_two_theta < 0.01
+
+    assert all(entry.is_indexed for entry in indexed)
+    assert [entry.reflection.hkl for entry in indexed] == [
+        reflection.hkl for reflection in reflections
+    ]
+
+
+def test_index_and_refine_cannot_start_from_too_tight_a_coarse_tolerance() -> None:
+    """The default 0.15 degrees is narrower than the shift TTB_CELL produces."""
+    _, peaks = synthetic_peaks()
+
+    with pytest.raises(ValueError, match="at least 3 indexed peaks"):
+        index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+
+
+def test_index_and_refine_rejects_a_cycle_count_below_one() -> None:
+    _, peaks = synthetic_peaks()
+
+    with pytest.raises(ValueError, match="at least one cycle"):
+        index_and_refine(peaks, TTB_CELL, WAVELENGTH, n_cycles=0)
+
+
+def test_refine_cell_needs_three_indexed_peaks() -> None:
+    reflections = isolated_reflections()[:2]
+    peaks = [make_peak(reflection.two_theta) for reflection in reflections]
+    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH)
+    assert all(entry.is_indexed for entry in indexed)
+
+    with pytest.raises(ValueError, match="at least 3 indexed peaks"):
+        refine_cell(indexed, WAVELENGTH)
+
+
+def test_refine_cell_needs_a_wavelength() -> None:
+    reflections = isolated_reflections()[:5]
+    peaks = [make_peak(reflection.two_theta) for reflection in reflections]
+    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH)
+
+    with pytest.raises(ValueError, match="needs a wavelength"):
+        refine_cell(indexed)
+
+
+def hk0_indexed() -> list[IndexedPeak]:
+    """Indexed peaks of REFINED_CELL that all have l == 0."""
+    reflections, peaks = synthetic_peaks()
+    hk0 = [
+        (reflection, peak)
+        for reflection, peak in zip(reflections, peaks)
+        if reflection.l == 0
+    ]
+    indexed = index_peaks([peak for _, peak in hk0], REFINED_CELL, WAVELENGTH)
+    assert all(entry.is_indexed and entry.reflection.l == 0 for entry in indexed)
+    return indexed
+
+
+def test_refine_cell_keeps_c_when_no_reflection_has_l() -> None:
+    indexed = hk0_indexed()
+
+    fit = refine_cell(indexed, WAVELENGTH, start_cell=TTB_CELL)
+
+    assert not fit.c_fitted
+    # hk0 fixes a on its own, and c is carried over untouched.
+    assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
+    assert fit.cell.c == TTB_CELL.c
+    assert fit.n_peaks == len(indexed)
+    assert fit.rms_two_theta < 0.01
+
+
+def test_refine_cell_without_l_needs_a_start_cell() -> None:
+    indexed = hk0_indexed()
+
+    with pytest.raises(ValueError, match="pass start_cell"):
+        refine_cell(indexed, WAVELENGTH)
