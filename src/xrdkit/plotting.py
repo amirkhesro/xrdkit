@@ -68,6 +68,12 @@ AMBIGUOUS_SEPARATOR = "/"
 PEAK_MARKER = "*"
 PEAK_MARKER_FONTSIZE = 9
 
+# An index of 10 or more makes the compact form ambiguous, since (10 0 2) and
+# (1 0 0) both run together as 1002. Those labels are spaced with a thin space,
+# which separates the indices without opening the gap a full space would.
+HKL_THIN_SPACE = "\u2009"
+HKL_WIDE_INDEX = 10
+
 
 def apply_style() -> None:
     """Set global rcParams to a clean single-column journal style."""
@@ -276,8 +282,17 @@ def plot_stacked(
 
 
 def _hkl_label(reflection: Reflection) -> str:
-    """Return the Miller indices run together, so ``(3 1 1)`` becomes ``311``."""
-    return f"{reflection.h}{reflection.k}{reflection.l}"
+    """Return the Miller indices as a label, so ``(3 1 1)`` becomes ``311``.
+
+    Indices below 10 run together. As soon as one reaches ``HKL_WIDE_INDEX`` the
+    compact form stops being readable, so every index of that label is separated
+    by a thin space instead: ``(10 0 2)`` becomes ``10 0 2`` rather than
+    ``1002``, which would otherwise be indistinguishable from ``(1 0 0)`` with a
+    trailing 2.
+    """
+    indices = reflection.hkl
+    separator = HKL_THIN_SPACE if max(indices) >= HKL_WIDE_INDEX else ""
+    return separator.join(str(index) for index in indices)
 
 
 def annotate_hkl(

@@ -25,6 +25,7 @@ from xrdkit.plotting import (
     AMBIGUOUS_SEPARATOR,
     HKL_LABEL_HEIGHT,
     HKL_MIN_SEPARATION,
+    HKL_THIN_SPACE,
     LABEL_HEIGHT,
     OFFSET_FACTOR,
     PEAK_MARKER,
@@ -450,3 +451,34 @@ def test_annotate_hkl_onto_a_chosen_stack_slot() -> None:
     texts = annotate_hkl(ax, make_indexed(), bases[1] + 1.2, label_height=0.1)
 
     assert texts[0].get_position()[1] == pytest.approx(bases[1] + 1.2)
+
+
+def test_hkl_label_runs_single_digit_indices_together() -> None:
+    indexed = [make_indexed_peak(FAR_PEAK, (3, 1, 1))]
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE)
+
+    assert texts[0].get_text() == "311"
+    assert HKL_THIN_SPACE not in texts[0].get_text()
+
+
+def test_hkl_label_spaces_a_two_digit_index() -> None:
+    indexed = [make_indexed_peak(FAR_PEAK, (10, 0, 2))]
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE)
+
+    # Every index is spaced, not just the wide one, so the label reads evenly.
+    assert texts[0].get_text() == f"10{HKL_THIN_SPACE}0{HKL_THIN_SPACE}2"
+    # The compact form would be indistinguishable from (1 0 0) with a spare 2.
+    assert texts[0].get_text() != "1002"
+
+
+def test_hkl_label_switches_at_ten() -> None:
+    nine = [make_indexed_peak(FAR_PEAK, (9, 5, 1))]
+    ten = [make_indexed_peak(FAR_PEAK, (9, 5, 10))]
+
+    assert annotate_hkl(annotated_axes(), nine, LABEL_BASE)[0].get_text() == "951"
+    assert (
+        annotate_hkl(annotated_axes(), ten, LABEL_BASE)[0].get_text()
+        == f"9{HKL_THIN_SPACE}5{HKL_THIN_SPACE}10"
+    )
