@@ -14,7 +14,13 @@ from xrdkit.indexing import (
     refine_cell,
 )
 from xrdkit.io import XRDScan, read_xrdml
-from xrdkit.peaks import Peak, find_peaks, peaks_to_csv
+from xrdkit.peaks import (
+    Peak,
+    exclude_kalpha2,
+    find_peaks,
+    flag_kalpha2,
+    peaks_to_csv,
+)
 from xrdkit.plotting import apply_style, plot_pattern, plot_stacked, save_figure
 
 __all__ = [
@@ -26,7 +32,9 @@ __all__ = [
     "TetragonalCell",
     "XRDScan",
     "apply_style",
+    "exclude_kalpha2",
     "find_peaks",
+    "flag_kalpha2",
     "generate_reflections",
     "index_and_refine",
     "index_peaks",

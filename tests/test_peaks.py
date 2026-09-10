@@ -5,7 +5,15 @@ import csv
 import numpy as np
 import pytest
 
-from xrdkit import Peak, XRDScan, find_peaks, peaks_to_csv
+from xrdkit import (
+    Peak,
+    XRDScan,
+    exclude_kalpha2,
+    find_peaks,
+    flag_kalpha2,
+    peaks_to_csv,
+)
+from xrdkit.peaks import KALPHA2_RATIO
 
 WAVELENGTH = 1.5406
 
@@ -140,6 +148,7 @@ def test_peaks_to_csv_writes_a_row_per_peak(tmp_path) -> None:
         "fwhm",
         "d_spacing",
         "relative_intensity",
+        "kalpha2_of",
     ]
     assert len(data) == len(peaks)
     # Positions to 3 decimals, d spacings to 4.
@@ -181,3 +190,170 @@ def test_refinement_improves_on_the_grid(tmp_path) -> None:
 
     assert abs(peak.two_theta - centre) < abs(nearest_grid - centre)
     assert peak.two_theta == pytest.approx(centre, abs=0.001)
+
+
+# A K alpha 2 doublet needs narrower peaks than the widely spaced scan above,
+# or the pair merges into one maximum instead of being resolved.
+DOUBLET_FWHM = {60.0: 0.08, 85.0: 0.12}
+
+# Height of the isolated peak, then of the two K alpha 1 parents.
+ISOLATED_HEIGHT = 9000.0
+PARENT_HEIGHTS = {60.0: 6000.0, 85.0: 4000.0}
+
+# A satellite carries about half its parent, which is what flag_kalpha2 looks
+# for, so the synthetic pair is built at exactly half.
+SATELLITE_FRACTION = 0.5
+
+
+def satellite_position(two_theta: float) -> float:
+    """Where the K alpha 2 satellite of a K alpha 1 peak at ``two_theta`` falls."""
+    return 2.0 * float(
+        np.degrees(np.arcsin(KALPHA2_RATIO * np.sin(np.radians(two_theta / 2.0))))
+    )
+
+
+def make_doublet_scan() -> XRDScan:
+    """One clean peak at 30 degrees plus resolved K alpha 1/2 pairs at 60 and 85."""
+    two_theta = np.arange(25.0, 90.0 + STEP / 2, STEP)
+    intensity = 300.0 - 1.2 * (two_theta - two_theta[0])
+
+    components = [(30.0, ISOLATED_HEIGHT, 0.20)]
+    for parent, height in PARENT_HEIGHTS.items():
+        fwhm = DOUBLET_FWHM[parent]
+        components.append((parent, height, fwhm))
+        components.append(
+            (satellite_position(parent), height * SATELLITE_FRACTION, fwhm)
+        )
+
+    for position, height, fwhm in components:
+        sigma = fwhm * FWHM_TO_SIGMA
+        intensity += height * np.exp(-((two_theta - position) ** 2) / (2 * sigma**2))
+
+    rng = np.random.default_rng(12345)
+    intensity += rng.normal(0.0, 3.0, two_theta.size)
+
+    return XRDScan(
+        two_theta=two_theta,
+        intensity=intensity,
+        wavelength=WAVELENGTH,
+        start_angle=float(two_theta[0]),
+        end_angle=float(two_theta[-1]),
+        step_size=STEP,
+        time_per_step=1.0,
+        sample_id="doublets",
+        source_path="synthetic://kalpha2-doublets",
+    )
+
+
+def test_the_doublet_scan_resolves_into_five_peaks() -> None:
+    peaks = find_peaks(make_doublet_scan())
+
+    # 30, then the 60 pair, then the 85 pair, in 2theta order.
+    assert len(peaks) == 5
+    assert [peak.two_theta for peak in peaks] == pytest.approx(
+        [
+            30.0,
+            60.0,
+            satellite_position(60.0),
+            85.0,
+            satellite_position(85.0),
+        ],
+        abs=0.01,
+    )
+
+
+def test_flags_exactly_the_two_satellites_with_their_parents() -> None:
+    peaks = find_peaks(make_doublet_scan())
+
+    # The satellites sit directly above their parents in the list.
+    assert peaks[2].kalpha2_of == 1
+    assert peaks[4].kalpha2_of == 3
+
+
+def test_the_parents_and_the_isolated_peak_are_not_flagged() -> None:
+    peaks = find_peaks(make_doublet_scan())
+
+    assert peaks[0].kalpha2_of is None
+    assert peaks[1].kalpha2_of is None
+    assert peaks[3].kalpha2_of is None
+    assert sum(peak.kalpha2_of is not None for peak in peaks) == 2
+
+
+def test_widely_spaced_peaks_keep_no_flags() -> None:
+    """The three Gaussian scan has no satellites, and default flagging finds none."""
+    peaks = find_peaks(make_scan())
+
+    assert all(peak.kalpha2_of is None for peak in peaks)
+
+
+def test_flag_satellites_can_be_turned_off() -> None:
+    peaks = find_peaks(make_doublet_scan(), flag_satellites=False)
+
+    assert all(peak.kalpha2_of is None for peak in peaks)
+    # The same peaks are still found; only the flagging is skipped.
+    assert len(peaks) == 5
+
+
+def test_flag_kalpha2_returns_the_same_list() -> None:
+    peaks = find_peaks(make_doublet_scan(), flag_satellites=False)
+
+    assert flag_kalpha2(peaks) is peaks
+    assert [peak.kalpha2_of for peak in peaks] == [None, None, 1, None, 3]
+
+
+def test_flag_kalpha2_rejects_a_bad_intensity_ratio() -> None:
+    peaks = find_peaks(make_doublet_scan())
+
+    with pytest.raises(ValueError, match="intensity_ratio"):
+        flag_kalpha2(peaks, intensity_ratio=(0.75, 0.25))
+
+
+def test_a_tight_tolerance_flags_nothing() -> None:
+    peaks = find_peaks(make_doublet_scan(), flag_satellites=False)
+    flag_kalpha2(peaks, tolerance=0.0001)
+
+    assert all(peak.kalpha2_of is None for peak in peaks)
+
+
+def test_exclude_kalpha2_removes_exactly_the_satellites() -> None:
+    peaks = find_peaks(make_doublet_scan())
+    kept = exclude_kalpha2(peaks)
+
+    assert len(peaks) == 5
+    assert len(kept) == 3
+    assert [peak.two_theta for peak in kept] == pytest.approx(
+        [30.0, 60.0, 85.0], abs=0.01
+    )
+    assert all(peak.kalpha2_of is None for peak in kept)
+
+    # The input is left alone, flags and all.
+    assert [peak.kalpha2_of for peak in peaks] == [None, None, 1, None, 3]
+    assert all(kept_peak is not peak for kept_peak in kept for peak in peaks)
+
+
+def test_exclude_kalpha2_renormalises_relative_intensity() -> None:
+    kept = exclude_kalpha2(find_peaks(make_doublet_scan()))
+
+    strongest = max(peak.intensity for peak in kept)
+    for peak in kept:
+        assert peak.relative_intensity == pytest.approx(
+            100.0 * peak.intensity / strongest
+        )
+    assert max(peak.relative_intensity for peak in kept) == pytest.approx(100.0)
+
+
+def test_exclude_kalpha2_of_nothing() -> None:
+    assert exclude_kalpha2([]) == []
+
+
+def test_peaks_to_csv_writes_the_kalpha2_column(tmp_path) -> None:
+    peaks = find_peaks(make_doublet_scan())
+    path = peaks_to_csv(peaks, tmp_path / "doublets.csv")
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    header, data = rows[0], rows[1:]
+
+    assert header[-1] == "kalpha2_of"
+    # Blank for a peak that is not a satellite, the parent's index otherwise.
+    assert [row[-1] for row in data] == ["", "", "1", "", "3"]
