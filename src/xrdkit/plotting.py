@@ -8,7 +8,7 @@ import matplotlib as mpl
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.transforms import blended_transform_factory
+from matplotlib.ticker import MultipleLocator
 
 from xrdkit.io import XRDScan
 
@@ -20,6 +20,17 @@ X_LABEL = "2θ (degrees)"
 Y_LABEL = "Intensity (arb. units)"
 
 SINGLE_COLUMN = (3.5, 2.6)
+
+X_MAJOR_TICK = 10.0
+X_MINOR_TICK = 2.0
+
+# Automatic stack spacing, as a multiple of the tallest scaled trace.
+OFFSET_FACTOR = 1.2
+
+# Stack labels sit this far below the top of their slot, and this fraction of
+# the x range in from the right-hand end of the data.
+LABEL_HEIGHT = 0.92
+LABEL_MARGIN = 0.02
 
 
 def apply_style() -> None:
@@ -86,10 +97,14 @@ def _scaled(intensity: np.ndarray, scale: str, normalise: bool) -> np.ndarray:
 
 
 def _format_axes(ax: Axes, x_min: float, x_max: float) -> None:
-    """Apply the shared pattern axis labelling and limits."""
+    """Apply the shared pattern axis labelling, ticks and limits."""
     ax.set_xlabel(X_LABEL)
     ax.set_ylabel(Y_LABEL)
     ax.set_xlim(x_min, x_max)
+    # Fixed 10 degree major ticks so a scan running to nearly 100 degrees is
+    # still labelled at its far end, which the automatic locator does not do.
+    ax.xaxis.set_major_locator(MultipleLocator(X_MAJOR_TICK))
+    ax.xaxis.set_minor_locator(MultipleLocator(X_MINOR_TICK))
     # Intensities are arbitrary units, so the y scale carries no ticks.
     ax.set_yticks([])
     ax.tick_params(axis="y", which="both", left=False, right=False, labelleft=False)
@@ -159,8 +174,8 @@ def plot_stacked(
         One label per scan, written at the upper right of each trace. Defaults
         to each scan's ``sample_id``.
     offset
-        Vertical spacing between traces. Defaults to 1.1 times the tallest
-        scaled trace.
+        Vertical spacing between traces. Defaults to 1.2 times the tallest
+        scaled trace, which keeps the tallest peak clear of the trace above.
     scale, normalise, colour, linewidth
         As for :func:`plot_pattern`.
     figsize
@@ -184,31 +199,34 @@ def plot_stacked(
         labels = [scan.sample_id for scan in scans]
 
     if offset is None:
-        offset = 1.1 * max(float(np.max(trace)) for trace in traces)
+        offset = OFFSET_FACTOR * max(float(np.max(trace)) for trace in traces)
+
+    x_min = min(float(scan.two_theta[0]) for scan in scans)
+    x_max = max(float(scan.two_theta[-1]) for scan in scans)
+    label_x = x_max - LABEL_MARGIN * (x_max - x_min)
 
     fig = Figure(figsize=figsize)
     ax = fig.add_subplot()
-    # Labels sit a fixed inset from the right edge, at each trace's own height.
-    label_transform = blended_transform_factory(ax.transAxes, ax.transData)
 
     for index, (scan, trace, text) in enumerate(zip(scans, traces, labels)):
         base = index * offset
         ax.plot(
             scan.two_theta, trace + base, color=colour, linewidth=linewidth, label=text
         )
+        # Anchored to the slot, not to the trace's peak, so a strong high angle
+        # reflection cannot push a label into the trace above it.
         ax.text(
-            0.98,
-            base + float(np.max(trace)),
+            label_x,
+            base + LABEL_HEIGHT * offset,
             text,
-            transform=label_transform,
             ha="right",
             va="top",
             fontsize=8,
         )
 
-    x_min = min(float(scan.two_theta[0]) for scan in scans)
-    x_max = max(float(scan.two_theta[-1]) for scan in scans)
     _format_axes(ax, x_min, x_max)
+    # Every slot gets the same height, so the topmost label always has room.
+    ax.set_ylim(min(0.0, float(np.min(traces[0]))), (len(scans) - 1) * offset + offset)
     return fig, ax
 
 

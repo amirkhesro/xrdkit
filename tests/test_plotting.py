@@ -10,7 +10,15 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from xrdkit import XRDScan, plot_pattern, plot_stacked, save_figure
-from xrdkit.plotting import X_LABEL, Y_LABEL, apply_style
+from xrdkit.plotting import (
+    LABEL_HEIGHT,
+    OFFSET_FACTOR,
+    X_LABEL,
+    X_MAJOR_TICK,
+    X_MINOR_TICK,
+    Y_LABEL,
+    apply_style,
+)
 
 
 def make_scan(
@@ -128,6 +136,76 @@ def test_save_figure_keeps_dots_in_stem(tmp_path) -> None:
 
     assert written[0].name == "x0.10_calcined.png"
     assert written[0].is_file()
+
+
+def test_x_axis_uses_fixed_tick_spacing() -> None:
+    # A scan running to nearly 100 degrees must still be labelled at its far end.
+    scan = make_scan()
+    scan.two_theta = np.linspace(10.0, 99.98, 500)
+    _, ax = plot_pattern(scan)
+
+    major = [tick for tick in ax.get_xticks() if 10.0 <= tick <= 99.98]
+    minor = [tick for tick in ax.get_xticks(minor=True) if 10.0 <= tick <= 99.98]
+
+    assert np.allclose(np.diff(major), X_MAJOR_TICK)
+    assert max(major) == pytest.approx(90.0)
+
+    # Minor ticks skip the positions already taken by a major tick, so check the
+    # combined ladder rather than the minor ticks alone.
+    combined = sorted(major + minor)
+    assert np.allclose(np.diff(combined), X_MINOR_TICK)
+
+
+def test_plot_stacked_labels_anchored_to_slot() -> None:
+    scans = [make_scan("a"), make_scan("b"), make_scan("c")]
+    offset = 2.0
+    _, ax = plot_stacked(scans, offset=offset)
+
+    expected = [index * offset + LABEL_HEIGHT * offset for index in range(len(scans))]
+    assert [text.get_position()[1] for text in ax.texts] == pytest.approx(expected)
+
+    # Labels sit inside the data range, just in from the right-hand end.
+    x_max = float(scans[0].two_theta[-1])
+    for text in ax.texts:
+        assert text.get_position()[0] < x_max
+        assert text.get_horizontalalignment() == "right"
+        assert text.get_verticalalignment() == "top"
+
+
+def test_plot_stacked_label_clears_a_tall_high_angle_peak() -> None:
+    # The old anchoring used the trace maximum, so a strong high angle peak
+    # dragged the label down onto the trace. The slot anchor must not move.
+    low = make_scan("low", peaks=(22.0,))
+    high = make_scan("high", peaks=(78.0,))
+    offset = 2.0
+    _, ax = plot_stacked([low, high], offset=offset)
+
+    assert [text.get_position()[1] for text in ax.texts] == pytest.approx(
+        [LABEL_HEIGHT * offset, offset + LABEL_HEIGHT * offset]
+    )
+
+
+def test_plot_stacked_y_limits_leave_room_for_top_label() -> None:
+    scans = [make_scan("a"), make_scan("b")]
+    offset = 2.0
+    _, ax = plot_stacked(scans, offset=offset)
+    bottom, top = ax.get_ylim()
+
+    assert bottom <= 0.0
+    assert top == pytest.approx(len(scans) * offset)
+    # The topmost label must fall inside the axes.
+    assert max(text.get_position()[1] for text in ax.texts) < top
+
+
+def test_plot_stacked_default_offset_clears_the_trace_above() -> None:
+    scans = [make_scan("a"), make_scan("b")]
+    _, ax = plot_stacked(scans)
+    lower, upper = (line.get_ydata() for line in ax.lines)
+    offset = float(np.min(upper) - np.min(lower))
+
+    assert offset == pytest.approx(OFFSET_FACTOR)
+    # Tallest peak of the lower trace stays below the baseline of the upper one.
+    assert np.max(lower) < np.min(upper)
 
 
 def test_apply_style_sets_rcparams() -> None:
