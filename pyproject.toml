@@ -10,6 +10,7 @@ authors = [
     { name = "Amir Khesro", email = "174715580+amirkhesro@users.noreply.github.com" }
 ]
 dependencies = [
+    "matplotlib>=3.11.1",
     "numpy>=2.5.3",
 ]
 
