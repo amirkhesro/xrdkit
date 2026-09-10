@@ -8,11 +8,20 @@ import matplotlib as mpl
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from matplotlib.ticker import MultipleLocator
 
+from xrdkit.indexing import IndexedPeak, Reflection
 from xrdkit.io import XRDScan
 
-__all__ = ["apply_style", "plot_pattern", "plot_stacked", "save_figure"]
+__all__ = [
+    "annotate_hkl",
+    "apply_style",
+    "mark_peaks",
+    "plot_pattern",
+    "plot_stacked",
+    "save_figure",
+]
 
 SCALES = ("linear", "sqrt", "log")
 
@@ -31,6 +40,33 @@ OFFSET_FACTOR = 1.2
 # the x range in from the right-hand end of the data.
 LABEL_HEIGHT = 0.92
 LABEL_MARGIN = 0.02
+
+# Peaks weaker than this percentage of the strongest carry no hkl label, since
+# a crowded pattern is unreadable if every shoulder is annotated.
+HKL_MIN_RELATIVE_INTENSITY = 5.0
+
+HKL_FONTSIZE = 7
+
+# Upright labels take the least horizontal room, which is what a crowded 2theta
+# axis is short of.
+HKL_ROTATION = 90
+
+# Two hkl labels closer than this in degrees would overlap, so the second is
+# stepped up above the first.
+HKL_MIN_SEPARATION = 0.6
+
+# One step up, as a fraction of the y range of the axes.
+HKL_LABEL_HEIGHT = 0.04
+
+# How annotate_hkl treats a peak that matched more than one reflection.
+AMBIGUOUS_MODES = ("first", "all", "skip")
+
+# Joins the candidate labels of an ambiguous peak under ambiguous="all".
+AMBIGUOUS_SEPARATOR = "/"
+
+# Written above a peak that the cell does not account for.
+PEAK_MARKER = "*"
+PEAK_MARKER_FONTSIZE = 9
 
 
 def apply_style() -> None:
@@ -163,7 +199,7 @@ def plot_stacked(
     colour: str = "black",
     linewidth: float = 0.7,
     figsize: tuple[float, float] = (3.5, 5.0),
-) -> tuple[Figure, Axes]:
+) -> tuple[Figure, Axes, list[float]]:
     """Plot several patterns stacked vertically with a constant offset.
 
     Parameters
@@ -180,6 +216,13 @@ def plot_stacked(
         As for :func:`plot_pattern`.
     figsize
         Figure size in inches.
+
+    Returns
+    -------
+    tuple[Figure, Axes, list[float]]
+        The figure, the axes, and the vertical base of each slot in the order
+        the scans were given. The bases are what :func:`annotate_hkl` and
+        :func:`mark_peaks` need to place labels against a chosen trace.
 
     Raises
     ------
@@ -208,8 +251,10 @@ def plot_stacked(
     fig = Figure(figsize=figsize)
     ax = fig.add_subplot()
 
+    bases: list[float] = []
     for index, (scan, trace, text) in enumerate(zip(scans, traces, labels)):
         base = index * offset
+        bases.append(base)
         ax.plot(
             scan.two_theta, trace + base, color=colour, linewidth=linewidth, label=text
         )
@@ -227,7 +272,146 @@ def plot_stacked(
     _format_axes(ax, x_min, x_max)
     # Every slot gets the same height, so the topmost label always has room.
     ax.set_ylim(min(0.0, float(np.min(traces[0]))), (len(scans) - 1) * offset + offset)
-    return fig, ax
+    return fig, ax, bases
+
+
+def _hkl_label(reflection: Reflection) -> str:
+    """Return the Miller indices run together, so ``(3 1 1)`` becomes ``311``."""
+    return f"{reflection.h}{reflection.k}{reflection.l}"
+
+
+def annotate_hkl(
+    ax: Axes,
+    indexed: list[IndexedPeak],
+    y: float,
+    min_relative_intensity: float = HKL_MIN_RELATIVE_INTENSITY,
+    fontsize: float = HKL_FONTSIZE,
+    rotation: float = HKL_ROTATION,
+    min_separation: float = HKL_MIN_SEPARATION,
+    label_height: float | None = None,
+    ambiguous: str = "first",
+) -> list[Text]:
+    """Write an hkl label above each indexed peak of one trace.
+
+    Labels are placed at the observed peak position with their base at ``y``,
+    so ``y`` is normally the base of the slot the trace occupies plus enough
+    room to clear its tallest peak. Peaks with no assignment are skipped; use
+    :func:`mark_peaks` for those.
+
+    A label within ``min_separation`` of the one before is stepped up by
+    ``label_height``, each further label in a crowded run rising another step,
+    and the first label with room of its own returning to ``y``. This is
+    deliberately simple: it works from 2theta alone and never measures the
+    rendered text, so a long label in a small figure can still collide.
+
+    Parameters
+    ----------
+    ax
+        Axes to write on.
+    indexed
+        Result of :func:`~xrdkit.indexing.index_peaks` for the trace.
+    y
+        Base of the unstepped labels, in data coordinates.
+    min_relative_intensity
+        Skip peaks below this percentage of the strongest peak of the scan.
+    fontsize, rotation
+        Label appearance. The rotation is in degrees, anticlockwise.
+    min_separation
+        Labels closer together than this, in degrees, are stepped up.
+    label_height
+        Height of one step, in data coordinates. Defaults to
+        ``HKL_LABEL_HEIGHT`` times the y range of ``ax``.
+    ambiguous
+        What to do with a peak that matched more than one reflection:
+        ``"first"`` labels the assigned one, ``"all"`` joins every candidate
+        with a solidus, ``"skip"`` leaves the peak unlabelled.
+
+    Returns
+    -------
+    list[Text]
+        The labels written, in 2theta order.
+
+    Raises
+    ------
+    ValueError
+        If ``ambiguous`` is not one of ``AMBIGUOUS_MODES``.
+    """
+    if ambiguous not in AMBIGUOUS_MODES:
+        raise ValueError(
+            f"Unknown ambiguous mode {ambiguous!r}; expected one of {AMBIGUOUS_MODES}"
+        )
+
+    if label_height is None:
+        low, high = ax.get_ylim()
+        label_height = HKL_LABEL_HEIGHT * (high - low)
+
+    entries = [
+        entry
+        for entry in indexed
+        if entry.is_indexed
+        and entry.peak.relative_intensity >= min_relative_intensity
+        and not (ambiguous == "skip" and len(entry.candidates) > 1)
+    ]
+    entries.sort(key=lambda entry: entry.peak.two_theta)
+
+    texts: list[Text] = []
+    previous_x: float | None = None
+    previous_y = y
+    for entry in entries:
+        position = entry.peak.two_theta
+        if ambiguous == "all" and len(entry.candidates) > 1:
+            label = AMBIGUOUS_SEPARATOR.join(
+                _hkl_label(reflection) for reflection in entry.candidates
+            )
+        else:
+            label = _hkl_label(entry.reflection)
+
+        # A crowded run climbs one step at a time; the first label with room of
+        # its own drops back to the baseline.
+        if previous_x is not None and position - previous_x < min_separation:
+            height = previous_y + label_height
+        else:
+            height = y
+
+        texts.append(
+            ax.text(
+                position,
+                height,
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=fontsize,
+                rotation=rotation,
+                rotation_mode="anchor",
+            )
+        )
+        previous_x = position
+        previous_y = height
+
+    return texts
+
+
+def mark_peaks(
+    ax: Axes,
+    positions: list[float],
+    y: float,
+    marker: str = PEAK_MARKER,
+    fontsize: float = PEAK_MARKER_FONTSIZE,
+) -> list[Text]:
+    """Write ``marker`` above each 2theta in ``positions``, with its base at ``y``.
+
+    For the peaks a cell does not account for, whether unindexed or from a
+    second phase, which are worth pointing at even though they carry no hkl.
+
+    Returns
+    -------
+    list[Text]
+        One marker per position, in the order given.
+    """
+    return [
+        ax.text(position, y, marker, ha="center", va="bottom", fontsize=fontsize)
+        for position in positions
+    ]
 
 
 def save_figure(

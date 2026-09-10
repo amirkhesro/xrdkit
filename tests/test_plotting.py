@@ -8,11 +8,26 @@ import numpy as np
 import pytest
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 
-from xrdkit import XRDScan, plot_pattern, plot_stacked, save_figure
+from xrdkit import (
+    IndexedPeak,
+    Peak,
+    Reflection,
+    XRDScan,
+    annotate_hkl,
+    mark_peaks,
+    plot_pattern,
+    plot_stacked,
+    save_figure,
+)
 from xrdkit.plotting import (
+    AMBIGUOUS_SEPARATOR,
+    HKL_LABEL_HEIGHT,
+    HKL_MIN_SEPARATION,
     LABEL_HEIGHT,
     OFFSET_FACTOR,
+    PEAK_MARKER,
     X_LABEL,
     X_MAJOR_TICK,
     X_MINOR_TICK,
@@ -88,7 +103,7 @@ def test_plot_stacked_rejects_unknown_scale() -> None:
 
 def test_plot_stacked_one_line_and_label_per_scan() -> None:
     scans = [make_scan("10"), make_scan("12", peaks=(25.0, 45.0))]
-    fig, ax = plot_stacked(scans)
+    fig, ax, _ = plot_stacked(scans)
 
     assert isinstance(fig, Figure)
     assert len(ax.lines) == len(scans)
@@ -100,7 +115,7 @@ def test_plot_stacked_one_line_and_label_per_scan() -> None:
 
 def test_plot_stacked_offsets_traces() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax = plot_stacked(scans, offset=2.0)
+    _, ax, _ = plot_stacked(scans, offset=2.0)
     lower, upper = (line.get_ydata() for line in ax.lines)
 
     assert np.min(upper) - np.min(lower) == pytest.approx(2.0)
@@ -108,7 +123,7 @@ def test_plot_stacked_offsets_traces() -> None:
 
 def test_plot_stacked_custom_labels_and_length_check() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax = plot_stacked(scans, labels=["x = 0.10", "x = 0.12"])
+    _, ax, _ = plot_stacked(scans, labels=["x = 0.10", "x = 0.12"])
     assert [text.get_text() for text in ax.texts] == ["x = 0.10", "x = 0.12"]
 
     with pytest.raises(ValueError, match="lengths must match"):
@@ -159,7 +174,7 @@ def test_x_axis_uses_fixed_tick_spacing() -> None:
 def test_plot_stacked_labels_anchored_to_slot() -> None:
     scans = [make_scan("a"), make_scan("b"), make_scan("c")]
     offset = 2.0
-    _, ax = plot_stacked(scans, offset=offset)
+    _, ax, _ = plot_stacked(scans, offset=offset)
 
     expected = [index * offset + LABEL_HEIGHT * offset for index in range(len(scans))]
     assert [text.get_position()[1] for text in ax.texts] == pytest.approx(expected)
@@ -178,7 +193,7 @@ def test_plot_stacked_label_clears_a_tall_high_angle_peak() -> None:
     low = make_scan("low", peaks=(22.0,))
     high = make_scan("high", peaks=(78.0,))
     offset = 2.0
-    _, ax = plot_stacked([low, high], offset=offset)
+    _, ax, _ = plot_stacked([low, high], offset=offset)
 
     assert [text.get_position()[1] for text in ax.texts] == pytest.approx(
         [LABEL_HEIGHT * offset, offset + LABEL_HEIGHT * offset]
@@ -188,7 +203,7 @@ def test_plot_stacked_label_clears_a_tall_high_angle_peak() -> None:
 def test_plot_stacked_y_limits_leave_room_for_top_label() -> None:
     scans = [make_scan("a"), make_scan("b")]
     offset = 2.0
-    _, ax = plot_stacked(scans, offset=offset)
+    _, ax, _ = plot_stacked(scans, offset=offset)
     bottom, top = ax.get_ylim()
 
     assert bottom <= 0.0
@@ -199,7 +214,7 @@ def test_plot_stacked_y_limits_leave_room_for_top_label() -> None:
 
 def test_plot_stacked_default_offset_clears_the_trace_above() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax = plot_stacked(scans)
+    _, ax, _ = plot_stacked(scans)
     lower, upper = (line.get_ydata() for line in ax.lines)
     offset = float(np.min(upper) - np.min(lower))
 
@@ -223,3 +238,215 @@ def test_apply_style_sets_rcparams() -> None:
     assert matplotlib.rcParams["axes.spines.right"] is True
     assert matplotlib.rcParams["savefig.dpi"] == 300
     assert matplotlib.rcParams["savefig.bbox"] == "tight"
+
+
+# Two peaks inside HKL_MIN_SEPARATION of each other, then one well clear.
+CLOSE_PAIR = (40.000, 40.300)
+FAR_PEAK = 60.000
+
+# Base the labels are written at in the synthetic annotation tests.
+LABEL_BASE = 1.0
+
+
+def make_indexed_peak(
+    two_theta: float,
+    hkl: tuple[int, int, int],
+    relative_intensity: float = 50.0,
+    extra_candidates: tuple[tuple[int, int, int], ...] = (),
+) -> IndexedPeak:
+    """An IndexedPeak at a position, assigned to ``hkl``, with optional rivals."""
+    peak = Peak(
+        two_theta=two_theta,
+        intensity=1000.0,
+        prominence=900.0,
+        fwhm=0.15,
+        d_spacing=1.5406 / (2.0 * np.sin(np.radians(two_theta / 2.0))),
+        relative_intensity=relative_intensity,
+    )
+
+    def reflection(indices: tuple[int, int, int]) -> Reflection:
+        h, k, l = indices
+        return Reflection(h=h, k=k, l=l, d_spacing=peak.d_spacing, two_theta=two_theta)
+
+    assigned = reflection(hkl)
+    candidates = [assigned] + [reflection(other) for other in extra_candidates]
+    return IndexedPeak(
+        peak=peak,
+        corrected_two_theta=two_theta,
+        reflection=assigned,
+        difference=0.0,
+        candidates=candidates,
+    )
+
+
+def make_indexed() -> list[IndexedPeak]:
+    """Two peaks 0.3 degrees apart and one far away, all singly indexed."""
+    return [
+        make_indexed_peak(CLOSE_PAIR[0], (3, 1, 1)),
+        make_indexed_peak(CLOSE_PAIR[1], (4, 2, 0)),
+        make_indexed_peak(FAR_PEAK, (5, 5, 0)),
+    ]
+
+
+def annotated_axes() -> Axes:
+    """Axes carrying one trace, ready to be annotated."""
+    _, ax = plot_pattern(make_scan())
+    return ax
+
+
+def test_annotate_hkl_returns_one_text_per_indexed_peak() -> None:
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+
+    assert len(texts) == 3
+    assert all(isinstance(text, Text) for text in texts)
+    assert [text.get_text() for text in texts] == ["311", "420", "550"]
+
+
+def test_annotate_hkl_places_labels_at_the_peak_positions() -> None:
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+
+    assert [text.get_position()[0] for text in texts] == pytest.approx(
+        [CLOSE_PAIR[0], CLOSE_PAIR[1], FAR_PEAK]
+    )
+
+
+def test_annotate_hkl_steps_a_crowded_label_up() -> None:
+    ax = annotated_axes()
+    texts = annotate_hkl(ax, make_indexed(), LABEL_BASE)
+    heights = [text.get_position()[1] for text in texts]
+
+    # The pair is 0.3 degrees apart, inside the default 0.6 separation.
+    assert CLOSE_PAIR[1] - CLOSE_PAIR[0] < HKL_MIN_SEPARATION
+    assert heights[0] == pytest.approx(LABEL_BASE)
+    assert heights[1] > heights[0]
+
+    low, high = ax.get_ylim()
+    assert heights[1] == pytest.approx(LABEL_BASE + HKL_LABEL_HEIGHT * (high - low))
+    # The far peak has room of its own, so it drops back to the baseline.
+    assert heights[2] == pytest.approx(LABEL_BASE)
+
+
+def test_annotate_hkl_honours_an_explicit_label_height() -> None:
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, label_height=0.5)
+    heights = [text.get_position()[1] for text in texts]
+
+    assert heights == pytest.approx([LABEL_BASE, LABEL_BASE + 0.5, LABEL_BASE])
+
+
+def test_annotate_hkl_climbs_through_a_run_of_close_peaks() -> None:
+    indexed = [
+        make_indexed_peak(40.0, (3, 1, 1)),
+        make_indexed_peak(40.2, (4, 2, 0)),
+        make_indexed_peak(40.4, (5, 5, 0)),
+    ]
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, label_height=0.5)
+    heights = [text.get_position()[1] for text in texts]
+
+    assert heights == pytest.approx([LABEL_BASE, LABEL_BASE + 0.5, LABEL_BASE + 1.0])
+
+
+def test_annotate_hkl_min_relative_intensity_filters() -> None:
+    indexed = make_indexed()
+    indexed[1].peak.relative_intensity = 2.0
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE)
+
+    assert [text.get_text() for text in texts] == ["311", "550"]
+    # Below the default cut-off but above a lower one.
+    assert len(annotate_hkl(annotated_axes(), indexed, LABEL_BASE, 1.0)) == 3
+
+
+def test_annotate_hkl_skips_unindexed_peaks() -> None:
+    indexed = make_indexed()
+    indexed[1].reflection = None
+    indexed[1].candidates = []
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE)
+
+    assert [text.get_text() for text in texts] == ["311", "550"]
+
+
+def test_annotate_hkl_ambiguous_first_labels_the_assignment() -> None:
+    indexed = make_indexed()
+    indexed[0] = make_indexed_peak(
+        CLOSE_PAIR[0], (3, 1, 1), extra_candidates=((4, 2, 0),)
+    )
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, ambiguous="first")
+
+    assert [text.get_text() for text in texts] == ["311", "420", "550"]
+
+
+def test_annotate_hkl_ambiguous_all_joins_candidates_with_a_solidus() -> None:
+    indexed = make_indexed()
+    indexed[0] = make_indexed_peak(
+        CLOSE_PAIR[0], (3, 1, 1), extra_candidates=((4, 2, 0),)
+    )
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, ambiguous="all")
+
+    assert texts[0].get_text() == f"311{AMBIGUOUS_SEPARATOR}420"
+    assert AMBIGUOUS_SEPARATOR in texts[0].get_text()
+    # A peak with a single candidate is untouched.
+    assert texts[2].get_text() == "550"
+
+
+def test_annotate_hkl_ambiguous_skip_drops_the_peak() -> None:
+    indexed = make_indexed()
+    indexed[0] = make_indexed_peak(
+        CLOSE_PAIR[0], (3, 1, 1), extra_candidates=((4, 2, 0),)
+    )
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, ambiguous="skip")
+
+    assert len(texts) == 2
+    assert [text.get_text() for text in texts] == ["420", "550"]
+
+
+def test_annotate_hkl_rejects_an_unknown_ambiguous_mode() -> None:
+    with pytest.raises(ValueError, match="Unknown ambiguous mode"):
+        annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, ambiguous="both")
+
+
+def test_annotate_hkl_of_nothing() -> None:
+    assert annotate_hkl(annotated_axes(), [], LABEL_BASE) == []
+
+
+def test_mark_peaks_returns_one_text_per_position() -> None:
+    positions = [22.0, 45.5, 71.25]
+    texts = mark_peaks(annotated_axes(), positions, LABEL_BASE)
+
+    assert len(texts) == len(positions)
+    assert all(isinstance(text, Text) for text in texts)
+    assert [text.get_position()[0] for text in texts] == pytest.approx(positions)
+    assert all(text.get_position()[1] == pytest.approx(LABEL_BASE) for text in texts)
+    assert all(text.get_text() == PEAK_MARKER for text in texts)
+
+
+def test_mark_peaks_takes_a_custom_marker() -> None:
+    texts = mark_peaks(annotated_axes(), [30.0], LABEL_BASE, marker="x", fontsize=11)
+
+    assert texts[0].get_text() == "x"
+    assert texts[0].get_fontsize() == 11
+
+
+def test_mark_peaks_of_nothing() -> None:
+    assert mark_peaks(annotated_axes(), [], LABEL_BASE) == []
+
+
+def test_plot_stacked_returns_a_base_per_slot() -> None:
+    scans = [make_scan("a"), make_scan("b"), make_scan("c")]
+    fig, ax, bases = plot_stacked(scans, offset=2.0)
+
+    assert isinstance(fig, Figure)
+    assert isinstance(ax, Axes)
+    assert bases == pytest.approx([0.0, 2.0, 4.0])
+
+
+def test_annotate_hkl_onto_a_chosen_stack_slot() -> None:
+    scans = [make_scan("a"), make_scan("b")]
+    _, ax, bases = plot_stacked(scans, offset=2.0)
+
+    texts = annotate_hkl(ax, make_indexed(), bases[1] + 1.2, label_height=0.1)
+
+    assert texts[0].get_position()[1] == pytest.approx(bases[1] + 1.2)

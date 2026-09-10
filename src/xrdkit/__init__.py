@@ -21,7 +21,14 @@ from xrdkit.peaks import (
     flag_kalpha2,
     peaks_to_csv,
 )
-from xrdkit.plotting import apply_style, plot_pattern, plot_stacked, save_figure
+from xrdkit.plotting import (
+    annotate_hkl,
+    apply_style,
+    mark_peaks,
+    plot_pattern,
+    plot_stacked,
+    save_figure,
+)
 
 __all__ = [
     "TTB_CELL",
@@ -31,6 +38,7 @@ __all__ = [
     "Reflection",
     "TetragonalCell",
     "XRDScan",
+    "annotate_hkl",
     "apply_style",
     "exclude_kalpha2",
     "find_peaks",
@@ -40,6 +48,7 @@ __all__ = [
     "index_peaks",
     "indexed_to_csv",
     "indexing_summary",
+    "mark_peaks",
     "peaks_to_csv",
     "plot_pattern",
     "plot_stacked",
