@@ -38,9 +38,10 @@ KALPHA2_RATIO = 1.54439 / 1.54056
 # degrees.
 DEFAULT_KALPHA2_TOLERANCE = 0.03
 
-# A K alpha 2 satellite carries about half the intensity of its parent; this
-# range brackets that loosely enough for real, partly overlapped peaks.
-DEFAULT_KALPHA2_INTENSITY_RATIO = (0.25, 0.75)
+# A K alpha 2 satellite carries about half the intensity of its parent, but a
+# satellite resolved on the tail of its parent measures well above that, so the
+# ceiling is set high enough to admit the partly overlapped ones.
+DEFAULT_KALPHA2_INTENSITY_RATIO = (0.25, 0.90)
 
 CSV_COLUMNS = (
     "two_theta",
@@ -239,7 +240,10 @@ def flag_kalpha2(
 
     Only resolved satellites can be caught this way. Below about 50 degrees the
     pair is not separated enough for the peak finder to report two peaks, so
-    there is nothing to flag.
+    there is nothing to flag. A satellite that is only just resolved, still
+    sitting on the tail of its parent, measures high because its height is taken
+    above a baseline the parent has raised, which is why the default ceiling on
+    the intensity ratio is well above the half that clean separation would give.
 
     Parameters
     ----------
