@@ -1,5 +1,11 @@
 """Reusable X-ray diffraction analysis toolkit for electroceramics research."""
 
+from xrdkit.density import (
+    ATOMIC_MASSES,
+    cell_volume,
+    formula_mass,
+    theoretical_density,
+)
 from xrdkit.indexing import (
     TTB_CELL,
     CellFit,
@@ -34,6 +40,7 @@ from xrdkit.plotting import (
 )
 
 __all__ = [
+    "ATOMIC_MASSES",
     "TTB_CELL",
     "CellFit",
     "IndexedPeak",
@@ -45,10 +52,12 @@ __all__ = [
     "ZeroSearch",
     "annotate_hkl",
     "apply_style",
+    "cell_volume",
     "estimate_zero_offset",
     "exclude_kalpha2",
     "find_peaks",
     "flag_kalpha2",
+    "formula_mass",
     "generate_reflections",
     "index_and_refine",
     "index_peaks",
@@ -63,4 +72,5 @@ __all__ = [
     "refine_cell",
     "refine_lattice",
     "save_figure",
+    "theoretical_density",
 ]
