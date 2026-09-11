@@ -447,3 +447,19 @@ def test_match_with_nothing_near_scores_minus_the_missing() -> None:
 def test_match_rejects_a_negative_tolerance() -> None:
     with pytest.raises(ValueError):
         match_candidate([24.85], sim((24.85, 100)), tolerance=-0.1)
+
+
+def test_index_notes_apply_to_cod_records_and_replace_old_ones(tmp_path: Path) -> None:
+    path = tmp_path / "index.csv"
+    write_cif_index(records_from(SEARCH_RESULT[:1]), path, notes="old")
+
+    write_cif_index(records_from(SEARCH_RESULT[:2]), path, notes="candidate")
+    write_cif_index(
+        [{"source": "own", "identifier": "1", "notes": "mine"}], path, notes="x"
+    )
+
+    assert [row["notes"] for row in read_index(path)] == [
+        "candidate",
+        "candidate",
+        "mine",
+    ]

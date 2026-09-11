@@ -209,13 +209,16 @@ def cod_fetch(cod_id: str | int, folder: str | Path) -> Path:
 
 
 def write_cif_index(
-    records: Iterable[CodRecord | Mapping[str, object]], path: str | Path
+    records: Iterable[CodRecord | Mapping[str, object]],
+    path: str | Path,
+    notes: str = "",
 ) -> Path:
     """Write or update the CSV index of reference CIFs at ``path``.
 
     Each record is either a :class:`CodRecord`, entered with source ``COD``,
-    its COD id as the identifier and ``<id>.cif`` as the file, or a mapping
-    keyed by :data:`CIF_INDEX_COLUMNS` for a CIF from elsewhere. A row is
+    its COD id as the identifier, ``<id>.cif`` as the file and ``notes`` as its
+    notes, or a mapping keyed by :data:`CIF_INDEX_COLUMNS` for a CIF from
+    elsewhere, which brings its own notes. A row is
     identified by its source and identifier: a record matching a row already in
     the index replaces it in place, and one that matches none is added at the
     end. Rows not named by any record are kept, and so are the notes of a
@@ -236,7 +239,7 @@ def write_cif_index(
                 rows[entry["source"], entry["identifier"]] = entry
 
     for record in records:
-        entry = _index_row(record)
+        entry = _index_row(record, notes)
         key = (entry["source"], entry["identifier"])
         previous = rows.get(key)
         if previous is not None and not entry["notes"]:
@@ -424,8 +427,13 @@ def _record(entry: Mapping[str, object]) -> CodRecord:
     )
 
 
-def _index_row(record: CodRecord | Mapping[str, object]) -> dict[str, str]:
-    """Return the index row of one record, every column as text."""
+def _index_row(
+    record: CodRecord | Mapping[str, object], notes: str = ""
+) -> dict[str, str]:
+    """Return the index row of one record, every column as text.
+
+    ``notes`` is used for a :class:`CodRecord` only; a mapping brings its own.
+    """
     if isinstance(record, CodRecord):
         values: Mapping[str, object] = {
             "file": record.filename,
@@ -440,7 +448,7 @@ def _index_row(record: CodRecord | Mapping[str, object]) -> dict[str, str]:
             "beta": record.beta,
             "gamma": record.gamma,
             "reference": record.reference(),
-            "notes": "",
+            "notes": notes,
         }
     else:
         unknown = sorted(set(record) - set(CIF_INDEX_COLUMNS))
