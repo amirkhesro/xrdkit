@@ -17,6 +17,10 @@ their widths.
 which gives the instrumental FWHM at any angle. Sample widths must be measured
 with the same :func:`fit_profile` before the instrumental width is taken out of
 them, so that the satellite is handled the same way on both sides.
+
+:func:`fit_breadth_models` asks what the corrected breadths follow with angle:
+crystallite size, strain, or a spread of specimen heights across the surface,
+:func:`height_spread_breadth`, which the LaB6 standard would not share.
 """
 
 from __future__ import annotations
@@ -29,13 +33,17 @@ from scipy import optimize, special
 from xrdkit.peaks import KALPHA2_RATIO
 
 __all__ = [
+    "BreadthModelFit",
+    "BreadthModels",
     "BroadeningCorrection",
     "Caglioti",
     "ProfileFit",
     "correct_broadening",
     "doublet_gaps",
+    "fit_breadth_models",
     "fit_caglioti",
     "fit_profile",
+    "height_spread_breadth",
     "integral_breadth",
     "kalpha2_position",
     "pseudo_voigt",
@@ -97,6 +105,20 @@ DEFAULT_SIGNIFICANCE = 2.0
 # Relative step of the numerical derivatives used to propagate esds through
 # the correction.
 DERIVATIVE_STEP = 1e-6
+
+# fit_breadth_models: the fewest breadths that leave the two parameter model a
+# residual, and the Scherrer constant of an integral breadth.
+MIN_BREADTH_MODEL_POINTS = 3
+BREADTH_MODEL_K = 1.0
+
+# The squared terms of the size plus height fit start at least this far above
+# zero, as a fraction of the largest squared breadth. A free fit that beats the
+# better one term fit by less than QUADRATURE_BOUND_CHI_SQUARED in chi squared,
+# far below the one or so a real improvement needs, has only crept towards a
+# bound from inside, where the esd of the vanishing term runs away; the fit is
+# then taken as on that bound.
+QUADRATURE_START_FLOOR = 1e-6
+QUADRATURE_BOUND_CHI_SQUARED = 1e-3
 
 
 def pseudo_voigt(
@@ -829,3 +851,305 @@ def correct_broadening(
         unresolved=False,
         excess=float(excess),
     )
+
+
+def _cos_theta(two_theta: float | np.ndarray) -> np.ndarray:
+    """cos(theta) of ``two_theta`` in degrees, which must lie in (0, 180)."""
+    two_theta = np.asarray(two_theta, dtype=float)
+    if np.any(~np.isfinite(two_theta) | (two_theta <= 0.0) | (two_theta >= 180.0)):
+        raise ValueError("two_theta must lie strictly between 0 and 180 degrees")
+    return np.cos(np.radians(two_theta / 2.0))
+
+
+def height_spread_breadth(
+    two_theta: float | np.ndarray, delta_s_mm: float, radius_mm: float
+) -> float | np.ndarray:
+    """The breadth a spread of specimen heights gives a line, in degrees.
+
+    A specimen displaced by s shifts a line by -2 s cos(theta) / R radians of
+    2theta. A surface whose heights spread uniformly over ``delta_s_mm``
+    spreads the shift over 2 delta_s cos(theta) / R radians, and that is both
+    the FWHM and the integral breadth of the broadening it adds. Unlike size
+    or strain broadening it narrows as the angle rises. The result is in
+    degrees, like every other width here.
+
+    Parameters
+    ----------
+    two_theta
+        Position, in degrees.
+    delta_s_mm
+        Full spread of heights across the irradiated surface, in mm.
+    radius_mm
+        Goniometer radius, in mm.
+
+    Raises
+    ------
+    ValueError
+        If ``delta_s_mm`` is negative, ``radius_mm`` is not positive or a
+        position lies outside (0, 180) degrees.
+    """
+    if not delta_s_mm >= 0.0:
+        raise ValueError(f"delta_s_mm cannot be negative, got {delta_s_mm}")
+    if not radius_mm > 0.0:
+        raise ValueError(f"radius_mm must be positive, got {radius_mm}")
+    breadth = np.degrees(2.0 * delta_s_mm * _cos_theta(two_theta) / radius_mm)
+    return float(breadth) if breadth.ndim == 0 else breadth
+
+
+@dataclass
+class BreadthModelFit:
+    """One model of sample breadth against angle, fitted by weighted least squares.
+
+    The model is sqrt((K lambda / (D cos))^2 + (2 delta_s cos / R)^2)
+    + 4 epsilon tan, with whichever of the three terms the model has.
+    ``size`` is in the units of the wavelength and ``delta_s`` in mm; each is
+    ``None`` when the model lacks it or it fits at zero, a size that fits at
+    zero breadth being infinite. Esds are scaled by the reduced chi squared.
+    ``at_bound`` marks a two parameter fit with one term held at zero, where
+    the fit has in effect fallen back to a one parameter model.
+    ``normalised_residuals`` are the observed less the fitted breadths over
+    their esds.
+    """
+
+    model: str
+    size: float | None
+    esd_size: float | None
+    strain: float | None
+    esd_strain: float | None
+    delta_s: float | None
+    esd_delta_s: float | None
+    chi_squared: float
+    degrees_of_freedom: int
+    reduced_chi_squared: float
+    at_bound: bool
+    normalised_residuals: np.ndarray
+    # The terms in radians: K lambda / D, epsilon and 2 delta_s / R.
+    size_term: float
+    strain_term: float
+    height_term: float
+
+    def breadth(self, two_theta: float | np.ndarray) -> float | np.ndarray:
+        """The fitted breadth at ``two_theta``, in degrees."""
+        cos_theta = _cos_theta(two_theta)
+        tan_theta = np.sqrt(1.0 - cos_theta**2) / cos_theta
+        breadth = np.degrees(
+            np.hypot(self.size_term / cos_theta, self.height_term * cos_theta)
+            + 4.0 * self.strain_term * tan_theta
+        )
+        return float(breadth) if breadth.ndim == 0 else breadth
+
+
+@dataclass
+class BreadthModels:
+    """The four fits of :func:`fit_breadth_models`, by model name."""
+
+    fits: dict[str, BreadthModelFit]
+
+    @property
+    def preferred(self) -> BreadthModelFit:
+        """The fit with the lowest reduced chi squared."""
+        return min(self.fits.values(), key=lambda fit: fit.reduced_chi_squared)
+
+
+def _breadth_model_fit(
+    model: str,
+    terms: dict[str, tuple[float, float]],
+    residuals: np.ndarray,
+    n_parameters: int,
+    at_bound: bool,
+    k_lambda: float,
+    radius_mm: float,
+) -> BreadthModelFit:
+    """Turn fitted terms in radians into a size, a strain and a height spread.
+
+    ``terms`` maps "size", "strain" and "height" to (term, esd) for the terms
+    the model has; ``residuals`` are normalised by the breadth esds.
+    """
+    chi_squared = float(np.sum(residuals**2))
+    dof = residuals.size - n_parameters
+    size = esd_size = strain = esd_strain = delta_s = esd_delta_s = None
+    size_term, esd_size_term = terms.get("size", (0.0, 0.0))
+    strain_term, esd_strain_term = terms.get("strain", (0.0, 0.0))
+    height_term, esd_height_term = terms.get("height", (0.0, 0.0))
+    if size_term > 0.0:
+        size = k_lambda / size_term
+        esd_size = size * esd_size_term / size_term
+    if "strain" in terms:
+        strain, esd_strain = strain_term, esd_strain_term
+    if height_term > 0.0:
+        delta_s = height_term * radius_mm / 2.0
+        esd_delta_s = esd_height_term * radius_mm / 2.0
+    return BreadthModelFit(
+        model=model,
+        size=size,
+        esd_size=esd_size,
+        strain=strain,
+        esd_strain=esd_strain,
+        delta_s=delta_s,
+        esd_delta_s=esd_delta_s,
+        chi_squared=chi_squared,
+        degrees_of_freedom=dof,
+        reduced_chi_squared=chi_squared / dof,
+        at_bound=at_bound,
+        normalised_residuals=residuals,
+        size_term=max(size_term, 0.0),
+        strain_term=strain_term,
+        height_term=max(height_term, 0.0),
+    )
+
+
+def fit_breadth_models(
+    two_theta: np.ndarray,
+    breadth: np.ndarray,
+    esd: np.ndarray,
+    wavelength: float,
+    radius_mm: float,
+    k: float = BREADTH_MODEL_K,
+) -> BreadthModels:
+    """Fit sample breadths with size, strain and height spread models.
+
+    Three one parameter models, each a breadth proportional to its own
+    angular dependence and fitted linearly:
+
+    ``size``
+        beta = K lambda / (D cos(theta)).
+    ``strain``
+        beta = 4 epsilon tan(theta).
+    ``height``
+        beta = 2 delta_s cos(theta) / R, as :func:`height_spread_breadth`.
+
+    and one with two, ``size+height``, the size and height breadths added in
+    quadrature. That one is fitted in the squares of the two terms,
+    P = (K lambda / D)^2 and Q = (2 delta_s / R)^2, each held at zero or
+    above, which keeps the derivatives finite when either term vanishes.
+    Every fit weights by the breadth esds and is judged by its reduced chi
+    squared on the breadths themselves, so the four compare directly.
+
+    Size and height breadths go as 1 / cos(theta) and cos(theta), both close
+    to flat over a narrow range of angle, so the two parameter fit is strongly
+    correlated and its esds are large unless the angles span widely.
+
+    Parameters
+    ----------
+    two_theta
+        Positions, in degrees.
+    breadth, esd
+        Sample breadths with the instrument taken out, and their esds, in
+        degrees of 2theta; every esd must be positive.
+    wavelength
+        Wavelength, which sets the units of the size.
+    radius_mm
+        Goniometer radius, in mm.
+    k
+        Scherrer constant, 1 for integral breadths by default and 0.9 for a
+        FWHM.
+
+    Raises
+    ------
+    ValueError
+        If the arrays differ in length, there are fewer than three breadths, a
+        position lies outside (0, 180) degrees, a breadth is not finite, an
+        esd is not positive, or the wavelength, radius or ``k`` is not
+        positive.
+    """
+    two_theta = np.asarray(two_theta, dtype=float).ravel()
+    beta = np.radians(np.asarray(breadth, dtype=float).ravel())
+    sigma = np.radians(np.asarray(esd, dtype=float).ravel())
+    if not two_theta.size == beta.size == sigma.size:
+        raise ValueError(
+            f"two_theta, breadth and esd differ in length: {two_theta.size}, "
+            f"{beta.size}, {sigma.size}"
+        )
+    if two_theta.size < MIN_BREADTH_MODEL_POINTS:
+        raise ValueError(
+            f"Need at least {MIN_BREADTH_MODEL_POINTS} breadths, got {two_theta.size}"
+        )
+    if not np.all(np.isfinite(beta)):
+        raise ValueError("Every breadth must be finite")
+    if np.any(~np.isfinite(sigma) | (sigma <= 0.0)):
+        raise ValueError("Every esd must be positive")
+    for name, value in (("wavelength", wavelength), ("radius_mm", radius_mm), ("k", k)):
+        if not value > 0.0:
+            raise ValueError(f"{name} must be positive, got {value}")
+
+    cos_theta = _cos_theta(two_theta)
+    tan_theta = np.sqrt(1.0 - cos_theta**2) / cos_theta
+    weights = 1.0 / sigma**2
+    k_lambda = k * wavelength
+
+    fits: dict[str, BreadthModelFit] = {}
+    single_terms: dict[str, tuple[float, float]] = {}
+    for name, shape in (
+        ("size", 1.0 / cos_theta),
+        ("strain", 4.0 * tan_theta),
+        ("height", cos_theta),
+    ):
+        normal = float(np.sum(weights * shape**2))
+        term = float(np.sum(weights * shape * beta)) / normal
+        residuals = (beta - term * shape) / sigma
+        reduced = float(np.sum(residuals**2)) / (beta.size - 1)
+        esd_term = float(np.sqrt(reduced / normal))
+        single_terms[name] = (term, esd_term)
+        fits[name] = _breadth_model_fit(
+            name, {name: (term, esd_term)}, residuals, 1, False, k_lambda, radius_mm
+        )
+
+    # Size and height in quadrature, in P and Q, started from a linear fit of
+    # the squared breadths and polished on the breadths themselves.
+    design = np.column_stack([1.0 / cos_theta**2, cos_theta**2])
+    root_weights = 1.0 / (2.0 * np.maximum(np.abs(beta), sigma) * sigma)
+    start, *_ = np.linalg.lstsq(
+        design * root_weights[:, None], beta**2 * root_weights, rcond=None
+    )
+    scale = float(np.max(beta**2))
+    start = np.clip(start, 0.0, None) + QUADRATURE_START_FLOOR * scale
+
+    def residual(parameters: np.ndarray) -> np.ndarray:
+        return (beta - np.sqrt(design @ parameters)) / sigma
+
+    result = optimize.least_squares(
+        residual, start, bounds=(0.0, np.inf), x_scale=scale, xtol=1e-15, ftol=1e-15
+    )
+    residuals = np.asarray(result.fun, dtype=float)
+    # With one term at zero the fit is the other term alone, which the one
+    # parameter fits have already found exactly. The optimiser only approaches
+    # a bound from inside, so when either of those does as well, to within
+    # QUADRATURE_BOUND_CHI_SQUARED, the best fit lies on that bound and is
+    # taken from it.
+    boundary = min((fits["size"], fits["height"]), key=lambda fit: fit.chi_squared)
+    free_chi_squared = float(np.sum(residuals**2))
+    if boundary.chi_squared <= free_chi_squared + QUADRATURE_BOUND_CHI_SQUARED:
+        name = boundary.model
+        term, esd_term = single_terms[name]
+        # Its esd rescaled to the one fewer degree of freedom of this model.
+        dof_ratio = (beta.size - 1) / (beta.size - 2)
+        fits["size+height"] = _breadth_model_fit(
+            "size+height",
+            {name: (term, esd_term * np.sqrt(dof_ratio))},
+            boundary.normalised_residuals,
+            2,
+            True,
+            k_lambda,
+            radius_mm,
+        )
+        return BreadthModels(fits)
+
+    reduced = float(np.sum(residuals**2)) / (beta.size - 2)
+    jacobian = np.asarray(result.jac, dtype=float)
+    covariance = np.linalg.pinv(jacobian.T @ jacobian) * reduced
+    # The esd of a square root, from the esd of its square.
+    roots = np.sqrt(result.x)
+    esd_roots = np.sqrt(np.abs(np.diag(covariance))) / (2.0 * roots)
+    fits["size+height"] = _breadth_model_fit(
+        "size+height",
+        {
+            "size": (float(roots[0]), float(esd_roots[0])),
+            "height": (float(roots[1]), float(esd_roots[1])),
+        },
+        residuals,
+        2,
+        False,
+        k_lambda,
+        radius_mm,
+    )
+    return BreadthModels(fits)

@@ -9,8 +9,10 @@ from xrdkit import (
     ProfileFit,
     correct_broadening,
     doublet_gaps,
+    fit_breadth_models,
     fit_caglioti,
     fit_profile,
+    height_spread_breadth,
     integral_breadth,
     kalpha2_position,
     pseudo_voigt,
@@ -18,8 +20,12 @@ from xrdkit import (
     pseudo_voigt_from_components,
     split_pseudo_voigt,
 )
-from xrdkit.broadening import KALPHA2_INTENSITY_RATIO, MIN_CAGLIOTI_POINTS
-from xrdkit.peaks import KALPHA2_RATIO
+from xrdkit.broadening import (
+    KALPHA2_INTENSITY_RATIO,
+    MIN_CAGLIOTI_POINTS,
+    QUADRATURE_BOUND_CHI_SQUARED,
+)
+from xrdkit.peaks import KALPHA1_WAVELENGTH, KALPHA2_RATIO
 
 # A Caglioti function of the size the Aeris gives, in degrees squared, with the
 # negative V that puts the narrowest peaks in the middle of the range.
@@ -510,3 +516,152 @@ def test_kalpha2_position():
     assert kalpha2_position(30.0) == pytest.approx(kalpha2_of(30.0))
     # The split widens with angle.
     assert kalpha2_position(90.0) - 90.0 > kalpha2_position(30.0) - 30.0
+
+
+# Breadth models: positions spread as the sample reflections are, an integral
+# breadth size, a strain and a height spread of the size these scans suggest,
+# and the Aeris radius.
+MODEL_TWO_THETA = np.array(
+    [25.7, 27.7, 29.5, 34.5, 42.2, 49.5, 54.5, 55.7, 62.7, 68.5]
+)  # fmt: skip
+MODEL_SIZE = 1000.0
+MODEL_STRAIN = 8e-4
+MODEL_DELTA_S = 0.1
+RADIUS = 145.0
+MODEL_ESD = 0.004
+MODEL_EXACT = 1e-6
+
+
+def model_breadths(size=None, strain=0.0, delta_s=0.0):
+    """Breadths in degrees from size and height in quadrature, plus strain."""
+    theta = np.radians(MODEL_TWO_THETA / 2.0)
+    size_breadth = 0.0 if size is None else KALPHA1_WAVELENGTH / (size * np.cos(theta))
+    height = 2.0 * delta_s * np.cos(theta) / RADIUS
+    return np.degrees(np.hypot(size_breadth, height) + 4.0 * strain * np.tan(theta))
+
+
+def fit_models(breadth, esd=MODEL_ESD):
+    return fit_breadth_models(
+        MODEL_TWO_THETA,
+        breadth,
+        np.full_like(breadth, esd),
+        KALPHA1_WAVELENGTH,
+        RADIUS,
+    )
+
+
+class TestHeightSpreadBreadth:
+    def test_hand_calculated_value(self):
+        # 2 x 0.1 mm x cos(30 degrees) / 145 mm = 1.19452e-3 rad = 0.0684408 deg.
+        assert height_spread_breadth(60.0, 0.1, 145.0) == pytest.approx(
+            0.0684408, abs=1e-7
+        )
+
+    def test_narrows_with_angle(self):
+        breadth = height_spread_breadth(MODEL_TWO_THETA, MODEL_DELTA_S, RADIUS)
+        assert np.all(np.diff(breadth) < 0.0)
+
+    @pytest.mark.parametrize(("delta_s", "radius"), [(-0.1, 145.0), (0.1, 0.0)])
+    def test_rejects_bad_input(self, delta_s, radius):
+        with pytest.raises(ValueError):
+            height_spread_breadth(30.0, delta_s, radius)
+
+
+class TestFitBreadthModels:
+    def test_size_only(self):
+        models = fit_models(model_breadths(size=MODEL_SIZE))
+        fit = models.fits["size"]
+        assert fit.size == pytest.approx(MODEL_SIZE, rel=MODEL_EXACT)
+        assert fit.reduced_chi_squared == pytest.approx(0.0, abs=1e-12)
+        assert fit.delta_s is None and fit.strain is None
+        assert models.preferred.model in ("size", "size+height")
+        # The two parameter fit finds no height spread in pure size breadths.
+        both = models.fits["size+height"]
+        assert both.size == pytest.approx(MODEL_SIZE, rel=MODEL_EXACT)
+        assert both.delta_s is None and both.at_bound
+
+    def test_strain_only(self):
+        models = fit_models(model_breadths(strain=MODEL_STRAIN))
+        fit = models.fits["strain"]
+        assert fit.strain == pytest.approx(MODEL_STRAIN, rel=MODEL_EXACT)
+        assert models.preferred.model == "strain"
+        assert fit.size is None and fit.delta_s is None
+
+    def test_height_only(self):
+        models = fit_models(model_breadths(delta_s=MODEL_DELTA_S))
+        fit = models.fits["height"]
+        assert fit.delta_s == pytest.approx(MODEL_DELTA_S, rel=MODEL_EXACT)
+        assert fit.reduced_chi_squared == pytest.approx(0.0, abs=1e-12)
+        assert models.preferred.model in ("height", "size+height")
+        both = models.fits["size+height"]
+        assert both.delta_s == pytest.approx(MODEL_DELTA_S, rel=MODEL_EXACT)
+        assert both.size is None and both.at_bound
+
+    def test_size_plus_height(self):
+        breadth = model_breadths(size=MODEL_SIZE, delta_s=MODEL_DELTA_S)
+        models = fit_models(breadth)
+        both = models.fits["size+height"]
+        assert both.size == pytest.approx(MODEL_SIZE, rel=1e-4)
+        assert both.delta_s == pytest.approx(MODEL_DELTA_S, rel=1e-4)
+        assert not both.at_bound
+        assert models.preferred is both
+        # Neither term alone describes the breadths.
+        for name in ("size", "strain", "height"):
+            assert models.fits[name].reduced_chi_squared > 1e3 * max(
+                both.reduced_chi_squared, 1e-20
+            )
+
+    def test_noisy_model_choice_and_esds(self):
+        # With noise at the stated esds the right model has a reduced chi
+        # squared near one and recovers its parameter within its esd, while
+        # the wrong ones do far worse.
+        rng = np.random.default_rng(11)
+        exact = model_breadths(delta_s=0.15)
+        noisy = exact + rng.normal(0.0, 0.001, exact.size)
+        models = fit_models(noisy, esd=0.001)
+        fit = models.fits["height"]
+        assert abs(fit.delta_s - 0.15) < 3.0 * fit.esd_delta_s
+        assert 0.2 < fit.reduced_chi_squared < 3.0
+        assert models.fits["strain"].reduced_chi_squared > 10.0
+
+    def test_a_negligible_second_term_is_held_at_zero(self):
+        # Size breadths with noise: whatever the free fit finds for the height
+        # spread, it must either earn its place in chi squared or be held at
+        # zero, never be reported as a vanishing term with a runaway esd.
+        rng = np.random.default_rng(2)
+        exact = model_breadths(size=MODEL_SIZE)
+        models = fit_models(exact + rng.normal(0.0, MODEL_ESD, exact.size))
+        both = models.fits["size+height"]
+        best_single = min(
+            models.fits["size"].chi_squared, models.fits["height"].chi_squared
+        )
+        if both.at_bound:
+            assert both.chi_squared == pytest.approx(best_single)
+        else:
+            assert both.chi_squared < best_single - QUADRATURE_BOUND_CHI_SQUARED
+            assert both.esd_size < both.size and both.esd_delta_s < 1e3
+
+    def test_fitted_curve_matches_the_breadths(self):
+        breadth = model_breadths(size=MODEL_SIZE, delta_s=MODEL_DELTA_S)
+        both = fit_models(breadth).fits["size+height"]
+        np.testing.assert_allclose(both.breadth(MODEL_TWO_THETA), breadth, rtol=1e-6)
+        np.testing.assert_allclose(both.normalised_residuals, 0.0, atol=1e-3)
+
+    def test_fwhm_constant_scales_the_size(self):
+        breadth = model_breadths(size=MODEL_SIZE)
+        esd = np.full_like(breadth, MODEL_ESD)
+        models = fit_breadth_models(
+            MODEL_TWO_THETA, breadth, esd, KALPHA1_WAVELENGTH, RADIUS, k=0.9
+        )
+        assert models.fits["size"].size == pytest.approx(0.9 * MODEL_SIZE)
+
+    def test_needs_three_breadths(self):
+        with pytest.raises(ValueError, match="at least 3"):
+            fit_breadth_models([30.0, 40.0], [0.1, 0.1], [0.01, 0.01], 1.54, RADIUS)
+
+    def test_needs_positive_esds(self):
+        breadth = model_breadths(size=MODEL_SIZE)
+        with pytest.raises(ValueError, match="esd"):
+            fit_breadth_models(
+                MODEL_TWO_THETA, breadth, np.zeros_like(breadth), 1.54, RADIUS
+            )
