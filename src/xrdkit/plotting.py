@@ -7,9 +7,11 @@ from pathlib import Path
 import matplotlib as mpl
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.ticker import MultipleLocator
+from matplotlib.transforms import Bbox
 
 from xrdkit.indexing import IndexedPeak, Reflection
 from xrdkit.io import XRDScan
@@ -46,9 +48,10 @@ LABEL_MARGIN = 0.02
 # a weaker peak that would collide with a stronger one loses its label, and
 # labels are never stacked into a column.
 #
-# Peaks weaker than this percentage of the strongest carry no hkl label, since a
-# crowded pattern is unreadable if every shoulder is annotated.
-HKL_MIN_RELATIVE_INTENSITY = 10.0
+# Every peak of any visible size competes for room; which of them actually get
+# a label is settled by what fits, not by this, so the cut-off only has to keep
+# noise out of the running.
+HKL_MIN_RELATIVE_INTENSITY = 3.0
 
 HKL_FONTSIZE = 7
 
@@ -68,16 +71,8 @@ HKL_AMBIGUOUS = "first"
 # than the value annotate_hkl works out from the rendered label size.
 HKL_MIN_SEPARATION = 0.6
 
-# Clear space left between two labels, as a multiple of a label's own width.
-LABEL_GAP_FACTOR = 1.25
-
-# A label rotated 90 degrees is about this many font sizes wide across the x
-# direction, whatever it says, since only its height runs along the axis.
-UPRIGHT_LABEL_WIDTH = 1.2
-
-# An unrotated character is about this fraction of the font size wide, so a
-# label lying flat is this times its length times the font size.
-CHARACTER_WIDTH = 0.6
+# Clear space left between two neighbouring labels, in points.
+LABEL_GAP_POINTS = 1.0
 
 # One level up, as a fraction of the y range of the axes.
 HKL_LABEL_HEIGHT = 0.04
@@ -319,29 +314,42 @@ def _hkl_label(reflection: Reflection) -> str:
     return separator.join(str(index) for index in indices)
 
 
-def _label_separation(
-    ax: Axes, fontsize: float, rotation: float, labels: list[str]
-) -> float:
-    """Return the 2theta two labels need between them so they cannot overlap.
+def _renderer_for(figure: Figure) -> object:
+    """Return a renderer able to measure text on ``figure``.
 
-    The axes are measured as they stand, so the figure size and the x limits
-    have to be settled before this is called.
+    A figure built directly, rather than through a backend, carries a plain
+    ``FigureCanvasBase``, which cannot rasterise and so offers no renderer at
+    all. Attaching an Agg canvas gives one without going near pyplot.
     """
-    # get_position is a fraction of the figure, so this is the drawn width of
-    # the axes in points.
-    width_points = ax.get_position().width * ax.figure.get_figwidth() * 72.0
-    low, high = ax.get_xlim()
-    degrees_per_point = abs(high - low) / width_points
+    canvas = figure.canvas
+    if not hasattr(canvas, "get_renderer"):
+        canvas = FigureCanvasAgg(figure)
+    try:
+        return canvas.get_renderer()
+    except AttributeError:
+        canvas.draw()
+        return canvas.get_renderer()
 
-    if rotation == 90:
-        # Upright, so the label's width is its font size whatever it says.
-        label_points = UPRIGHT_LABEL_WIDTH * fontsize
-    else:
-        # At any other angle the longest label sets the spacing for all of them.
-        longest = max((len(label) for label in labels), default=1)
-        label_points = longest * CHARACTER_WIDTH * fontsize
 
-    return LABEL_GAP_FACTOR * label_points * degrees_per_point
+def _write_label(
+    ax: Axes,
+    position: float,
+    height: float,
+    label: str,
+    fontsize: float,
+    rotation: float,
+) -> Text:
+    """Write one hkl label, anchored so its base sits at ``height``."""
+    return ax.text(
+        position,
+        height,
+        label,
+        ha="center",
+        va="bottom",
+        fontsize=fontsize,
+        rotation=rotation,
+        rotation_mode="anchor",
+    )
 
 
 def annotate_hkl(
@@ -376,14 +384,14 @@ def annotate_hkl(
     reflections a reader is looking for stay labelled. With the default
     ``max_levels`` of 1 the annotation is a single row.
 
-    By default ``min_separation`` is worked out from how much room a label
-    actually takes: the width of the axes in points gives the degrees of 2theta
-    per point, and a label rotated 90 degrees is about
-    ``UPRIGHT_LABEL_WIDTH`` font sizes across, or ``CHARACTER_WIDTH`` times its
-    length times the font size when it lies at any other angle. **The figure
-    size and the x limits are read as they stand**, so set both before calling
-    this; annotating and then resizing the figure or changing the limits will
-    leave the labels spaced for the old geometry.
+    By default nothing is estimated: each label is written, its rendered
+    bounding box measured, and kept only if that box, widened by
+    ``LABEL_GAP_POINTS``, clears every box already on that level. This packs
+    the labels as tightly as the text really allows, whatever they say and at
+    whatever angle. **The figure size and the x limits are read as they
+    stand**, so set both before calling this; annotating and then resizing the
+    figure or changing the limits will leave the labels where the old geometry
+    put them.
 
     Parameters
     ----------
@@ -399,8 +407,8 @@ def annotate_hkl(
         Label appearance. The rotation is in degrees, anticlockwise.
     min_separation
         Two labels on the same level must be at least this far apart, in
-        degrees. ``None``, the default, works it out from the font size and the
-        width of the axes so that labels cannot overlap.
+        degrees. ``None``, the default, measures the rendered labels instead
+        and keeps whichever ones do not overlap.
     label_height
         Height of one level, in data coordinates. Defaults to
         ``HKL_LABEL_HEIGHT`` times the y range of ``ax``.
@@ -459,45 +467,44 @@ def annotate_hkl(
         for entry in entries
     ]
 
-    if min_separation is None:
-        min_separation = _label_separation(
-            ax, fontsize, rotation, [label for _, label in labelled]
-        )
+    measuring = min_separation is None
+    renderer = _renderer_for(ax.figure) if measuring else None
+    # A point is this many pixels, and the gap is left on each side of the box.
+    gap = LABEL_GAP_POINTS * ax.figure.dpi / 72.0 if measuring else 0.0
 
+    boxes: list[list[Bbox]] = [[] for _ in range(max_levels)]
     taken: list[list[float]] = [[] for _ in range(max_levels)]
     placed: list[tuple[float, Text]] = []
+
     for entry, label in labelled:
         position = entry.peak.two_theta
-        level = next(
-            (
-                candidate
-                for candidate in range(max_levels)
-                if all(
-                    abs(position - other) >= min_separation
-                    for other in taken[candidate]
+        for level in range(max_levels):
+            height = y + level * label_height
+            if not measuring:
+                if any(
+                    abs(position - other) < min_separation for other in taken[level]
+                ):
+                    continue
+                taken[level].append(position)
+                placed.append(
+                    (
+                        position,
+                        _write_label(ax, position, height, label, fontsize, rotation),
+                    )
                 )
-            ),
-            None,
-        )
-        if level is None:
-            continue
+                break
 
-        taken[level].append(position)
-        placed.append(
-            (
-                position,
-                ax.text(
-                    position,
-                    y + level * label_height,
-                    label,
-                    ha="center",
-                    va="bottom",
-                    fontsize=fontsize,
-                    rotation=rotation,
-                    rotation_mode="anchor",
-                ),
-            )
-        )
+            # Written before it is measured, since only a real Text knows how
+            # much room it takes, and taken away again if it does not fit.
+            text = _write_label(ax, position, height, label, fontsize, rotation)
+            box = text.get_window_extent(renderer)
+            widened = Bbox.from_extents(box.x0 - gap, box.y0, box.x1 + gap, box.y1)
+            if any(widened.overlaps(other) for other in boxes[level]):
+                text.remove()
+                continue
+            boxes[level].append(box)
+            placed.append((position, text))
+            break
 
     placed.sort(key=lambda item: item[0])
     return [text for _, text in placed]

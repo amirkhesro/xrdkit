@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pytest
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
@@ -23,7 +24,6 @@ from xrdkit import (
 )
 from xrdkit.plotting import (
     AMBIGUOUS_SEPARATOR,
-    CHARACTER_WIDTH,
     HKL_AMBIGUOUS,
     HKL_FONTSIZE,
     HKL_LABEL_HEIGHT,
@@ -31,11 +31,9 @@ from xrdkit.plotting import (
     HKL_MIN_RELATIVE_INTENSITY,
     HKL_MIN_SEPARATION,
     HKL_THIN_SPACE,
-    LABEL_GAP_FACTOR,
     LABEL_HEIGHT,
     OFFSET_FACTOR,
     PEAK_MARKER,
-    UPRIGHT_LABEL_WIDTH,
     X_LABEL,
     X_MAJOR_TICK,
     X_MINOR_TICK,
@@ -556,21 +554,8 @@ def sized_axes(width_inches: float) -> Axes:
     """Bare axes of a known figure width and x range, ready to annotate."""
     fig = Figure(figsize=(width_inches, 3.0))
     ax = fig.add_subplot()
-    ax.set_xlim(10.0, 100.0)
+    ax.set_xlim(30.0, 50.0)
     return ax
-
-
-def upright_separation(ax: Axes, fontsize: float = LABEL_FONT) -> float:
-    """The separation annotate_hkl should work out for a 90 degree rotation."""
-    width_points = ax.get_position().width * ax.figure.get_figwidth() * 72.0
-    low, high = ax.get_xlim()
-    return (
-        LABEL_GAP_FACTOR
-        * UPRIGHT_LABEL_WIDTH
-        * fontsize
-        * abs(high - low)
-        / width_points
-    )
 
 
 def make_spaced_indexed() -> list[IndexedPeak]:
@@ -595,66 +580,84 @@ def labelled_offsets(texts: list[Text]) -> list[float]:
     )
 
 
-def test_min_separation_is_computed_from_the_figure_geometry() -> None:
+def boxes_of(texts: list[Text]) -> list:
+    """The rendered extents of ``texts``, after a draw so they are laid out."""
+    if not texts:
+        return []
+    figure = texts[0].figure
+    FigureCanvasAgg(figure)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    return [text.get_window_extent(renderer) for text in texts]
+
+
+def test_measured_placement_keeps_only_the_labels_that_fit() -> None:
     ax = sized_axes(3.5)
-    separation = upright_separation(ax)
 
     texts = annotate_hkl(ax, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT)
 
     # The strongest peak always claims its room first.
     assert REFERENCE_PEAK in [text.get_position()[0] for text in texts]
-    # Exactly those far enough from it to clear a label of this size.
-    assert labelled_offsets(texts) == [
-        offset for offset in OFFSETS if offset > separation
-    ]
+    # Half a degree is inside the width of a label at this scale; three is not.
+    assert 0.5 not in labelled_offsets(texts)
+    assert 3.0 in labelled_offsets(texts)
 
 
-def test_a_wider_figure_computes_a_smaller_separation_and_labels_more() -> None:
-    narrow, wide = sized_axes(3.5), sized_axes(7.0)
-
-    assert upright_separation(wide) < upright_separation(narrow)
-
-    narrow_texts = annotate_hkl(
-        narrow, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+def test_a_wider_figure_fits_at_least_as_many_labels() -> None:
+    narrow = annotate_hkl(
+        sized_axes(3.5), make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
     )
-    wide_texts = annotate_hkl(
-        wide, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+    wide = annotate_hkl(
+        sized_axes(7.0), make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
     )
 
-    assert len(wide_texts) > len(narrow_texts)
-    assert labelled_offsets(wide_texts) == [
-        offset for offset in OFFSETS if offset > upright_separation(wide)
+    assert len(wide) >= len(narrow)
+
+
+def test_measured_labels_never_overlap() -> None:
+    for width in (3.5, 7.0):
+        texts = annotate_hkl(
+            sized_axes(width), make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+        )
+        boxes = boxes_of(texts)
+        assert not any(
+            boxes[i].overlaps(boxes[j])
+            for i in range(len(boxes))
+            for j in range(i + 1, len(boxes))
+        )
+
+
+def test_a_crowded_real_pattern_places_no_overlapping_label() -> None:
+    """Many peaks a degree apart, where the measurement has real work to do."""
+    indexed = [
+        make_indexed_peak(30.0 + step * 0.4, (3, 1, 1), relative_intensity=100.0 - step)
+        for step in range(40)
     ]
+    texts = annotate_hkl(sized_axes(3.5), indexed, LABEL_BASE, fontsize=LABEL_FONT)
+    boxes = boxes_of(texts)
+
+    assert 1 < len(texts) < len(indexed)
+    assert not any(
+        boxes[i].overlaps(boxes[j])
+        for i in range(len(boxes))
+        for j in range(i + 1, len(boxes))
+    )
 
 
-def test_a_narrower_x_range_computes_a_smaller_separation() -> None:
-    ax = sized_axes(3.5)
-    wide_range = upright_separation(ax)
-    ax.set_xlim(30.0, 50.0)
-
-    assert upright_separation(ax) < wide_range
-
-
-def test_an_explicit_min_separation_overrides_the_computed_one() -> None:
-    ax = sized_axes(3.5)
-    # The computed value would drop all three; this keeps every one of them.
-    assert upright_separation(ax) > max(OFFSETS)
-
+def test_an_explicit_min_separation_still_works() -> None:
     texts = annotate_hkl(
-        ax,
+        sized_axes(3.5),
         make_spaced_indexed(),
         LABEL_BASE,
         fontsize=LABEL_FONT,
         min_separation=0.4,
     )
 
+    # Nothing is measured, so every peak at least 0.4 degrees out is kept.
     assert labelled_offsets(texts) == list(OFFSETS)
 
 
-def test_a_label_that_is_not_upright_is_spaced_by_its_length() -> None:
-    upright = annotate_hkl(
-        sized_axes(7.0), make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
-    )
+def test_a_label_that_is_not_upright_is_measured_too() -> None:
     flat = annotate_hkl(
         sized_axes(7.0),
         make_spaced_indexed(),
@@ -662,39 +665,36 @@ def test_a_label_that_is_not_upright_is_spaced_by_its_length() -> None:
         fontsize=LABEL_FONT,
         rotation=0,
     )
+    boxes = boxes_of(flat)
 
-    # A three character label lying flat is wider than the same label upright,
-    # so it needs more room and fewer of them fit.
-    assert CHARACTER_WIDTH * 3 > UPRIGHT_LABEL_WIDTH
-    assert len(flat) < len(upright)
+    # Lying flat a label is wider, so fewer fit, but none of them overlap.
+    assert not any(
+        boxes[i].overlaps(boxes[j])
+        for i in range(len(boxes))
+        for j in range(i + 1, len(boxes))
+    )
 
 
 def test_the_defaults_are_the_standing_annotation_rule() -> None:
     """A single row of major peaks, each labelled with its assignment."""
     assert HKL_MAX_LEVELS == 1
-    assert HKL_MIN_RELATIVE_INTENSITY == 10.0
+    assert HKL_MIN_RELATIVE_INTENSITY == 3.0
     assert HKL_AMBIGUOUS == "first"
     assert HKL_FONTSIZE == 7
 
 
 def test_the_defaults_put_every_label_in_one_row() -> None:
-    ax = sized_axes(7.0)
-    separation = upright_separation(ax, HKL_FONTSIZE)
-
-    texts = annotate_hkl(ax, make_spaced_indexed(), LABEL_BASE)
+    texts = annotate_hkl(sized_axes(3.5), make_spaced_indexed(), LABEL_BASE)
 
     # Crowded peaks are dropped, never raised into a second row.
     assert len(texts) < len(make_spaced_indexed())
     assert all(text.get_position()[1] == pytest.approx(LABEL_BASE) for text in texts)
-    assert labelled_offsets(texts) == [
-        offset for offset in OFFSETS if offset > separation
-    ]
 
 
 def test_the_default_intensity_cut_off_drops_a_minor_peak() -> None:
     indexed = make_indexed()
-    # Above the old 5 per cent default, below the 10 per cent one.
-    indexed[2].peak.relative_intensity = 7.0
+    # Below the 3 per cent cut-off, so it never enters the running at all.
+    indexed[2].peak.relative_intensity = 1.0
 
     texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, max_levels=2)
 
