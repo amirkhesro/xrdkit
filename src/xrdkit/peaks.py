@@ -29,10 +29,12 @@ DEFAULT_MIN_DISTANCE = 0.15
 # so 0.5 gives the full width at half maximum.
 HALF_PROMINENCE = 0.5
 
-# Copper K alpha 2 at 1.54439 A over K alpha 1 at 1.54056 A. A satellite
+# Copper K alpha 1 and K alpha 2 wavelengths, in angstroms. A satellite
 # diffracts at the same d spacing as its parent, so Bragg's law puts it at
 # 2theta_2 = 2 arcsin(KALPHA2_RATIO sin(theta_1)), always to high angle.
-KALPHA2_RATIO = 1.54439 / 1.54056
+KALPHA1_WAVELENGTH = 1.54056
+KALPHA2_WAVELENGTH = 1.54439
+KALPHA2_RATIO = KALPHA2_WAVELENGTH / KALPHA1_WAVELENGTH
 
 # Largest gap between a peak and the satellite position predicted for it, in
 # degrees.
