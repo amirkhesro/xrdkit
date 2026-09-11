@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.text import Text
 from matplotlib.ticker import MultipleLocator
 from matplotlib.transforms import Bbox
@@ -51,7 +52,7 @@ LABEL_MARGIN = 0.02
 # Every peak of any visible size competes for room; which of them actually get
 # a label is settled by what fits, not by this, so the cut-off only has to keep
 # noise out of the running.
-HKL_MIN_RELATIVE_INTENSITY = 3.0
+HKL_MIN_RELATIVE_INTENSITY = 5.0
 
 HKL_FONTSIZE = 7
 
@@ -73,6 +74,12 @@ HKL_MIN_SEPARATION = 0.6
 
 # Clear space left between two neighbouring labels, in points.
 LABEL_GAP_POINTS = 1.0
+
+# Clear space left between a label and the top of its own peak, in points.
+LABEL_PAD_POINTS = 2
+
+# How far either side of a peak to look along a trace for its top, in degrees.
+LABEL_PEAK_WINDOW = 0.15
 
 # One level up, as a fraction of the y range of the axes.
 HKL_LABEL_HEIGHT = 0.04
@@ -224,7 +231,7 @@ def plot_stacked(
     colour: str = "black",
     linewidth: float = 0.7,
     figsize: tuple[float, float] = (3.5, 5.0),
-) -> tuple[Figure, Axes, list[float]]:
+) -> tuple[Figure, Axes, list[float], list[Line2D]]:
     """Plot several patterns stacked vertically with a constant offset.
 
     Parameters
@@ -244,10 +251,11 @@ def plot_stacked(
 
     Returns
     -------
-    tuple[Figure, Axes, list[float]]
-        The figure, the axes, and the vertical base of each slot in the order
-        the scans were given. The bases are what :func:`annotate_hkl` and
-        :func:`mark_peaks` need to place labels against a chosen trace.
+    tuple[Figure, Axes, list[float], list[Line2D]]
+        The figure, the axes, the vertical base of each slot, and the line
+        drawn for each scan, both in the order the scans were given. The bases
+        and the lines are what :func:`annotate_hkl` and :func:`mark_peaks` need
+        to place labels against a chosen trace.
 
     Raises
     ------
@@ -277,12 +285,14 @@ def plot_stacked(
     ax = fig.add_subplot()
 
     bases: list[float] = []
+    lines: list[Line2D] = []
     for index, (scan, trace, text) in enumerate(zip(scans, traces, labels)):
         base = index * offset
         bases.append(base)
-        ax.plot(
+        drawn = ax.plot(
             scan.two_theta, trace + base, color=colour, linewidth=linewidth, label=text
         )
+        lines.append(drawn[0])
         # Anchored to the slot, not to the trace's peak, so a strong high angle
         # reflection cannot push a label into the trace above it.
         ax.text(
@@ -297,7 +307,7 @@ def plot_stacked(
     _format_axes(ax, x_min, x_max)
     # Every slot gets the same height, so the topmost label always has room.
     ax.set_ylim(min(0.0, float(np.min(traces[0]))), (len(scans) - 1) * offset + offset)
-    return fig, ax, bases
+    return fig, ax, bases, lines
 
 
 def _hkl_label(reflection: Reflection) -> str:
@@ -339,7 +349,14 @@ def _write_label(
     fontsize: float,
     rotation: float,
 ) -> Text:
-    """Write one hkl label, anchored so its base sits at ``height``."""
+    """Write one hkl label with its bottom centre exactly at ``(position, height)``.
+
+    The alignment is applied to the text as rotated, which is what
+    ``rotation_mode="default"`` means and what puts the middle of the drawn
+    label over its peak at any angle. Aligning before rotating instead, with
+    ``rotation_mode="anchor"``, swings a label upright about its own baseline
+    and leaves it a third of a degree to the left of the peak it names.
+    """
     return ax.text(
         position,
         height,
@@ -348,14 +365,37 @@ def _write_label(
         va="bottom",
         fontsize=fontsize,
         rotation=rotation,
-        rotation_mode="anchor",
+        rotation_mode="default",
     )
+
+
+def _peak_top(
+    line: Line2D, position: float, window: float = LABEL_PEAK_WINDOW
+) -> float:
+    """Return the highest point of ``line`` within ``window`` of ``position``.
+
+    Falls back to the nearest point it has when nothing lies inside the window,
+    so a label is never stranded at the foot of the axes.
+    """
+    x = np.asarray(line.get_xdata(), dtype=float)
+    values = np.asarray(line.get_ydata(), dtype=float)
+    near = np.abs(x - position) <= window
+    if not np.any(near):
+        return float(values[np.argmin(np.abs(x - position))])
+    return float(np.max(values[near]))
+
+
+def _points_in_data(ax: Axes, points: float) -> float:
+    """Return ``points`` as a vertical distance in the data units of ``ax``."""
+    pixels = points * ax.figure.dpi / 72.0
+    inverse = ax.transData.inverted()
+    return inverse.transform((0.0, pixels))[1] - inverse.transform((0.0, 0.0))[1]
 
 
 def annotate_hkl(
     ax: Axes,
     indexed: list[IndexedPeak],
-    y: float,
+    y: float = 0.0,
     min_relative_intensity: float = HKL_MIN_RELATIVE_INTENSITY,
     fontsize: float = HKL_FONTSIZE,
     rotation: float = HKL_ROTATION,
@@ -363,6 +403,7 @@ def annotate_hkl(
     label_height: float | None = None,
     ambiguous: str = HKL_AMBIGUOUS,
     max_levels: int = HKL_MAX_LEVELS,
+    line: Line2D | None = None,
 ) -> list[Text]:
     """Write an hkl label above the indexed peaks of one trace, strongest first.
 
@@ -370,9 +411,13 @@ def annotate_hkl(
     labelled, a weaker peak that would collide with a stronger one loses its
     label, and labels are never stacked into a column.
 
-    Labels are placed at the observed peak position with their base at ``y``,
-    so ``y`` is normally the base of the slot the trace occupies plus enough
-    room to clear its tallest peak. Peaks with no assignment are skipped; use
+    Given a ``line``, each label rides on top of its own peak, a couple of
+    points above the highest the trace reaches nearby, which keeps a label and
+    the reflection it names together however the pattern rises and falls.
+    Without one they share a fixed row with their base at ``y``, normally the
+    base of the slot the trace occupies plus enough room to clear its tallest
+    peak. Either way the bottom centre of the label sits exactly over the
+    observed peak position. Peaks with no assignment are skipped; use
     :func:`mark_peaks` for those.
 
     Room is allotted by priority rather than by position. The peaks are taken
@@ -386,7 +431,11 @@ def annotate_hkl(
 
     By default nothing is estimated: each label is written, its rendered
     bounding box measured, and kept only if that box, widened by
-    ``LABEL_GAP_POINTS``, clears every box already on that level. This packs
+    ``LABEL_GAP_POINTS``, clears every box already placed. Riding the peaks
+    puts the labels at all sorts of heights, so with a ``line`` a box is
+    compared with every other and two labels a tenth of a degree apart both
+    stay as long as their peaks differ enough in height; without one the
+    comparison is per level. This packs
     the labels as tightly as the text really allows, whatever they say and at
     whatever angle. **The figure size and the x limits are read as they
     stand**, so set both before calling this; annotating and then resizing the
@@ -417,7 +466,14 @@ def annotate_hkl(
         ``"first"`` labels the assigned one, ``"all"`` joins every candidate
         with a solidus, ``"skip"`` leaves the peak unlabelled.
     max_levels
-        How many levels to try. One keeps every label in a single row.
+        How many levels to try. One keeps every label in a single row. Ignored
+        when ``line`` is given, since a label then sits on its own peak rather
+        than on a level.
+    line
+        The trace the peaks belong to, as returned by :func:`plot_stacked`. Its
+        y data is what each label is stood on. ``None`` puts them all in a row
+        at ``y`` instead. Giving one always measures, so ``min_separation`` has
+        no effect.
 
     Returns
     -------
@@ -467,19 +523,29 @@ def annotate_hkl(
         for entry in entries
     ]
 
-    measuring = min_separation is None
+    # Standing the labels on their peaks always measures, since their heights
+    # are then all different and only the boxes can say what really clashes.
+    measuring = line is not None or min_separation is None
     renderer = _renderer_for(ax.figure) if measuring else None
     # A point is this many pixels, and the gap is left on each side of the box.
     gap = LABEL_GAP_POINTS * ax.figure.dpi / 72.0 if measuring else 0.0
+    pad = _points_in_data(ax, LABEL_PAD_POINTS) if line is not None else 0.0
 
-    boxes: list[list[Bbox]] = [[] for _ in range(max_levels)]
-    taken: list[list[float]] = [[] for _ in range(max_levels)]
+    # One list of levels to try, or a single pass when each label has its own
+    # height and there are no levels to speak of.
+    levels = 1 if line is not None else max_levels
+    boxes: list[list[Bbox]] = [[] for _ in range(levels)]
+    taken: list[list[float]] = [[] for _ in range(levels)]
     placed: list[tuple[float, Text]] = []
 
     for entry, label in labelled:
         position = entry.peak.two_theta
-        for level in range(max_levels):
-            height = y + level * label_height
+        for level in range(levels):
+            if line is not None:
+                height = _peak_top(line, position) + pad
+            else:
+                height = y + level * label_height
+
             if not measuring:
                 if any(
                     abs(position - other) < min_separation for other in taken[level]

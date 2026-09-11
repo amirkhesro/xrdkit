@@ -109,7 +109,7 @@ def test_plot_stacked_rejects_unknown_scale() -> None:
 
 def test_plot_stacked_one_line_and_label_per_scan() -> None:
     scans = [make_scan("10"), make_scan("12", peaks=(25.0, 45.0))]
-    fig, ax, _ = plot_stacked(scans)
+    fig, ax, *_ = plot_stacked(scans)
 
     assert isinstance(fig, Figure)
     assert len(ax.lines) == len(scans)
@@ -121,7 +121,7 @@ def test_plot_stacked_one_line_and_label_per_scan() -> None:
 
 def test_plot_stacked_offsets_traces() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax, _ = plot_stacked(scans, offset=2.0)
+    _, ax, *_ = plot_stacked(scans, offset=2.0)
     lower, upper = (line.get_ydata() for line in ax.lines)
 
     assert np.min(upper) - np.min(lower) == pytest.approx(2.0)
@@ -129,7 +129,7 @@ def test_plot_stacked_offsets_traces() -> None:
 
 def test_plot_stacked_custom_labels_and_length_check() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax, _ = plot_stacked(scans, labels=["x = 0.10", "x = 0.12"])
+    _, ax, *_ = plot_stacked(scans, labels=["x = 0.10", "x = 0.12"])
     assert [text.get_text() for text in ax.texts] == ["x = 0.10", "x = 0.12"]
 
     with pytest.raises(ValueError, match="lengths must match"):
@@ -180,7 +180,7 @@ def test_x_axis_uses_fixed_tick_spacing() -> None:
 def test_plot_stacked_labels_anchored_to_slot() -> None:
     scans = [make_scan("a"), make_scan("b"), make_scan("c")]
     offset = 2.0
-    _, ax, _ = plot_stacked(scans, offset=offset)
+    _, ax, *_ = plot_stacked(scans, offset=offset)
 
     expected = [index * offset + LABEL_HEIGHT * offset for index in range(len(scans))]
     assert [text.get_position()[1] for text in ax.texts] == pytest.approx(expected)
@@ -199,7 +199,7 @@ def test_plot_stacked_label_clears_a_tall_high_angle_peak() -> None:
     low = make_scan("low", peaks=(22.0,))
     high = make_scan("high", peaks=(78.0,))
     offset = 2.0
-    _, ax, _ = plot_stacked([low, high], offset=offset)
+    _, ax, *_ = plot_stacked([low, high], offset=offset)
 
     assert [text.get_position()[1] for text in ax.texts] == pytest.approx(
         [LABEL_HEIGHT * offset, offset + LABEL_HEIGHT * offset]
@@ -209,7 +209,7 @@ def test_plot_stacked_label_clears_a_tall_high_angle_peak() -> None:
 def test_plot_stacked_y_limits_leave_room_for_top_label() -> None:
     scans = [make_scan("a"), make_scan("b")]
     offset = 2.0
-    _, ax, _ = plot_stacked(scans, offset=offset)
+    _, ax, *_ = plot_stacked(scans, offset=offset)
     bottom, top = ax.get_ylim()
 
     assert bottom <= 0.0
@@ -220,7 +220,7 @@ def test_plot_stacked_y_limits_leave_room_for_top_label() -> None:
 
 def test_plot_stacked_default_offset_clears_the_trace_above() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax, _ = plot_stacked(scans)
+    _, ax, *_ = plot_stacked(scans)
     lower, upper = (line.get_ydata() for line in ax.lines)
     offset = float(np.min(upper) - np.min(lower))
 
@@ -495,7 +495,7 @@ def test_mark_peaks_of_nothing() -> None:
 
 def test_plot_stacked_returns_a_base_per_slot() -> None:
     scans = [make_scan("a"), make_scan("b"), make_scan("c")]
-    fig, ax, bases = plot_stacked(scans, offset=2.0)
+    fig, ax, bases, _ = plot_stacked(scans, offset=2.0)
 
     assert isinstance(fig, Figure)
     assert isinstance(ax, Axes)
@@ -504,7 +504,7 @@ def test_plot_stacked_returns_a_base_per_slot() -> None:
 
 def test_annotate_hkl_onto_a_chosen_stack_slot() -> None:
     scans = [make_scan("a"), make_scan("b")]
-    _, ax, bases = plot_stacked(scans, offset=2.0)
+    _, ax, bases, _ = plot_stacked(scans, offset=2.0)
 
     texts = annotate_hkl(ax, make_indexed(), bases[1] + 1.2, label_height=0.1)
 
@@ -678,7 +678,7 @@ def test_a_label_that_is_not_upright_is_measured_too() -> None:
 def test_the_defaults_are_the_standing_annotation_rule() -> None:
     """A single row of major peaks, each labelled with its assignment."""
     assert HKL_MAX_LEVELS == 1
-    assert HKL_MIN_RELATIVE_INTENSITY == 3.0
+    assert HKL_MIN_RELATIVE_INTENSITY == 5.0
     assert HKL_AMBIGUOUS == "first"
     assert HKL_FONTSIZE == 7
 
@@ -693,9 +693,142 @@ def test_the_defaults_put_every_label_in_one_row() -> None:
 
 def test_the_default_intensity_cut_off_drops_a_minor_peak() -> None:
     indexed = make_indexed()
-    # Below the 3 per cent cut-off, so it never enters the running at all.
+    # Below the 5 per cent cut-off, so it never enters the running at all.
     indexed[2].peak.relative_intensity = 1.0
 
     texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, max_levels=2)
 
     assert [text.get_text() for text in texts] == ["311", "420"]
+
+
+# Two peaks this far apart in 2theta: close enough that upright labels would
+# collide in a shared row, far enough that they clear each other when each one
+# stands on a peak of its own height.
+NEAR_PAIR = (40.0, 40.4)
+
+# Heights of that pair on the synthetic trace, in trace units.
+TALL, SHORT = 1.0, 0.35
+
+
+def traced_axes(width_inches: float = 3.5):
+    """Axes carrying one line with two Gaussians of different heights."""
+    fig = Figure(figsize=(width_inches, 3.0))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
+    two_theta = np.linspace(30.0, 50.0, 2000)
+    intensity = np.zeros_like(two_theta)
+    for centre, height in zip(NEAR_PAIR, (TALL, SHORT)):
+        intensity += height * np.exp(-((two_theta - centre) ** 2) / (2 * 0.05**2))
+    line = ax.plot(two_theta, intensity, color="black")[0]
+    ax.set_xlim(30.0, 50.0)
+    ax.set_ylim(0.0, 1.2)
+    return ax, line
+
+
+def near_pair_indexed() -> list[IndexedPeak]:
+    """The two peaks of traced_axes, the taller one stronger."""
+    return [
+        make_indexed_peak(NEAR_PAIR[0], (3, 1, 1), relative_intensity=100.0),
+        make_indexed_peak(NEAR_PAIR[1], (4, 2, 0), relative_intensity=35.0),
+    ]
+
+
+def box_centre_in_data(ax: Axes, text: Text) -> tuple[float, float]:
+    """The centre of ``text``'s rendered box, in data coordinates."""
+    renderer = ax.figure.canvas.get_renderer()
+    box = text.get_window_extent(renderer)
+    return tuple(
+        ax.transData.inverted().transform(
+            ((box.x0 + box.x1) / 2.0, (box.y0 + box.y1) / 2.0)
+        )
+    )
+
+
+def test_a_label_is_centred_over_its_peak() -> None:
+    ax, _ = traced_axes()
+
+    texts = annotate_hkl(ax, near_pair_indexed(), 1.0, fontsize=LABEL_FONT)
+
+    for text in texts:
+        centre_x, _ = box_centre_in_data(ax, text)
+        assert centre_x == pytest.approx(text.get_position()[0], abs=0.05)
+
+
+def test_a_label_is_centred_over_its_peak_at_any_rotation() -> None:
+    for rotation in (0, 45, 90):
+        ax, _ = traced_axes()
+        texts = annotate_hkl(
+            ax, near_pair_indexed(), 1.0, fontsize=LABEL_FONT, rotation=rotation
+        )
+        for text in texts:
+            centre_x, _ = box_centre_in_data(ax, text)
+            assert centre_x == pytest.approx(text.get_position()[0], abs=0.05)
+
+
+def test_a_line_stands_each_label_on_its_own_peak() -> None:
+    ax, line = traced_axes()
+
+    texts = annotate_hkl(ax, near_pair_indexed(), fontsize=LABEL_FONT, line=line)
+
+    # Both fit: the labels are at quite different heights, so their boxes miss.
+    assert [text.get_text() for text in texts] == ["311", "420"]
+    heights = [text.get_position()[1] for text in texts]
+    assert heights[0] > heights[1]
+    # Each sits just above the top of its own peak, not on a shared row.
+    assert heights[0] == pytest.approx(TALL, abs=0.1)
+    assert heights[1] == pytest.approx(SHORT, abs=0.1)
+
+
+def test_a_fixed_row_keeps_only_the_stronger_of_the_near_pair() -> None:
+    ax, _ = traced_axes()
+
+    texts = annotate_hkl(ax, near_pair_indexed(), 1.1, fontsize=LABEL_FONT)
+
+    # Same height, four tenths of a degree apart: the weaker one has nowhere.
+    assert [text.get_text() for text in texts] == ["311"]
+
+
+def test_labels_on_a_line_never_overlap() -> None:
+    ax, line = traced_axes()
+    crowded = [
+        make_indexed_peak(
+            30.0 + step * 0.35, (3, 1, 1), relative_intensity=100.0 - step
+        )
+        for step in range(50)
+    ]
+
+    texts = annotate_hkl(ax, crowded, fontsize=LABEL_FONT, line=line)
+    boxes = boxes_of(texts)
+
+    assert 1 < len(texts) < len(crowded)
+    assert not any(
+        boxes[i].overlaps(boxes[j])
+        for i in range(len(boxes))
+        for j in range(i + 1, len(boxes))
+    )
+
+
+def test_a_line_ignores_max_levels() -> None:
+    ax, line = traced_axes()
+
+    one = annotate_hkl(
+        ax, near_pair_indexed(), fontsize=LABEL_FONT, line=line, max_levels=1
+    )
+    ax2, line2 = traced_axes()
+    three = annotate_hkl(
+        ax2, near_pair_indexed(), fontsize=LABEL_FONT, line=line2, max_levels=3
+    )
+
+    assert [text.get_text() for text in one] == [text.get_text() for text in three]
+
+
+def test_plot_stacked_returns_a_line_per_scan() -> None:
+    scans = [make_scan("a"), make_scan("b"), make_scan("c")]
+
+    _, ax, bases, lines = plot_stacked(scans, offset=2.0)
+
+    assert len(lines) == len(scans)
+    assert lines == list(ax.lines)
+    # Each line is drawn on the base of its own slot.
+    for line, base in zip(lines, bases):
+        assert float(np.min(line.get_ydata())) >= base - 0.5
