@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +16,8 @@ __all__ = [
     "IndexedPeak",
     "Reflection",
     "TetragonalCell",
+    "ZeroSearch",
+    "estimate_zero_offset",
     "generate_reflections",
     "index_and_refine",
     "index_peaks",
@@ -31,6 +33,20 @@ DEFAULT_TOLERANCE = 0.05
 DEFAULT_ZERO_OFFSET = 0.0
 
 DEFAULT_SPACE_GROUP = "P4bm"
+
+# Range and step of the automatic zero offset search, in degrees. Wide enough
+# for a pellet standing proud of its holder, fine enough to land inside the
+# fine tolerance.
+DEFAULT_ZERO_SEARCH = (-0.4, 0.4)
+DEFAULT_ZERO_SEARCH_STEP = 0.01
+
+# Every trial offset is given a cell of its own, seeded from the peaks below
+# this position at this tolerance. Holding one cell for the whole search does
+# not work: a cell that is a per cent out shifts the low angle peaks by about
+# as much as a zero offset does, so the trial that wins is whichever one best
+# papers over the cell error rather than the one that is right.
+ZERO_SEED_TOLERANCE = 0.4
+ZERO_SEED_TWO_THETA_MAX = 35.0
 
 # Space groups whose reflection conditions this module knows about.
 SUPPORTED_SPACE_GROUPS = ("P4bm",)
@@ -220,6 +236,114 @@ def generate_reflections(
     return sorted(reflections, key=lambda reflection: reflection.two_theta)
 
 
+def estimate_zero_offset(
+    peaks: list[Peak],
+    cell: TetragonalCell,
+    wavelength: float,
+    search: tuple[float, float] = DEFAULT_ZERO_SEARCH,
+    step: float = DEFAULT_ZERO_SEARCH_STEP,
+    tolerance: float = DEFAULT_TOLERANCE,
+    two_theta_max: float | None = None,
+    space_group: str | None = DEFAULT_SPACE_GROUP,
+) -> ZeroSearch:
+    """Find the zero offset that indexes the most peaks unambiguously.
+
+    A specimen that sits proud of its holder moves every reflection by close to
+    a constant, which no cell can absorb: indexed against an uncorrected cell
+    such a pattern loses most of its peaks. Trying offsets across ``search`` and
+    keeping the one that leaves the most peaks with exactly one candidate
+    recovers the shift without anyone having to measure it by hand. Ties go to
+    the offset whose matched peaks sit closest to their calculated positions.
+
+    Each trial gets a cell refined for it, from the low angle peaks, rather than
+    sharing one. This matters: a constant offset and a cell that is a per cent
+    out shift the low angle peaks by much the same amount, so a search that
+    holds the cell fixed returns whichever offset best hides the error in that
+    cell. Letting the cell move with the offset asks the question that was meant
+    instead, which is how much of the pattern each offset can account for.
+
+    Parameters
+    ----------
+    peaks
+        Observed peaks to search on.
+    cell
+        Cell each trial's own refinement starts from.
+    wavelength
+        Radiation wavelength in angstroms.
+    search
+        ``(low, high)`` bounds of the offsets tried, in degrees.
+    step
+        Spacing of the offsets tried, in degrees.
+    tolerance
+        Tolerance the trials are scored at, in degrees.
+    two_theta_max
+        Score on the peaks below this position only. All of them by default,
+        since the whole range is what tells an offset from a cell.
+    space_group
+        Space group whose reflection conditions to apply, or ``None`` for none.
+
+    Returns
+    -------
+    ZeroSearch
+        The best offset, how many peaks it indexed unambiguously, their root
+        mean square difference, and the whole profile that was tried.
+
+    Raises
+    ------
+    ValueError
+        If ``search`` is not a rising pair, ``step`` is not positive, or there
+        are no peaks to search on.
+    """
+    low, high = search
+    if not low < high:
+        raise ValueError(f"Need search low < high, got {search}")
+    if step <= 0.0:
+        raise ValueError(f"Need a positive step, got {step}")
+
+    candidates = [
+        peak
+        for peak in peaks
+        if two_theta_max is None or peak.two_theta <= two_theta_max
+    ]
+    if not candidates:
+        raise ValueError(
+            f"No peak at or below {two_theta_max} degrees to search a zero offset on"
+        )
+    seed_peaks = [
+        peak for peak in candidates if peak.two_theta <= ZERO_SEED_TWO_THETA_MAX
+    ]
+
+    trials = np.arange(low, high + step / 2.0, step)
+    counts = np.zeros(trials.size, dtype=int)
+    deviations = np.full(trials.size, np.inf)
+
+    for index, offset in enumerate(trials):
+        trial_cell = _seed_cell(
+            seed_peaks, cell, wavelength, float(offset), space_group
+        )
+        indexed = index_peaks(
+            candidates, trial_cell, wavelength, tolerance, float(offset), space_group
+        )
+        differences = [
+            entry.difference
+            for entry in indexed
+            if entry.is_indexed and len(entry.candidates) == 1
+        ]
+        counts[index] = len(differences)
+        if differences:
+            deviations[index] = float(np.sqrt(np.mean(np.square(differences))))
+
+    # Most peaks wins; a tie is broken on how well those peaks actually sit.
+    best = int(np.lexsort((deviations, -counts))[0])
+    return ZeroSearch(
+        offset=float(trials[best]),
+        n_indexed=int(counts[best]),
+        rms=float(deviations[best]),
+        offsets=trials,
+        counts=counts,
+    )
+
+
 def index_peaks(
     peaks: list[Peak],
     cell: TetragonalCell,
@@ -364,6 +488,20 @@ class CellFit:
     n_peaks: int
     rms_two_theta: float
     c_fitted: bool
+    # Zero offset the indexing was run with, in degrees. Zero unless
+    # index_and_refine searched for one.
+    zero_offset: float = 0.0
+
+
+@dataclass
+class ZeroSearch:
+    """The outcome of a scan over trial zero offsets."""
+
+    offset: float
+    n_indexed: int
+    rms: float
+    offsets: np.ndarray
+    counts: np.ndarray
 
 
 def _two_theta(d_spacing: float, wavelength: float) -> float:
@@ -477,6 +615,29 @@ def refine_cell(
     return CellFit(cell=cell, n_peaks=len(used), rms_two_theta=rms, c_fitted=c_fitted)
 
 
+def _seed_cell(
+    peaks: list[Peak],
+    cell: TetragonalCell,
+    wavelength: float,
+    zero_offset: float,
+    space_group: str | None,
+) -> TetragonalCell:
+    """Refine ``cell`` on the low angle peaks at one trial offset.
+
+    Falls back to the cell it was given whenever there is too little to refine
+    on, which leaves that trial to be judged on the starting cell rather than
+    dropped.
+    """
+    indexed = index_peaks(
+        peaks, cell, wavelength, ZERO_SEED_TOLERANCE, zero_offset, space_group
+    )
+    unambiguous = [entry for entry in indexed if len(entry.candidates) == 1]
+    try:
+        return refine_cell(unambiguous, wavelength, cell).cell
+    except ValueError:
+        return cell
+
+
 def index_and_refine(
     peaks: list[Peak],
     start_cell: TetragonalCell,
@@ -487,6 +648,7 @@ def index_and_refine(
     fine_tolerance: float = DEFAULT_TOLERANCE,
     space_group: str | None = DEFAULT_SPACE_GROUP,
     n_cycles: int = 2,
+    search_zero: bool = True,
 ) -> tuple[list[IndexedPeak], CellFit]:
     """Index and refine in cycles, starting coarse and low angle.
 
@@ -508,6 +670,7 @@ def index_and_refine(
         Radiation wavelength in angstroms.
     zero_offset
         Zero point correction, in degrees, subtracted from each observed peak.
+        Giving one turns the search off, since it is then already known.
     coarse_tolerance
         Tolerance of the first cycle, in degrees.
     coarse_two_theta_max
@@ -518,12 +681,17 @@ def index_and_refine(
         Space group whose reflection conditions to apply, or ``None`` for none.
     n_cycles
         Number of refinement cycles, at least one.
+    search_zero
+        Look for the zero offset with :func:`estimate_zero_offset` before
+        indexing, starting from ``start_cell`` and scoring at the fine
+        tolerance. Only done when ``zero_offset`` is left at zero.
 
     Returns
     -------
     tuple[list[IndexedPeak], CellFit]
         The whole peak list indexed against the final cell with
-        ``fine_tolerance``, and the fit of the last cycle.
+        ``fine_tolerance``, and the fit of the last cycle. The fit carries the
+        offset everything was indexed with in its ``zero_offset``.
 
     Raises
     ------
@@ -533,6 +701,20 @@ def index_and_refine(
     """
     if n_cycles < 1:
         raise ValueError(f"Need at least one cycle, got {n_cycles}")
+
+    if search_zero and zero_offset == 0.0 and peaks:
+        # Searched on the same window and tolerance the first cycle will use,
+        # so the offset that wins is the one that cycle can act on.
+        # Scored over the whole pattern at the fine tolerance: the spread in
+        # 2theta is exactly what separates a constant offset from a cell error,
+        # so confining the search to the coarse window throws that away.
+        zero_offset = estimate_zero_offset(
+            peaks,
+            start_cell,
+            wavelength,
+            tolerance=fine_tolerance,
+            space_group=space_group,
+        ).offset
 
     coarse_peaks = [
         peak for peak in peaks if peak.two_theta - zero_offset <= coarse_two_theta_max
@@ -565,4 +747,4 @@ def index_and_refine(
     final = index_peaks(
         peaks, cell, wavelength, fine_tolerance, zero_offset, space_group
     )
-    return final, fit
+    return final, replace(fit, zero_offset=zero_offset)

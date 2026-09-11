@@ -94,6 +94,7 @@ def refine_lattice(
     fit_zero: bool = True,
     fit_displacement: bool = False,
     radius_mm: float | None = None,
+    start_zero: float = 0.0,
 ) -> LatticeFit:
     """Refine a tetragonal cell, and its systematic errors, by least squares.
 
@@ -125,6 +126,9 @@ def refine_lattice(
         Refine the specimen displacement. Held at zero when ``False``.
     radius_mm
         Goniometer radius in millimetres. Needed only to refine a displacement.
+    start_zero
+        Zero point error to start from, in degrees. Only a starting value: it
+        is refined like any other when ``fit_zero``, and held there when not.
 
     Returns
     -------
@@ -161,7 +165,7 @@ def refine_lattice(
 
     # The whole vector is carried about so the model stays readable; only the
     # free entries are handed to the optimiser.
-    start = np.array([start_cell.a, start_cell.c, 0.0, 0.0], dtype=float)
+    start = np.array([start_cell.a, start_cell.c, start_zero, 0.0], dtype=float)
     # A displacement term of zero leaves the model unchanged, so the radius is
     # only consulted when one is being refined.
     radius = radius_mm if fit_displacement else None

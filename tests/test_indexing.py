@@ -10,6 +10,7 @@ from xrdkit import (
     IndexedPeak,
     Peak,
     TetragonalCell,
+    estimate_zero_offset,
     generate_reflections,
     index_and_refine,
     index_peaks,
@@ -322,11 +323,17 @@ def test_index_and_refine_recovers_the_cell_the_peaks_came_from() -> None:
 
 
 def test_index_and_refine_cannot_start_from_too_tight_a_coarse_tolerance() -> None:
-    """A tenth of a degree is narrower than the shift TTB_CELL produces."""
+    """A tenth of a degree is narrower than the shift TTB_CELL produces.
+
+    With the zero search off, so that this is about the coarse tolerance alone
+    and not about an offset standing in for the gap between the cells.
+    """
     _, peaks = synthetic_peaks()
 
     with pytest.raises(ValueError, match="at least 3 indexed peaks"):
-        index_and_refine(peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.15)
+        index_and_refine(
+            peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.15, search_zero=False
+        )
 
 
 def test_index_and_refine_rejects_a_cycle_count_below_one() -> None:
@@ -386,3 +393,110 @@ def test_refine_cell_without_l_needs_a_start_cell() -> None:
 
     with pytest.raises(ValueError, match="pass start_cell"):
         refine_cell(indexed, WAVELENGTH)
+
+
+# A pellet standing proud of its holder shifts every peak by about this much.
+APPLIED_ZERO_OFFSET = 0.17
+
+
+def shifted_peaks(offset: float = APPLIED_ZERO_OFFSET, seed: int = 11) -> tuple:
+    """Isolated reflections of REFINED_CELL, every one moved by ``offset``."""
+    reflections = isolated_reflections(80.0, REFINED_CELL, REFINEMENT_ISOLATION)
+    rng = np.random.default_rng(seed)
+    peaks = [
+        make_peak(round(reflection.two_theta + offset + rng.uniform(-NOISE, NOISE), 3))
+        for reflection in reflections
+    ]
+    return reflections, peaks
+
+
+def test_estimate_zero_offset_finds_an_applied_shift() -> None:
+    _, peaks = shifted_peaks()
+
+    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH)
+
+    assert search.offset == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.02)
+    # It wins on the count, not on a tie-break.
+    assert search.n_indexed > int(search.counts[int(np.argmin(np.abs(search.offsets)))])
+
+
+def test_estimate_zero_offset_returns_near_zero_for_unshifted_peaks() -> None:
+    _, peaks = synthetic_peaks()
+
+    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH)
+
+    assert search.offset == pytest.approx(0.0, abs=0.02)
+
+
+def test_estimate_zero_offset_reports_the_profile_it_tried() -> None:
+    _, peaks = shifted_peaks()
+
+    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, step=0.02)
+
+    assert search.offsets.shape == search.counts.shape
+    assert search.offsets[0] == pytest.approx(-0.4)
+    assert search.offsets[-1] == pytest.approx(0.4)
+    assert int(search.counts.max()) == search.n_indexed
+    assert search.rms > 0.0
+
+
+def test_estimate_zero_offset_rejects_a_bad_search_range() -> None:
+    _, peaks = shifted_peaks()
+
+    with pytest.raises(ValueError, match="search low < high"):
+        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, search=(0.4, -0.4))
+    with pytest.raises(ValueError, match="positive step"):
+        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, step=0.0)
+    with pytest.raises(ValueError, match="No peak at or below"):
+        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, two_theta_max=5.0)
+
+
+def test_index_and_refine_indexes_a_shifted_pattern_by_default() -> None:
+    reflections, peaks = shifted_peaks()
+
+    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+
+    assert fit.zero_offset == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.02)
+    # Every peak indexed, and to the reflection it was made from.
+    assert all(entry.is_indexed for entry in indexed)
+    assert [entry.reflection.hkl for entry in indexed] == [
+        reflection.hkl for reflection in reflections
+    ]
+    # The cell is recovered too, rather than distorted to absorb the shift.
+    assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
+    assert fit.cell.c == pytest.approx(REFINED_CELL.c, abs=0.005)
+
+
+def test_the_search_is_skipped_when_a_zero_offset_is_given() -> None:
+    _, peaks = shifted_peaks()
+
+    indexed, fit = index_and_refine(
+        peaks, TTB_CELL, WAVELENGTH, zero_offset=APPLIED_ZERO_OFFSET
+    )
+
+    assert fit.zero_offset == pytest.approx(APPLIED_ZERO_OFFSET)
+    assert all(entry.is_indexed for entry in indexed)
+
+
+def test_the_search_can_be_turned_off() -> None:
+    _, peaks = shifted_peaks()
+
+    _, fit = index_and_refine(
+        peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.5, search_zero=False
+    )
+
+    # Without it the shift has to go somewhere, and the cell absorbs it.
+    assert fit.zero_offset == 0.0
+    assert abs(fit.cell.a - REFINED_CELL.a) > 0.005
+
+
+def test_an_unshifted_pattern_is_unharmed_by_the_search() -> None:
+    reflections, peaks = synthetic_peaks()
+
+    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+
+    assert fit.zero_offset == pytest.approx(0.0, abs=0.02)
+    assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
+    assert [entry.reflection.hkl for entry in indexed] == [
+        reflection.hkl for reflection in reflections
+    ]

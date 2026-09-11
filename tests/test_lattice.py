@@ -89,7 +89,13 @@ def synthetic_peaks(
 def indexed_synthetic(
     zero: float = ZERO_OFFSET, displacement: float = 0.0, seed: int = 7
 ):
-    """Index synthetic peaks without correcting the offset, so the cell is wrong."""
+    """Index synthetic peaks without correcting the offset, so the cell is wrong.
+
+    The automatic search is off on purpose: it would find the offset itself and
+    hand refine_lattice a cell that is already right, leaving these tests with
+    nothing to recover. Finding it is index_and_refine's job and is tested
+    there; taking it back out of a distorted cell is what is tested here.
+    """
     peaks = synthetic_peaks(zero=zero, displacement=displacement, seed=seed)
     return index_and_refine(
         peaks,
@@ -97,6 +103,7 @@ def indexed_synthetic(
         WAVELENGTH,
         zero_offset=0.0,
         fine_tolerance=FINE_TOLERANCE,
+        search_zero=False,
     )
 
 
