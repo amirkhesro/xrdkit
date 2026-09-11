@@ -23,12 +23,15 @@ from xrdkit import (
 )
 from xrdkit.plotting import (
     AMBIGUOUS_SEPARATOR,
+    CHARACTER_WIDTH,
     HKL_LABEL_HEIGHT,
     HKL_MIN_SEPARATION,
     HKL_THIN_SPACE,
+    LABEL_GAP_FACTOR,
     LABEL_HEIGHT,
     OFFSET_FACTOR,
     PEAK_MARKER,
+    UPRIGHT_LABEL_WIDTH,
     X_LABEL,
     X_MAJOR_TICK,
     X_MINOR_TICK,
@@ -316,10 +319,15 @@ def test_annotate_hkl_places_labels_at_the_peak_positions() -> None:
 
 
 def test_annotate_hkl_drops_the_weaker_of_a_crowded_pair_in_one_row() -> None:
-    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+    texts = annotate_hkl(
+        annotated_axes(),
+        make_indexed(),
+        LABEL_BASE,
+        min_separation=HKL_MIN_SEPARATION,
+    )
 
-    # The pair is 0.3 degrees apart, inside the default 0.6 separation, and one
-    # row has nowhere to put the second of them.
+    # The pair is 0.3 degrees apart, inside the separation given, and one row
+    # has nowhere to put the second of them.
     assert CLOSE_PAIR[1] - CLOSE_PAIR[0] < HKL_MIN_SEPARATION
     # 420 is the weaker of the pair, so 311 keeps the room.
     assert [text.get_text() for text in texts] == ["311", "550"]
@@ -530,3 +538,128 @@ def test_hkl_label_switches_at_ten() -> None:
         annotate_hkl(annotated_axes(), ten, LABEL_BASE)[0].get_text()
         == f"9{HKL_THIN_SPACE}5{HKL_THIN_SPACE}10"
     )
+
+
+# A reference peak with three weaker ones at these offsets, in degrees, to sit
+# either side of whatever separation the geometry works out to.
+REFERENCE_PEAK = 40.0
+OFFSETS = (0.5, 1.0, 3.0)
+
+LABEL_FONT = 7
+
+
+def sized_axes(width_inches: float) -> Axes:
+    """Bare axes of a known figure width and x range, ready to annotate."""
+    fig = Figure(figsize=(width_inches, 3.0))
+    ax = fig.add_subplot()
+    ax.set_xlim(10.0, 100.0)
+    return ax
+
+
+def upright_separation(ax: Axes, fontsize: float = LABEL_FONT) -> float:
+    """The separation annotate_hkl should work out for a 90 degree rotation."""
+    width_points = ax.get_position().width * ax.figure.get_figwidth() * 72.0
+    low, high = ax.get_xlim()
+    return (
+        LABEL_GAP_FACTOR
+        * UPRIGHT_LABEL_WIDTH
+        * fontsize
+        * abs(high - low)
+        / width_points
+    )
+
+
+def make_spaced_indexed() -> list[IndexedPeak]:
+    """One strong peak with three weaker ones at OFFSETS above it."""
+    peaks = [make_indexed_peak(REFERENCE_PEAK, (3, 1, 1), relative_intensity=100.0)]
+    hkls = ((4, 2, 0), (5, 5, 0), (6, 3, 0))
+    for offset, hkl, intensity in zip(OFFSETS, hkls, (50.0, 40.0, 30.0)):
+        peaks.append(
+            make_indexed_peak(
+                REFERENCE_PEAK + offset, hkl, relative_intensity=intensity
+            )
+        )
+    return peaks
+
+
+def labelled_offsets(texts: list[Text]) -> list[float]:
+    """The offsets from REFERENCE_PEAK that kept a label, nearest first."""
+    return sorted(
+        round(text.get_position()[0] - REFERENCE_PEAK, 3)
+        for text in texts
+        if text.get_position()[0] != REFERENCE_PEAK
+    )
+
+
+def test_min_separation_is_computed_from_the_figure_geometry() -> None:
+    ax = sized_axes(3.5)
+    separation = upright_separation(ax)
+
+    texts = annotate_hkl(ax, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT)
+
+    # The strongest peak always claims its room first.
+    assert REFERENCE_PEAK in [text.get_position()[0] for text in texts]
+    # Exactly those far enough from it to clear a label of this size.
+    assert labelled_offsets(texts) == [
+        offset for offset in OFFSETS if offset > separation
+    ]
+
+
+def test_a_wider_figure_computes_a_smaller_separation_and_labels_more() -> None:
+    narrow, wide = sized_axes(3.5), sized_axes(7.0)
+
+    assert upright_separation(wide) < upright_separation(narrow)
+
+    narrow_texts = annotate_hkl(
+        narrow, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+    )
+    wide_texts = annotate_hkl(
+        wide, make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+    )
+
+    assert len(wide_texts) > len(narrow_texts)
+    assert labelled_offsets(wide_texts) == [
+        offset for offset in OFFSETS if offset > upright_separation(wide)
+    ]
+
+
+def test_a_narrower_x_range_computes_a_smaller_separation() -> None:
+    ax = sized_axes(3.5)
+    wide_range = upright_separation(ax)
+    ax.set_xlim(30.0, 50.0)
+
+    assert upright_separation(ax) < wide_range
+
+
+def test_an_explicit_min_separation_overrides_the_computed_one() -> None:
+    ax = sized_axes(3.5)
+    # The computed value would drop all three; this keeps every one of them.
+    assert upright_separation(ax) > max(OFFSETS)
+
+    texts = annotate_hkl(
+        ax,
+        make_spaced_indexed(),
+        LABEL_BASE,
+        fontsize=LABEL_FONT,
+        min_separation=0.4,
+    )
+
+    assert labelled_offsets(texts) == list(OFFSETS)
+
+
+def test_a_label_that_is_not_upright_is_spaced_by_its_length() -> None:
+    upright = annotate_hkl(
+        sized_axes(7.0), make_spaced_indexed(), LABEL_BASE, fontsize=LABEL_FONT
+    )
+    flat = annotate_hkl(
+        sized_axes(7.0),
+        make_spaced_indexed(),
+        LABEL_BASE,
+        fontsize=LABEL_FONT,
+        rotation=0,
+    )
+
+    # A three character label lying flat is wider than the same label upright,
+    # so it needs more room and fewer of them fit.
+    assert CHARACTER_WIDTH * 3 > UPRIGHT_LABEL_WIDTH
+    assert len(flat) < len(upright)

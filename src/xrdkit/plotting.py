@@ -51,9 +51,20 @@ HKL_FONTSIZE = 7
 # axis is short of.
 HKL_ROTATION = 90
 
-# Two hkl labels closer than this in degrees would overlap, so the second is
-# stepped up above the first.
+# Fallback separation, in degrees, for a caller that wants a fixed one rather
+# than the value annotate_hkl works out from the rendered label size.
 HKL_MIN_SEPARATION = 0.6
+
+# Clear space left between two labels, as a multiple of a label's own width.
+LABEL_GAP_FACTOR = 1.25
+
+# A label rotated 90 degrees is about this many font sizes wide across the x
+# direction, whatever it says, since only its height runs along the axis.
+UPRIGHT_LABEL_WIDTH = 1.2
+
+# An unrotated character is about this fraction of the font size wide, so a
+# label lying flat is this times its length times the font size.
+CHARACTER_WIDTH = 0.6
 
 # One level up, as a fraction of the y range of the axes.
 HKL_LABEL_HEIGHT = 0.04
@@ -300,6 +311,31 @@ def _hkl_label(reflection: Reflection) -> str:
     return separator.join(str(index) for index in indices)
 
 
+def _label_separation(
+    ax: Axes, fontsize: float, rotation: float, labels: list[str]
+) -> float:
+    """Return the 2theta two labels need between them so they cannot overlap.
+
+    The axes are measured as they stand, so the figure size and the x limits
+    have to be settled before this is called.
+    """
+    # get_position is a fraction of the figure, so this is the drawn width of
+    # the axes in points.
+    width_points = ax.get_position().width * ax.figure.get_figwidth() * 72.0
+    low, high = ax.get_xlim()
+    degrees_per_point = abs(high - low) / width_points
+
+    if rotation == 90:
+        # Upright, so the label's width is its font size whatever it says.
+        label_points = UPRIGHT_LABEL_WIDTH * fontsize
+    else:
+        # At any other angle the longest label sets the spacing for all of them.
+        longest = max((len(label) for label in labels), default=1)
+        label_points = longest * CHARACTER_WIDTH * fontsize
+
+    return LABEL_GAP_FACTOR * label_points * degrees_per_point
+
+
 def annotate_hkl(
     ax: Axes,
     indexed: list[IndexedPeak],
@@ -307,7 +343,7 @@ def annotate_hkl(
     min_relative_intensity: float = HKL_MIN_RELATIVE_INTENSITY,
     fontsize: float = HKL_FONTSIZE,
     rotation: float = HKL_ROTATION,
-    min_separation: float = HKL_MIN_SEPARATION,
+    min_separation: float | None = None,
     label_height: float | None = None,
     ambiguous: str = "first",
     max_levels: int = HKL_MAX_LEVELS,
@@ -328,9 +364,14 @@ def annotate_hkl(
     reflections a reader is looking for stay labelled. With the default
     ``max_levels`` of 1 the annotation is a single row.
 
-    This is deliberately simple: it works from 2theta alone and never measures
-    the rendered text, so ``min_separation`` has to be chosen for the width of
-    the figure and the length of the labels.
+    By default ``min_separation`` is worked out from how much room a label
+    actually takes: the width of the axes in points gives the degrees of 2theta
+    per point, and a label rotated 90 degrees is about
+    ``UPRIGHT_LABEL_WIDTH`` font sizes across, or ``CHARACTER_WIDTH`` times its
+    length times the font size when it lies at any other angle. **The figure
+    size and the x limits are read as they stand**, so set both before calling
+    this; annotating and then resizing the figure or changing the limits will
+    leave the labels spaced for the old geometry.
 
     Parameters
     ----------
@@ -346,7 +387,8 @@ def annotate_hkl(
         Label appearance. The rotation is in degrees, anticlockwise.
     min_separation
         Two labels on the same level must be at least this far apart, in
-        degrees.
+        degrees. ``None``, the default, works it out from the font size and the
+        width of the axes so that labels cannot overlap.
     label_height
         Height of one level, in data coordinates. Defaults to
         ``HKL_LABEL_HEIGHT`` times the y range of ``ax``.
@@ -393,9 +435,26 @@ def annotate_hkl(
         key=lambda entry: (-entry.peak.relative_intensity, entry.peak.two_theta)
     )
 
+    labelled = [
+        (
+            entry,
+            AMBIGUOUS_SEPARATOR.join(
+                _hkl_label(reflection) for reflection in entry.candidates
+            )
+            if ambiguous == "all" and len(entry.candidates) > 1
+            else _hkl_label(entry.reflection),
+        )
+        for entry in entries
+    ]
+
+    if min_separation is None:
+        min_separation = _label_separation(
+            ax, fontsize, rotation, [label for _, label in labelled]
+        )
+
     taken: list[list[float]] = [[] for _ in range(max_levels)]
     placed: list[tuple[float, Text]] = []
-    for entry in entries:
+    for entry, label in labelled:
         position = entry.peak.two_theta
         level = next(
             (
@@ -410,13 +469,6 @@ def annotate_hkl(
         )
         if level is None:
             continue
-
-        if ambiguous == "all" and len(entry.candidates) > 1:
-            label = AMBIGUOUS_SEPARATOR.join(
-                _hkl_label(reflection) for reflection in entry.candidates
-            )
-        else:
-            label = _hkl_label(entry.reflection)
 
         taken[level].append(position)
         placed.append(
