@@ -19,8 +19,11 @@ from xrdkit.gsas2 import (
     GSAS2_PYTHON_VARIABLE,
     Gsas2Error,
     Gsas2Install,
+    build_refine_job,
     find_gsas2,
+    gsas2_fwhm,
     run_job,
+    standard_stages,
     write_instprm,
 )
 
@@ -284,10 +287,158 @@ def test_run_job_raises_with_stderr(tmp_path) -> None:
     assert "GSAS-II went wrong" in caught.value.stderr
 
 
+# standard_stages and build_refine_job
+
+
+def test_standard_stages() -> None:
+    stages = standard_stages()
+
+    assert [stage["name"] for stage in stages] == [
+        "background and scale",
+        "zero",
+        "cell",
+        "U V W",
+        "X Y",
+        "SH/L",
+    ]
+    assert stages[0] == {
+        "name": "background and scale",
+        "background": {"type": "chebyschev-1", "terms": 6},
+        "scale": True,
+    }
+    assert stages[1] == {"name": "zero", "zero": True}
+    assert stages[2] == {"name": "cell", "cell": True}
+    assert stages[3]["instrument"] == ["U", "V", "W"]
+    assert stages[4]["instrument"] == ["X", "Y"]
+    assert stages[5]["instrument"] == ["SH/L"]
+    assert standard_stages(background_terms=4)[0]["background"]["terms"] == 4
+
+    stages[0]["scale"] = False
+    stages.pop()
+    assert standard_stages()[0]["scale"] is True
+    assert len(standard_stages()) == 6
+
+
+def test_build_refine_job_creating_the_project(tmp_path) -> None:
+    stages = [stage for stage in standard_stages() if stage["name"] != "cell"]
+    job = build_refine_job(
+        tmp_path / "lab6.gpx",
+        stages,
+        data_file=tmp_path / "scan.xrdml",
+        instprm=tmp_path / "cu.instprm",
+        phases=[
+            {
+                "cif": tmp_path / "lab6.cif",
+                "name": "LaB6",
+                "cell": [4.156826] * 3 + [90] * 3,
+            }
+        ],
+        limits=(10, 98),
+    )
+
+    assert job == {
+        "action": "refine",
+        "gpx": str(tmp_path / "lab6.gpx"),
+        "stages": stages,
+        "cycles": 10,
+        "export_prefix": str(tmp_path / "lab6"),
+        "limits": [10.0, 98.0],
+        "data_file": str(tmp_path / "scan.xrdml"),
+        "instprm": str(tmp_path / "cu.instprm"),
+        "phases": [
+            {
+                "cif": str(tmp_path / "lab6.cif"),
+                "name": "LaB6",
+                "cell": [4.156826, 4.156826, 4.156826, 90.0, 90.0, 90.0],
+            }
+        ],
+    }
+    job["stages"][0]["scale"] = False
+    assert stages[0]["scale"] is True, "the stages are copied"
+    json.dumps(job)
+
+
+def test_build_refine_job_on_an_existing_project(tmp_path) -> None:
+    job = build_refine_job(
+        tmp_path / "lab6.gpx",
+        [{"zero": True}],
+        cycles=4,
+        broadening={"*": {"size": 10, "mustrain": 0, "lgmix": 0}},
+        export_prefix=tmp_path / "out" / "run1",
+    )
+
+    assert job == {
+        "action": "refine",
+        "gpx": str(tmp_path / "lab6.gpx"),
+        "stages": [{"zero": True}],
+        "cycles": 4,
+        "broadening": {"*": {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
+        "export_prefix": str(tmp_path / "out" / "run1"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"data_file": "scan.xrdml"}, "all of data_file"),
+        ({"limits": (98, 10)}, "limits must increase"),
+        ({"cycles": 0}, "cycles"),
+        ({"broadening": {"LaB6": {"size": 100.0}}}, "size must lie between"),
+        ({"stages": [{"cell": True, "celll": True}]}, "unknown keys"),
+        (
+            {"data_file": "s", "instprm": "i", "phases": [{"name": "LaB6"}]},
+            "cif and a name",
+        ),
+    ],
+)
+def test_build_refine_job_rejects(arguments, message) -> None:
+    arguments = {"gpx": "lab6.gpx", "stages": [{"zero": True}], **arguments}
+    with pytest.raises(ValueError, match=message):
+        build_refine_job(**arguments)
+
+
+# gsas2_fwhm
+
+
+def test_gsas2_fwhm_hand_calculated() -> None:
+    # 2theta = 40: tan 20 = 0.3639702, cos 20 = 0.9396926.
+    # sigma^2 = 10 tan^2 - 5 tan + 12 = 11.504892 cdeg^2, G = 2.35482 sigma
+    # = 7.987282 cdeg; gamma = 2 / cos + 3 tan = 3.220266 cdeg.
+    # (G^5 + 2.69269 G^4 L + 2.42843 G^3 L^2 + 4.47163 G^2 L^3
+    #  + 0.07842 G L^4 + L^5)^(1/5) = 9.803916 cdeg.
+    assert gsas2_fwhm(40.0, 10.0, -5.0, 12.0, 2.0, 3.0) == pytest.approx(
+        0.09803916, abs=1e-8
+    )
+    assert gsas2_fwhm(40.0, 10.0, -5.0, 12.0, 2.0, 3.0, shl=0.02) == gsas2_fwhm(
+        40.0, 10.0, -5.0, 12.0, 2.0, 3.0
+    )
+
+
+def test_gsas2_fwhm_gaussian_matches_caglioti(tmp_path) -> None:
+    _, values = _parse_instprm(write_instprm(tmp_path / "cu.instprm", CAGLIOTI))
+    u, v, w = (float(values[key]) for key in "UVW")
+    angles = np.array([20.0, 45.0, 90.0, 120.0])
+
+    widths = gsas2_fwhm(angles, u, v, w, 0.0, 0.0)
+
+    # 2.35482 against sqrt(8 ln 2) = 2.3548200 leaves a part in 1e7.
+    np.testing.assert_allclose(widths, CAGLIOTI.fwhm(angles), rtol=1e-6)
+
+
+def test_gsas2_fwhm_lorentzian_and_floor() -> None:
+    # A pure Lorentzian: FWHM = X / cos + Y tan + Z, in centidegrees.
+    theta = math.radians(30.0)
+    expected = (4.0 / math.cos(theta) + 2.0 * math.tan(theta) + 1.0) / 100.0
+    lorentzian = gsas2_fwhm(60.0, 0.0, 0.0, -1.0, 4.0, 2.0, z=1.0)
+    # The Gaussian variance is held at 0.001, so it barely shows.
+    assert lorentzian == pytest.approx(expected, rel=1e-3)
+    assert lorentzian > expected
+
+
 # GSAS-II itself
 
 
-def test_create_project_with_gsas2(tmp_path) -> None:
+def test_create_and_refine_with_gsas2(tmp_path) -> None:
     try:
         install = find_gsas2()
     except FileNotFoundError as error:
@@ -333,3 +484,50 @@ def test_create_project_with_gsas2(tmp_path) -> None:
     assert phase["name"] == "LaB6"
     assert phase["cell"]["length_a"] == pytest.approx(4.15683)
     assert phase["histograms"] == [histogram["name"]]
+
+    # One short stage on the project just made.
+    job = build_refine_job(
+        gpx,
+        [{"name": "background and scale", "background": {"terms": 3}, "scale": True}],
+        limits=(20.5, 49.5),
+        cycles=3,
+        broadening={"LaB6": {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
+    )
+    refined = run_job(job, tmp_path / "work", install)
+
+    assert refined["completed"], refined["stages"]
+    (stage,) = refined["stages"]
+    assert stage["n_variables"] == 4
+    assert set(stage["parameters"]) == {
+        ":0:Scale",
+        ":0:Back;0",
+        ":0:Back;1",
+        ":0:Back;2",
+    }
+    assert all(p["esd"] > 0.0 for p in stage["parameters"].values())
+    assert 0.0 < stage["rwp"] < 100.0
+    assert stage["gof"] > 0.0
+    assert refined["limits"] == pytest.approx([20.5, 49.5])
+    final = refined["final"]
+    assert final["phases"][0]["cell"]["length_a"] == pytest.approx(4.15683)
+    assert final["instrument"]["U"]["esd"] is None
+    assert final["phases"][0]["size"] == {
+        "type": "isotropic",
+        "value": 10.0,
+        "lorentzian_fraction": 0.0,
+    }
+    assert final["phases"][0]["mustrain"]["value"] == 0.0
+    exports = refined["exports"]
+    table = np.loadtxt(exports["histogram"], delimiter=",", skiprows=1)
+    assert table[0, 0] >= 20.5 and table[-1, 0] <= 49.5
+    np.testing.assert_allclose(table[:, 4], table[:, 1] - table[:, 2], atol=1e-3)
+    reflections = np.loadtxt(exports["reflections"]["LaB6"], delimiter=",", skiprows=1)
+    np.testing.assert_array_equal(
+        reflections[:3, :3], [[1, 0, 0], [1, 1, 0], [1, 1, 1]]
+    )
+    assert reflections[0, 5] == pytest.approx(21.357, abs=0.01)
+    first, values = _parse_instprm(Path(exports["instprm"]))
+    assert "GSAS-II" in first
+    assert float(values["U"]) == pytest.approx(
+        CAGLIOTI.u * 1.0e4 / (8.0 * math.log(2.0))
+    )

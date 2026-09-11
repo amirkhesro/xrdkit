@@ -25,7 +25,16 @@ from xrdkit.density import (
     formula_mass,
     theoretical_density,
 )
-from xrdkit.gsas2 import Gsas2Error, Gsas2Install, find_gsas2, run_job, write_instprm
+from xrdkit.gsas2 import (
+    Gsas2Error,
+    Gsas2Install,
+    build_refine_job,
+    find_gsas2,
+    gsas2_fwhm,
+    run_job,
+    standard_stages,
+    write_instprm,
+)
 from xrdkit.indexing import (
     TTB_CELL,
     CellFit,
@@ -108,6 +117,7 @@ __all__ = [
     "ZeroSearch",
     "annotate_hkl",
     "apply_style",
+    "build_refine_job",
     "cell_volume",
     "cod_fetch",
     "cod_search",
@@ -124,6 +134,7 @@ __all__ = [
     "flag_kalpha2",
     "formula_mass",
     "generate_reflections",
+    "gsas2_fwhm",
     "height_spread_breadth",
     "index_and_refine",
     "index_peaks",
@@ -151,6 +162,7 @@ __all__ = [
     "scherrer_size_integral",
     "simulate_pattern",
     "split_pseudo_voigt",
+    "standard_stages",
     "theoretical_density",
     "williamson_hall",
     "write_cif_index",
