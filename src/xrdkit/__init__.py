@@ -25,6 +25,7 @@ from xrdkit.density import (
     formula_mass,
     theoretical_density,
 )
+from xrdkit.gsas2 import Gsas2Error, Gsas2Install, find_gsas2, run_job, write_instprm
 from xrdkit.indexing import (
     TTB_CELL,
     CellFit,
@@ -92,6 +93,8 @@ __all__ = [
     "CodRecord",
     "ComponentSizeStrain",
     "ExplainedPeak",
+    "Gsas2Error",
+    "Gsas2Install",
     "IndexedPeak",
     "LatticeFit",
     "Peak",
@@ -113,6 +116,7 @@ __all__ = [
     "doublet_gaps",
     "estimate_zero_offset",
     "exclude_kalpha2",
+    "find_gsas2",
     "find_peaks",
     "fit_breadth_models",
     "fit_caglioti",
@@ -141,6 +145,7 @@ __all__ = [
     "refine_cell",
     "refine_lattice",
     "resolution_limit",
+    "run_job",
     "save_figure",
     "scherrer_size",
     "scherrer_size_integral",
@@ -149,4 +154,5 @@ __all__ = [
     "theoretical_density",
     "williamson_hall",
     "write_cif_index",
+    "write_instprm",
 ]
