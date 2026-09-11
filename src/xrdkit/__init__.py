@@ -49,6 +49,7 @@ from xrdkit.peaks import (
     flag_kalpha2,
     peaks_to_csv,
 )
+from xrdkit.phases import CodRecord, cod_fetch, cod_search, write_cif_index
 from xrdkit.plotting import (
     annotate_hkl,
     apply_style,
@@ -77,6 +78,7 @@ __all__ = [
     "BroadeningCorrection",
     "Caglioti",
     "CellFit",
+    "CodRecord",
     "ComponentSizeStrain",
     "IndexedPeak",
     "LatticeFit",
@@ -91,6 +93,8 @@ __all__ = [
     "annotate_hkl",
     "apply_style",
     "cell_volume",
+    "cod_fetch",
+    "cod_search",
     "component_size_strain",
     "correct_broadening",
     "doublet_gaps",
@@ -129,4 +133,5 @@ __all__ = [
     "split_pseudo_voigt",
     "theoretical_density",
     "williamson_hall",
+    "write_cif_index",
 ]
