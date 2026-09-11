@@ -1,11 +1,15 @@
-"""Reference structures for phase identification from the Crystallography Open Database.
+"""Reference structures for phase identification.
 
-The COD is searched through its REST interface, which returns one JSON object
-per entry, and each entry's CIF is downloaded by its seven digit COD id. The
-CIFs gathered for a project are described by a CSV index, one row per file,
-written by :func:`write_cif_index`.
+The Crystallography Open Database is searched through its REST interface, which
+returns one JSON object per entry, and each entry's CIF is downloaded by its
+seven digit COD id. The CIFs gathered for a project are described by a CSV
+index, one row per file, written by :func:`write_cif_index`. All of this uses
+only the standard library.
 
-Only the standard library is used, so fetching references adds no dependency.
+A CIF's powder pattern is simulated with pymatgen by :func:`simulate_pattern`,
+and :func:`match_candidate` weighs a simulated pattern against observed peak
+positions. pymatgen is the optional ``phases`` extra, ``xrdkit[phases]``, and
+is imported only when a pattern is simulated.
 """
 
 from __future__ import annotations
@@ -13,18 +17,26 @@ from __future__ import annotations
 import csv
 import json
 import re
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+from xrdkit.peaks import KALPHA1_WAVELENGTH
 
 __all__ = [
     "CIF_INDEX_COLUMNS",
     "COD_URL",
+    "CandidateMatch",
     "CodRecord",
+    "ExplainedPeak",
+    "SimulatedReflection",
     "cod_fetch",
     "cod_search",
+    "match_candidate",
+    "simulate_pattern",
     "write_cif_index",
 ]
 
@@ -61,7 +73,9 @@ class CodRecord:
     """One COD entry as returned by a search.
 
     Cell lengths are in angstroms, angles in degrees and the volume in cubic
-    angstroms. Any value the COD leaves blank is ``None``.
+    angstroms. ``temperature`` is the temperature of the cell measurement in
+    kelvin, and ``pressure`` its pressure in kilopascals. Any value the COD
+    leaves blank is ``None``; old entries often give no temperature at all.
     """
 
     cod_id: str
@@ -79,6 +93,8 @@ class CodRecord:
     journal: str
     year: int | None
     doi: str | None = None
+    temperature: float | None = None
+    pressure: float | None = None
 
     @property
     def filename(self) -> str:
@@ -235,6 +251,148 @@ def write_cif_index(
     return path
 
 
+class SimulatedReflection(NamedTuple):
+    """One line of a simulated powder pattern.
+
+    ``intensity`` is relative to the strongest line in the range simulated,
+    taken as 100. ``hkl`` is one representative of the family, with four
+    indices for a hexagonal cell; lines of several families at the same angle
+    are given by the first.
+    """
+
+    two_theta: float
+    intensity: float
+    hkl: tuple[int, ...]
+
+
+def simulate_pattern(
+    cif_path: str | Path,
+    wavelength: float = KALPHA1_WAVELENGTH,
+    two_theta_range: tuple[float, float] = (10, 100),
+) -> list[SimulatedReflection]:
+    """Simulate the powder pattern of the structure in a CIF.
+
+    The pattern is pymatgen's ``XRDCalculator`` for the first structure in the
+    file, in its conventional cell, for a single wavelength in angstroms (K
+    alpha 1 of copper by default), so it has no K alpha 2 lines. Partial
+    occupancies are kept, so a disordered site scatters as its average.
+
+    Raises
+    ------
+    ImportError
+        If pymatgen is not installed; it comes with ``xrdkit[phases]``.
+    ValueError
+        If no structure can be read from the file.
+    """
+    try:
+        from pymatgen.analysis.diffraction.xrd import XRDCalculator
+        from pymatgen.io.cif import CifParser
+    except ImportError as error:
+        raise ImportError(
+            "simulate_pattern needs pymatgen: install xrdkit[phases]"
+        ) from error
+
+    structures = CifParser(cif_path).parse_structures(primitive=False)
+    if not structures:
+        raise ValueError(f"no structure read from {cif_path}")
+    pattern = XRDCalculator(wavelength=wavelength).get_pattern(
+        structures[0], scaled=True, two_theta_range=two_theta_range
+    )
+    return [
+        SimulatedReflection(
+            two_theta=float(two_theta),
+            intensity=float(intensity),
+            hkl=tuple(int(index) for index in families[0]["hkl"]),
+        )
+        for two_theta, intensity, families in zip(
+            pattern.x, pattern.y, pattern.hkls, strict=True
+        )
+    ]
+
+
+class ExplainedPeak(NamedTuple):
+    """An observed peak and the simulated reflection that accounts for it."""
+
+    observed: float
+    reflection: SimulatedReflection
+
+    @property
+    def offset(self) -> float:
+        """Observed minus simulated 2theta, in degrees."""
+        return self.observed - self.reflection.two_theta
+
+
+@dataclass
+class CandidateMatch:
+    """How well a candidate phase's simulated pattern fits observed peaks.
+
+    ``explained`` pairs each observed position a reflection accounts for with
+    that reflection, and ``missing`` holds the strong reflections expected
+    where nothing was observed. The score is the count explained less the
+    count missing, so a phase that explains everything and predicts nothing
+    unseen scores highest.
+    """
+
+    explained: list[ExplainedPeak] = field(default_factory=list)
+    missing: list[SimulatedReflection] = field(default_factory=list)
+
+    @property
+    def score(self) -> int:
+        return len(self.explained) - len(self.missing)
+
+
+def match_candidate(
+    observed_two_theta: Iterable[float],
+    simulated: Sequence[SimulatedReflection],
+    tolerance: float = 0.05,
+    min_intensity: float = 10,
+    exclude_two_theta: Iterable[float] | None = None,
+) -> CandidateMatch:
+    """Weigh a candidate phase's simulated pattern against observed peaks.
+
+    An observed position is explained when a simulated reflection of any
+    intensity lies within ``tolerance`` degrees of it; of several, the
+    strongest is taken as its cause. A simulated reflection is missing when it
+    is stronger than ``min_intensity`` yet lies more than ``tolerance`` from
+    every observed position and from every position in ``exclude_two_theta``,
+    which is meant for the reflections of the phases already known to be
+    present: a line hidden under one of those is not evidence against the
+    candidate.
+
+    Only compare over the range that was measured: a reflection simulated
+    outside the observed scan would count as missing.
+
+    Raises
+    ------
+    ValueError
+        If ``tolerance`` is negative.
+    """
+    if tolerance < 0:
+        raise ValueError(f"tolerance must not be negative, got {tolerance}")
+    observed = sorted(float(position) for position in observed_two_theta)
+    excluded = [float(position) for position in exclude_two_theta or ()]
+
+    def near(two_theta: float, positions: Iterable[float]) -> bool:
+        return any(abs(two_theta - position) <= tolerance for position in positions)
+
+    match = CandidateMatch()
+    for position in observed:
+        within = [r for r in simulated if abs(r.two_theta - position) <= tolerance]
+        if within:
+            cause = max(
+                within, key=lambda r: (r.intensity, -abs(r.two_theta - position))
+            )
+            match.explained.append(ExplainedPeak(position, cause))
+    match.missing = [
+        reflection
+        for reflection in simulated
+        if reflection.intensity > min_intensity
+        and not near(reflection.two_theta, observed)
+        and not near(reflection.two_theta, excluded)
+    ]
+    return match
+
+
 def _get(url: str) -> bytes:
     """Return the body of ``url``, raising on an HTTP error."""
     request = Request(url, headers={"User-Agent": USER_AGENT})
@@ -261,6 +419,8 @@ def _record(entry: Mapping[str, object]) -> CodRecord:
         journal=_text(entry.get("journal")) or "",
         year=_integer(entry.get("year")),
         doi=_text(entry.get("doi")),
+        temperature=_number(entry.get("celltemp")),
+        pressure=_number(entry.get("cellpressure")),
     )
 
 

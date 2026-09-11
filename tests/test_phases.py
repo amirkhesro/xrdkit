@@ -7,9 +7,20 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
+import numpy as np
 import pytest
 
-from xrdkit import CodRecord, cod_fetch, cod_search, phases, write_cif_index
+from xrdkit import (
+    CodRecord,
+    SimulatedReflection,
+    cod_fetch,
+    cod_search,
+    match_candidate,
+    phases,
+    simulate_pattern,
+    write_cif_index,
+)
+from xrdkit.peaks import KALPHA1_WAVELENGTH
 from xrdkit.phases import CIF_INDEX_COLUMNS
 
 
@@ -313,3 +324,126 @@ def test_index_takes_rows_from_other_sources(tmp_path: Path) -> None:
 def test_index_rejects_bad_rows(row: dict[str, str], tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         write_cif_index([row], tmp_path / "index.csv")
+
+
+# Rock salt NaCl, a = 5.640 A, written by hand so the simulation needs no download.
+NACL_CIF = """\
+data_NaCl
+_symmetry_space_group_name_H-M   'F m -3 m'
+_symmetry_Int_Tables_number      225
+_cell_length_a                   5.640
+_cell_length_b                   5.640
+_cell_length_c                   5.640
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+Na1 Na 0.0 0.0 0.0 1.0
+Cl1 Cl 0.5 0.5 0.5 1.0
+"""
+NACL_A = 5.640
+
+
+@pytest.fixture
+def nacl_cif(tmp_path: Path) -> Path:
+    path = tmp_path / "nacl.cif"
+    path.write_text(NACL_CIF, encoding="utf-8")
+    return path
+
+
+def test_simulated_nacl_lines_are_the_face_centred_ones(nacl_cif: Path) -> None:
+    pytest.importorskip("pymatgen")
+
+    pattern = simulate_pattern(nacl_cif, two_theta_range=(20, 80))
+
+    families = [tuple(sorted(abs(i) for i in r.hkl)) for r in pattern]
+    assert families[:5] == [(1, 1, 1), (0, 0, 2), (0, 2, 2), (1, 1, 3), (2, 2, 2)]
+    for reflection in pattern:
+        h, k, l = reflection.hkl
+        assert len({h % 2, k % 2, l % 2}) == 1
+        d = NACL_A / np.sqrt(h * h + k * k + l * l)
+        expected = 2 * np.degrees(np.arcsin(KALPHA1_WAVELENGTH / (2 * d)))
+        assert reflection.two_theta == pytest.approx(expected, abs=1e-3)
+
+
+def test_simulated_nacl_is_normalised_to_its_200_line(nacl_cif: Path) -> None:
+    pytest.importorskip("pymatgen")
+
+    pattern = simulate_pattern(nacl_cif, two_theta_range=(20, 80))
+
+    strongest = max(pattern, key=lambda r: r.intensity)
+    assert strongest.intensity == pytest.approx(100)
+    assert sorted(abs(i) for i in strongest.hkl) == [0, 0, 2]
+    assert strongest.two_theta == pytest.approx(31.70, abs=0.01)
+    # Na and Cl scatter out of phase for all odd hkl, so 111 is weak.
+    assert pattern[0].intensity < 15
+
+
+def test_simulate_pattern_follows_the_wavelength(nacl_cif: Path) -> None:
+    pytest.importorskip("pymatgen")
+
+    copper = simulate_pattern(nacl_cif, two_theta_range=(20, 80))
+    cobalt = simulate_pattern(nacl_cif, wavelength=1.78897, two_theta_range=(20, 80))
+
+    assert cobalt[1].two_theta > copper[1].two_theta
+    assert all(20 <= r.two_theta <= 80 for r in copper)
+
+
+def sim(*lines: tuple[float, float]) -> list[SimulatedReflection]:
+    return [SimulatedReflection(t, i, (n, 0, 0)) for n, (t, i) in enumerate(lines)]
+
+
+def test_match_explains_observed_peaks_within_tolerance() -> None:
+    simulated = sim((24.83, 100), (26.70, 40), (30.00, 5))
+
+    match = match_candidate([24.85, 26.73, 40.0], simulated)
+
+    assert [peak.observed for peak in match.explained] == [24.85, 26.73]
+    assert [peak.reflection.two_theta for peak in match.explained] == [24.83, 26.70]
+    assert match.explained[0].offset == pytest.approx(0.02)
+    assert match.missing == []
+    assert match.score == 2
+
+
+def test_match_takes_the_strongest_reflection_within_tolerance() -> None:
+    simulated = sim((24.84, 3), (24.87, 60))
+
+    (peak,) = match_candidate([24.85], simulated).explained
+
+    assert peak.reflection.intensity == 60
+
+
+def test_match_counts_strong_unseen_reflections_as_missing() -> None:
+    simulated = sim((24.83, 100), (28.00, 50), (31.00, 8), (35.00, 10))
+
+    match = match_candidate([24.85], simulated, min_intensity=10)
+
+    assert [r.two_theta for r in match.missing] == [28.00]
+    assert match.score == 0
+
+
+def test_match_forgives_reflections_under_the_known_phase() -> None:
+    simulated = sim((24.83, 100), (28.00, 50), (32.10, 70))
+
+    match = match_candidate([24.85], simulated, exclude_two_theta=[27.97, 45.0])
+
+    assert [r.two_theta for r in match.missing] == [32.10]
+    assert match.score == 0
+
+
+def test_match_with_nothing_near_scores_minus_the_missing() -> None:
+    match = match_candidate([24.85, 26.73], sim((20.0, 100), (22.0, 30)))
+
+    assert match.explained == []
+    assert match.score == -2
+
+
+def test_match_rejects_a_negative_tolerance() -> None:
+    with pytest.raises(ValueError):
+        match_candidate([24.85], sim((24.85, 100)), tolerance=-0.1)
