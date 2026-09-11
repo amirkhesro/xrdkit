@@ -55,8 +55,13 @@ HKL_ROTATION = 90
 # stepped up above the first.
 HKL_MIN_SEPARATION = 0.6
 
-# One step up, as a fraction of the y range of the axes.
+# One level up, as a fraction of the y range of the axes.
 HKL_LABEL_HEIGHT = 0.04
+
+# How many levels of labels to try before giving up on a peak. One keeps the
+# annotation to a single row, which reads best when the labels are meant to be
+# scanned along the axis rather than picked out one at a time.
+HKL_MAX_LEVELS = 1
 
 # How annotate_hkl treats a peak that matched more than one reflection.
 AMBIGUOUS_MODES = ("first", "all", "skip")
@@ -305,19 +310,27 @@ def annotate_hkl(
     min_separation: float = HKL_MIN_SEPARATION,
     label_height: float | None = None,
     ambiguous: str = "first",
+    max_levels: int = HKL_MAX_LEVELS,
 ) -> list[Text]:
-    """Write an hkl label above each indexed peak of one trace.
+    """Write an hkl label above the indexed peaks of one trace, strongest first.
 
     Labels are placed at the observed peak position with their base at ``y``,
     so ``y`` is normally the base of the slot the trace occupies plus enough
     room to clear its tallest peak. Peaks with no assignment are skipped; use
     :func:`mark_peaks` for those.
 
-    A label within ``min_separation`` of the one before is stepped up by
-    ``label_height``, each further label in a crowded run rising another step,
-    and the first label with room of its own returning to ``y``. This is
-    deliberately simple: it works from 2theta alone and never measures the
-    rendered text, so a long label in a small figure can still collide.
+    Room is allotted by priority rather than by position. The peaks are taken
+    strongest first, and each is given the lowest level on which no label has
+    yet been placed within ``min_separation`` degrees of it. Level 0 has its
+    base at ``y`` and every level above it is raised by another
+    ``label_height``. **A peak that finds no free level keeps no label**, so in
+    a crowded stretch it is the weaker peaks that lose theirs and the strong
+    reflections a reader is looking for stay labelled. With the default
+    ``max_levels`` of 1 the annotation is a single row.
+
+    This is deliberately simple: it works from 2theta alone and never measures
+    the rendered text, so ``min_separation`` has to be chosen for the width of
+    the figure and the length of the labels.
 
     Parameters
     ----------
@@ -326,35 +339,42 @@ def annotate_hkl(
     indexed
         Result of :func:`~xrdkit.indexing.index_peaks` for the trace.
     y
-        Base of the unstepped labels, in data coordinates.
+        Base of the level 0 labels, in data coordinates.
     min_relative_intensity
         Skip peaks below this percentage of the strongest peak of the scan.
     fontsize, rotation
         Label appearance. The rotation is in degrees, anticlockwise.
     min_separation
-        Labels closer together than this, in degrees, are stepped up.
+        Two labels on the same level must be at least this far apart, in
+        degrees.
     label_height
-        Height of one step, in data coordinates. Defaults to
+        Height of one level, in data coordinates. Defaults to
         ``HKL_LABEL_HEIGHT`` times the y range of ``ax``.
     ambiguous
         What to do with a peak that matched more than one reflection:
         ``"first"`` labels the assigned one, ``"all"`` joins every candidate
         with a solidus, ``"skip"`` leaves the peak unlabelled.
+    max_levels
+        How many levels to try. One keeps every label in a single row.
 
     Returns
     -------
     list[Text]
-        The labels written, in 2theta order.
+        The labels written, in 2theta order. Peaks that found no free level are
+        not represented, so this can be shorter than the peaks given.
 
     Raises
     ------
     ValueError
-        If ``ambiguous`` is not one of ``AMBIGUOUS_MODES``.
+        If ``ambiguous`` is not one of ``AMBIGUOUS_MODES``, or ``max_levels`` is
+        below one.
     """
     if ambiguous not in AMBIGUOUS_MODES:
         raise ValueError(
             f"Unknown ambiguous mode {ambiguous!r}; expected one of {AMBIGUOUS_MODES}"
         )
+    if max_levels < 1:
+        raise ValueError(f"Need at least one level, got {max_levels}")
 
     if label_height is None:
         low, high = ax.get_ylim()
@@ -367,13 +387,30 @@ def annotate_hkl(
         and entry.peak.relative_intensity >= min_relative_intensity
         and not (ambiguous == "skip" and len(entry.candidates) > 1)
     ]
-    entries.sort(key=lambda entry: entry.peak.two_theta)
+    # Strongest first, so the peaks that matter claim their room before the
+    # weak ones. Ties fall back on position to keep the choice reproducible.
+    entries.sort(
+        key=lambda entry: (-entry.peak.relative_intensity, entry.peak.two_theta)
+    )
 
-    texts: list[Text] = []
-    previous_x: float | None = None
-    previous_y = y
+    taken: list[list[float]] = [[] for _ in range(max_levels)]
+    placed: list[tuple[float, Text]] = []
     for entry in entries:
         position = entry.peak.two_theta
+        level = next(
+            (
+                candidate
+                for candidate in range(max_levels)
+                if all(
+                    abs(position - other) >= min_separation
+                    for other in taken[candidate]
+                )
+            ),
+            None,
+        )
+        if level is None:
+            continue
+
         if ambiguous == "all" and len(entry.candidates) > 1:
             label = AMBIGUOUS_SEPARATOR.join(
                 _hkl_label(reflection) for reflection in entry.candidates
@@ -381,29 +418,25 @@ def annotate_hkl(
         else:
             label = _hkl_label(entry.reflection)
 
-        # A crowded run climbs one step at a time; the first label with room of
-        # its own drops back to the baseline.
-        if previous_x is not None and position - previous_x < min_separation:
-            height = previous_y + label_height
-        else:
-            height = y
-
-        texts.append(
-            ax.text(
+        taken[level].append(position)
+        placed.append(
+            (
                 position,
-                height,
-                label,
-                ha="center",
-                va="bottom",
-                fontsize=fontsize,
-                rotation=rotation,
-                rotation_mode="anchor",
+                ax.text(
+                    position,
+                    y + level * label_height,
+                    label,
+                    ha="center",
+                    va="bottom",
+                    fontsize=fontsize,
+                    rotation=rotation,
+                    rotation_mode="anchor",
+                ),
             )
         )
-        previous_x = position
-        previous_y = height
 
-    return texts
+    placed.sort(key=lambda item: item[0])
+    return [text for _, text in placed]
 
 
 def mark_peaks(

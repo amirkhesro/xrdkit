@@ -281,11 +281,15 @@ def make_indexed_peak(
 
 
 def make_indexed() -> list[IndexedPeak]:
-    """Two peaks 0.3 degrees apart and one far away, all singly indexed."""
+    """Two peaks 0.3 degrees apart and one far away, all singly indexed.
+
+    The close pair carry different intensities, so which of them annotate_hkl
+    drops when they cannot both be placed is well defined.
+    """
     return [
-        make_indexed_peak(CLOSE_PAIR[0], (3, 1, 1)),
-        make_indexed_peak(CLOSE_PAIR[1], (4, 2, 0)),
-        make_indexed_peak(FAR_PEAK, (5, 5, 0)),
+        make_indexed_peak(CLOSE_PAIR[0], (3, 1, 1), relative_intensity=60.0),
+        make_indexed_peak(CLOSE_PAIR[1], (4, 2, 0), relative_intensity=40.0),
+        make_indexed_peak(FAR_PEAK, (5, 5, 0), relative_intensity=50.0),
     ]
 
 
@@ -296,7 +300,7 @@ def annotated_axes() -> Axes:
 
 
 def test_annotate_hkl_returns_one_text_per_indexed_peak() -> None:
-    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, max_levels=2)
 
     assert len(texts) == 3
     assert all(isinstance(text, Text) for text in texts)
@@ -304,46 +308,84 @@ def test_annotate_hkl_returns_one_text_per_indexed_peak() -> None:
 
 
 def test_annotate_hkl_places_labels_at_the_peak_positions() -> None:
-    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, max_levels=2)
 
     assert [text.get_position()[0] for text in texts] == pytest.approx(
         [CLOSE_PAIR[0], CLOSE_PAIR[1], FAR_PEAK]
     )
 
 
-def test_annotate_hkl_steps_a_crowded_label_up() -> None:
+def test_annotate_hkl_drops_the_weaker_of_a_crowded_pair_in_one_row() -> None:
+    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE)
+
+    # The pair is 0.3 degrees apart, inside the default 0.6 separation, and one
+    # row has nowhere to put the second of them.
+    assert CLOSE_PAIR[1] - CLOSE_PAIR[0] < HKL_MIN_SEPARATION
+    # 420 is the weaker of the pair, so 311 keeps the room.
+    assert [text.get_text() for text in texts] == ["311", "550"]
+    assert all(text.get_position()[1] == pytest.approx(LABEL_BASE) for text in texts)
+
+
+def test_annotate_hkl_puts_a_crowded_pair_on_two_levels() -> None:
     ax = annotated_axes()
-    texts = annotate_hkl(ax, make_indexed(), LABEL_BASE)
+    texts = annotate_hkl(ax, make_indexed(), LABEL_BASE, max_levels=2)
     heights = [text.get_position()[1] for text in texts]
 
-    # The pair is 0.3 degrees apart, inside the default 0.6 separation.
-    assert CLOSE_PAIR[1] - CLOSE_PAIR[0] < HKL_MIN_SEPARATION
-    assert heights[0] == pytest.approx(LABEL_BASE)
-    assert heights[1] > heights[0]
-
+    assert [text.get_text() for text in texts] == ["311", "420", "550"]
     low, high = ax.get_ylim()
-    assert heights[1] == pytest.approx(LABEL_BASE + HKL_LABEL_HEIGHT * (high - low))
-    # The far peak has room of its own, so it drops back to the baseline.
+    step = HKL_LABEL_HEIGHT * (high - low)
+    # The stronger 311 takes level 0 and the weaker 420 is raised one level.
+    assert heights[0] == pytest.approx(LABEL_BASE)
+    assert heights[1] == pytest.approx(LABEL_BASE + step)
+    # The far peak has room on level 0 of its own.
     assert heights[2] == pytest.approx(LABEL_BASE)
 
 
+def test_annotate_hkl_rejects_a_level_count_below_one() -> None:
+    with pytest.raises(ValueError, match="at least one level"):
+        annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, max_levels=0)
+
+
 def test_annotate_hkl_honours_an_explicit_label_height() -> None:
-    texts = annotate_hkl(annotated_axes(), make_indexed(), LABEL_BASE, label_height=0.5)
+    texts = annotate_hkl(
+        annotated_axes(), make_indexed(), LABEL_BASE, label_height=0.5, max_levels=2
+    )
     heights = [text.get_position()[1] for text in texts]
 
     assert heights == pytest.approx([LABEL_BASE, LABEL_BASE + 0.5, LABEL_BASE])
 
 
-def test_annotate_hkl_climbs_through_a_run_of_close_peaks() -> None:
+def test_annotate_hkl_fills_levels_strongest_first() -> None:
     indexed = [
-        make_indexed_peak(40.0, (3, 1, 1)),
-        make_indexed_peak(40.2, (4, 2, 0)),
-        make_indexed_peak(40.4, (5, 5, 0)),
+        make_indexed_peak(40.0, (3, 1, 1), relative_intensity=30.0),
+        make_indexed_peak(40.2, (4, 2, 0), relative_intensity=90.0),
+        make_indexed_peak(40.4, (5, 5, 0), relative_intensity=60.0),
     ]
-    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, label_height=0.5)
-    heights = [text.get_position()[1] for text in texts]
+    texts = annotate_hkl(
+        annotated_axes(), indexed, LABEL_BASE, label_height=0.5, max_levels=3
+    )
+    heights = {text.get_text(): text.get_position()[1] for text in texts}
 
-    assert heights == pytest.approx([LABEL_BASE, LABEL_BASE + 0.5, LABEL_BASE + 1.0])
+    # 420 is strongest and takes level 0, then 550, then the weakest 311.
+    assert heights == {
+        "420": pytest.approx(LABEL_BASE),
+        "550": pytest.approx(LABEL_BASE + 0.5),
+        "311": pytest.approx(LABEL_BASE + 1.0),
+    }
+
+
+def test_annotate_hkl_skips_what_will_not_fit_in_the_levels_given() -> None:
+    indexed = [
+        make_indexed_peak(40.0, (3, 1, 1), relative_intensity=30.0),
+        make_indexed_peak(40.2, (4, 2, 0), relative_intensity=90.0),
+        make_indexed_peak(40.4, (5, 5, 0), relative_intensity=60.0),
+    ]
+    texts = annotate_hkl(
+        annotated_axes(), indexed, LABEL_BASE, label_height=0.5, max_levels=2
+    )
+
+    # Only the two strongest of the run find a level; 311 loses its label.
+    assert [text.get_text() for text in texts] == ["420", "550"]
 
 
 def test_annotate_hkl_min_relative_intensity_filters() -> None:
@@ -354,7 +396,9 @@ def test_annotate_hkl_min_relative_intensity_filters() -> None:
 
     assert [text.get_text() for text in texts] == ["311", "550"]
     # Below the default cut-off but above a lower one.
-    assert len(annotate_hkl(annotated_axes(), indexed, LABEL_BASE, 1.0)) == 3
+    assert (
+        len(annotate_hkl(annotated_axes(), indexed, LABEL_BASE, 1.0, max_levels=2)) == 3
+    )
 
 
 def test_annotate_hkl_skips_unindexed_peaks() -> None:
@@ -373,7 +417,9 @@ def test_annotate_hkl_ambiguous_first_labels_the_assignment() -> None:
         CLOSE_PAIR[0], (3, 1, 1), extra_candidates=((4, 2, 0),)
     )
 
-    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, ambiguous="first")
+    texts = annotate_hkl(
+        annotated_axes(), indexed, LABEL_BASE, ambiguous="first", max_levels=2
+    )
 
     assert [text.get_text() for text in texts] == ["311", "420", "550"]
 
@@ -384,7 +430,9 @@ def test_annotate_hkl_ambiguous_all_joins_candidates_with_a_solidus() -> None:
         CLOSE_PAIR[0], (3, 1, 1), extra_candidates=((4, 2, 0),)
     )
 
-    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, ambiguous="all")
+    texts = annotate_hkl(
+        annotated_axes(), indexed, LABEL_BASE, ambiguous="all", max_levels=2
+    )
 
     assert texts[0].get_text() == f"311{AMBIGUOUS_SEPARATOR}420"
     assert AMBIGUOUS_SEPARATOR in texts[0].get_text()
