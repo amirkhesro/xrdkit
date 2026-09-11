@@ -2,12 +2,20 @@
 
 import numpy as np
 import pytest
+from scipy import special
 
 from xrdkit import (
     Caglioti,
+    ProfileFit,
+    correct_broadening,
+    doublet_gaps,
     fit_caglioti,
     fit_profile,
+    integral_breadth,
+    kalpha2_position,
     pseudo_voigt,
+    pseudo_voigt_components,
+    pseudo_voigt_from_components,
     split_pseudo_voigt,
 )
 from xrdkit.broadening import KALPHA2_INTENSITY_RATIO, MIN_CAGLIOTI_POINTS
@@ -272,3 +280,233 @@ class TestCagliotiFwhm:
         )
         assert fit.fwhm_esd(30.0) == pytest.approx(expected)
         assert fit.fwhm_esd(np.array([30.0, 60.0])).shape == (2,)
+
+
+def voigt_counts(
+    x: np.ndarray, fwhm_gaussian: float, fwhm_lorentzian: float, area: float = 1e5
+) -> np.ndarray:
+    """A noise free Voigt of the given component widths, centred on zero."""
+    sigma = fwhm_gaussian / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    return area * special.voigt_profile(x, sigma, fwhm_lorentzian / 2.0)
+
+
+def measured_fwhm(x: np.ndarray, y: np.ndarray) -> float:
+    """The FWHM of a finely sampled single peak, by interpolation."""
+    half = y.max() / 2.0
+    above = np.nonzero(y >= half)[0]
+    left, right = above[0], above[-1]
+    low = np.interp(half, y[left - 1 : left + 1], x[left - 1 : left + 1])
+    high = np.interp(half, y[right : right + 2][::-1], x[right : right + 2][::-1])
+    return float(high - low)
+
+
+def fitted_pseudo_voigt(fwhm_gaussian: float, fwhm_lorentzian: float) -> ProfileFit:
+    """A symmetric single line pseudo-Voigt fitted to an exact Voigt."""
+    x = np.arange(-3.0, 3.0, 0.002)
+    y = voigt_counts(x, fwhm_gaussian, fwhm_lorentzian) + 100.0
+    return fit_profile(
+        x, y, 0.0, 0.1, window=(-3.0, 3.0), fit_asymmetry=False, intensity_ratio=0.0
+    )
+
+
+def kalpha2_of(two_theta: float) -> float:
+    sin_theta = KALPHA2_RATIO * np.sin(np.radians(two_theta / 2.0))
+    return 2.0 * np.degrees(np.arcsin(sin_theta))
+
+
+class TestPseudoVoigtComponents:
+    def test_pure_gaussian(self):
+        assert pseudo_voigt_components(0.1, 0.0) == pytest.approx((0.1, 0.0))
+        assert pseudo_voigt_from_components(0.1, 0.0) == pytest.approx((0.1, 0.0))
+
+    def test_pure_lorentzian(self):
+        assert pseudo_voigt_components(0.1, 1.0) == pytest.approx((0.0, 0.1))
+        assert pseudo_voigt_from_components(0.0, 0.1) == pytest.approx((0.1, 1.0))
+
+    @pytest.mark.parametrize("eta", [0.05, 0.3, 0.6, 0.9, 0.99])
+    def test_round_trip(self, eta):
+        gaussian, lorentzian = pseudo_voigt_components(0.08, eta)
+        assert pseudo_voigt_from_components(gaussian, lorentzian) == pytest.approx(
+            (0.08, eta), rel=1e-10
+        )
+
+    def test_combined_width_matches_the_true_voigt(self):
+        x = np.linspace(-5.0, 5.0, 200001)
+        true = measured_fwhm(x, voigt_counts(x, 1.0, 1.0))
+        fwhm, _ = pseudo_voigt_from_components(1.0, 1.0)
+        assert fwhm == pytest.approx(true, rel=0.005)
+
+    @pytest.mark.parametrize(
+        ("gaussian", "lorentzian"), [(0.06, 0.04), (0.05, 0.05), (0.03, 0.07)]
+    )
+    def test_components_of_a_fitted_voigt_are_recovered(self, gaussian, lorentzian):
+        fit = fitted_pseudo_voigt(gaussian, lorentzian)
+        recovered = pseudo_voigt_components(fit.fwhm, fit.eta)
+        assert recovered == pytest.approx((gaussian, lorentzian), abs=0.004)
+
+    @pytest.mark.parametrize(
+        ("fwhm", "eta"), [(0.0, 0.5), (-0.1, 0.5), (0.1, -0.1), (0.1, 1.1)]
+    )
+    def test_rejects_bad_input(self, fwhm, eta):
+        with pytest.raises(ValueError):
+            pseudo_voigt_components(fwhm, eta)
+
+    def test_rejects_bad_components(self):
+        with pytest.raises(ValueError, match="negative"):
+            pseudo_voigt_from_components(-0.1, 0.1)
+        with pytest.raises(ValueError, match="positive"):
+            pseudo_voigt_from_components(0.0, 0.0)
+
+
+class TestIntegralBreadth:
+    def test_limits(self):
+        assert integral_breadth(0.1, 0.0) == pytest.approx(
+            0.05 * np.sqrt(np.pi / np.log(2.0))
+        )
+        assert integral_breadth(0.0, 0.1) == pytest.approx(0.05 * np.pi)
+
+    def test_matches_area_over_height_of_the_voigt(self):
+        x = np.linspace(-200.0, 200.0, 2000001)
+        y = voigt_counts(x, 0.06, 0.04, area=1.0)
+        assert integral_breadth(0.06, 0.04) == pytest.approx(
+            np.trapezoid(y, x) / y.max(), rel=1e-3
+        )
+
+
+class TestCorrectBroadening:
+    # Sample and instrumental Voigts, as Gaussian and Lorentzian FWHM.
+    SAMPLE = (0.05, 0.04)
+    INSTRUMENT = (0.055, 0.03)
+
+    def observed(self) -> tuple[float, float]:
+        """The pseudo-Voigt of the two Voigts convolved, exactly."""
+        return pseudo_voigt_from_components(
+            np.hypot(self.SAMPLE[0], self.INSTRUMENT[0]),
+            self.SAMPLE[1] + self.INSTRUMENT[1],
+        )
+
+    def test_recovers_the_sample_components(self):
+        fwhm_obs, eta_obs = self.observed()
+        fwhm_inst, eta_inst = pseudo_voigt_from_components(*self.INSTRUMENT)
+        result = correct_broadening(fwhm_obs, eta_obs, fwhm_inst, eta_inst)
+
+        assert not result.unresolved
+        assert result.fwhm_gaussian == pytest.approx(self.SAMPLE[0], rel=1e-8)
+        assert result.fwhm_lorentzian == pytest.approx(self.SAMPLE[1], rel=1e-8)
+        fwhm, eta = pseudo_voigt_from_components(*self.SAMPLE)
+        assert result.fwhm == pytest.approx(fwhm, rel=1e-8)
+        assert result.eta == pytest.approx(eta, rel=1e-8)
+        assert result.integral_breadth == pytest.approx(
+            integral_breadth(*self.SAMPLE), rel=1e-8
+        )
+        # The simple estimates bracket the right answer.
+        assert result.fwhm_linear < result.fwhm < result.fwhm_quadrature
+
+    def test_fitted_broadened_peak_comes_back_to_the_sample_width(self):
+        # Voigts convolve into a Voigt, so the observed profile is exact; it and
+        # the instrument are then measured by fitting, as a pattern would be.
+        observed = fitted_pseudo_voigt(
+            np.hypot(self.SAMPLE[0], self.INSTRUMENT[0]),
+            self.SAMPLE[1] + self.INSTRUMENT[1],
+        )
+        instrument = fitted_pseudo_voigt(*self.INSTRUMENT)
+        result = correct_broadening(
+            observed.fwhm, observed.eta, instrument.fwhm, instrument.eta
+        )
+
+        x = np.linspace(-2.0, 2.0, 400001)
+        true = measured_fwhm(x, voigt_counts(x, *self.SAMPLE))
+        assert result.fwhm == pytest.approx(true, rel=0.03)
+
+    def test_simple_estimates_and_their_esds(self):
+        result = correct_broadening(0.15, 0.6, 0.08, 0.6, 0.004, 0.0, 0.003, 0.0)
+        assert result.fwhm_linear == pytest.approx(0.07)
+        assert result.esd_fwhm_linear == pytest.approx(0.005)
+        assert result.fwhm_quadrature == pytest.approx(np.sqrt(0.15**2 - 0.08**2))
+        expected = np.hypot(0.15 * 0.004, 0.08 * 0.003) / result.fwhm_quadrature
+        assert result.esd_fwhm_quadrature == pytest.approx(expected)
+
+    def test_lorentzian_esd_is_the_combined_width_esd(self):
+        # With both profiles Lorentzian the correction is a plain difference.
+        result = correct_broadening(0.15, 1.0, 0.08, 1.0, 0.004, 0.0, 0.003, 0.0)
+        assert result.fwhm == pytest.approx(0.07)
+        assert result.esd_fwhm == pytest.approx(0.005, rel=1e-4)
+        assert result.esd_fwhm_lorentzian == pytest.approx(0.005, rel=1e-4)
+
+    def test_esds_grow_with_the_input_esds(self):
+        small = correct_broadening(0.15, 0.7, 0.075, 0.62, 0.002, 0.02, 0.001, 0.01)
+        large = correct_broadening(0.15, 0.7, 0.075, 0.62, 0.004, 0.04, 0.002, 0.02)
+        assert large.esd_fwhm == pytest.approx(2.0 * small.esd_fwhm, rel=1e-3)
+        assert small.esd_integral_breadth > 0.0
+
+    def test_unresolved_within_two_combined_esds(self):
+        # 0.004 above the instrument against a combined esd of 0.0025.
+        result = correct_broadening(0.084, 0.6, 0.08, 0.6, 0.0015, 0.03, 0.002, 0.02)
+        assert result.unresolved
+        assert result.excess == pytest.approx(0.004 / 0.0025)
+        assert result.fwhm is None
+        assert result.fwhm_gaussian is None
+        assert result.fwhm_linear is None
+        assert result.integral_breadth is None
+
+    def test_narrower_than_the_instrument_is_unresolved(self):
+        result = correct_broadening(0.07, 0.6, 0.08, 0.6)
+        assert result.unresolved
+        assert result.excess == -np.inf
+
+    def test_resolved_beyond_two_combined_esds(self):
+        result = correct_broadening(0.086, 0.6, 0.08, 0.6, 0.0015, 0.03, 0.002, 0.02)
+        assert not result.unresolved
+        assert result.fwhm is not None and result.fwhm > 0.0
+
+    def test_significance_is_a_parameter(self):
+        arguments = (0.086, 0.6, 0.08, 0.6, 0.0015, 0.03, 0.002, 0.02)
+        assert correct_broadening(*arguments, significance=3.0).unresolved
+
+    def test_negative_gaussian_part_is_clipped_and_flagged(self):
+        # A Lorentzian observed peak on a mostly Gaussian instrument.
+        result = correct_broadening(0.10, 0.95, 0.075, 0.3, 0.001, 0.03, 0.0008, 0.02)
+        assert result.gaussian_clipped
+        assert not result.lorentzian_clipped
+        assert result.fwhm_gaussian == 0.0
+        assert result.esd_fwhm_gaussian > 0.0
+        assert result.eta == pytest.approx(1.0)
+
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            (0.0, 0.5, 0.08, 0.5),
+            (0.1, 0.5, -0.08, 0.5),
+            (0.1, 1.5, 0.08, 0.5),
+            (0.1, 0.5, 0.08, -0.5),
+            (0.1, 0.5, 0.08, 0.5, -0.001),
+        ],
+    )
+    def test_rejects_bad_input(self, arguments):
+        with pytest.raises(ValueError):
+            correct_broadening(*arguments)
+
+
+class TestDoubletGaps:
+    def test_gaps_either_side(self):
+        below, above = doublet_gaps(30.0, [29.0, 31.0])
+        # Below, the nearest line is the K alpha 2 of 29.0, not 29.0 itself.
+        assert below == pytest.approx(30.0 - kalpha2_of(29.0))
+        assert above == pytest.approx(31.0 - kalpha2_of(30.0))
+
+    def test_the_satellite_of_a_neighbour_counts(self):
+        # The K alpha 2 line of 29.8 falls nearer to 30 than 29.8 itself.
+        below, _ = doublet_gaps(30.0, [29.8])
+        assert below == pytest.approx(30.0 - kalpha2_of(29.8))
+
+    def test_line_inside_the_doublet_closes_both_gaps(self):
+        assert doublet_gaps(60.0, [60.1]) == (0.0, 0.0)
+
+    def test_open_sides_are_infinite(self):
+        assert doublet_gaps(30.0, []) == (float("inf"), float("inf"))
+
+
+def test_kalpha2_position():
+    assert kalpha2_position(30.0) == pytest.approx(kalpha2_of(30.0))
+    # The split widens with angle.
+    assert kalpha2_position(90.0) - 90.0 > kalpha2_position(30.0) - 30.0

@@ -24,16 +24,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import optimize
+from scipy import optimize, special
 
 from xrdkit.peaks import KALPHA2_RATIO
 
 __all__ = [
+    "BroadeningCorrection",
     "Caglioti",
     "ProfileFit",
+    "correct_broadening",
+    "doublet_gaps",
     "fit_caglioti",
     "fit_profile",
+    "integral_breadth",
+    "kalpha2_position",
     "pseudo_voigt",
+    "pseudo_voigt_components",
+    "pseudo_voigt_from_components",
     "split_pseudo_voigt",
 ]
 
@@ -74,6 +81,22 @@ CAGLIOTI_PARAMETERS = 3
 MIN_CAGLIOTI_POINTS = CAGLIOTI_PARAMETERS + 1
 
 FOUR_LN2 = 4.0 * np.log(2.0)
+
+# Thompson, Cox and Hastings, J. Appl. Cryst. 20 (1987) 79: the FWHM of a
+# Voigt as the fifth root of a quintic in its Gaussian and Lorentzian FWHM,
+# coefficients of G^5, G^4 L, ... L^5, and the pseudo-Voigt mixing parameter
+# that matches it as a cubic in L / FWHM, coefficients of the first to third
+# powers.
+TCH_FWHM = (1.0, 2.69269, 2.42843, 4.47163, 0.07842, 1.0)
+TCH_ETA = (1.36603, -0.47719, 0.11116)
+
+# A sample width must exceed the instrumental width by this many combined
+# esds to count as resolved.
+DEFAULT_SIGNIFICANCE = 2.0
+
+# Relative step of the numerical derivatives used to propagate esds through
+# the correction.
+DERIVATIVE_STEP = 1e-6
 
 
 def pseudo_voigt(
@@ -118,6 +141,17 @@ def _satellite(two_theta: float | np.ndarray, wavelength_ratio: float):
     """The K alpha 2 position of a K alpha 1 line at ``two_theta``, in degrees."""
     sin_theta = wavelength_ratio * np.sin(np.radians(np.asarray(two_theta) / 2.0))
     return 2.0 * np.degrees(np.arcsin(np.clip(sin_theta, -1.0, 1.0)))
+
+
+def kalpha2_position(
+    two_theta: float, wavelength_ratio: float = KALPHA2_RATIO
+) -> float:
+    """Where the K alpha 2 line of a K alpha 1 line at ``two_theta`` falls.
+
+    The satellite diffracts at the same d spacing at the longer wavelength, so
+    it always lies to high angle, by more the higher the angle.
+    """
+    return float(_satellite(two_theta, wavelength_ratio))
 
 
 @dataclass
@@ -452,3 +486,346 @@ def fit_caglioti(
     )
     fit.rms = float(np.sqrt(np.mean((fwhm - fit.fwhm(two_theta)) ** 2)))
     return fit
+
+
+def doublet_gaps(
+    two_theta: float,
+    others: list[float] | np.ndarray,
+    wavelength_ratio: float = KALPHA2_RATIO,
+) -> tuple[float, float]:
+    """The clear space either side of a K alpha doublet, in degrees.
+
+    ``others`` are the K alpha 1 positions of every other reflection or peak
+    that might lie nearby; each brings its own K alpha 2 line too. The first
+    gap runs down from the K alpha 1 line at ``two_theta`` to the nearest line
+    below it, the second up from its K alpha 2 line to the nearest line above.
+    A line falling between the two members of the doublet closes both gaps to
+    zero, and a side with no line at all is infinitely clear.
+    """
+    satellite = float(_satellite(two_theta, wavelength_ratio))
+    others = np.asarray(others, dtype=float).ravel()
+    lines = np.concatenate([others, _satellite(others, wavelength_ratio)])
+    if np.any((lines >= two_theta) & (lines <= satellite)):
+        return 0.0, 0.0
+    below = lines[lines < two_theta]
+    above = lines[lines > satellite]
+    return (
+        float(two_theta - below.max()) if below.size else float("inf"),
+        float(above.min() - satellite) if above.size else float("inf"),
+    )
+
+
+def pseudo_voigt_from_components(
+    fwhm_gaussian: float, fwhm_lorentzian: float
+) -> tuple[float, float]:
+    """The FWHM and mixing parameter of the pseudo-Voigt matching a Voigt.
+
+    Uses the Thompson, Cox and Hastings approximation, from the FWHM of the
+    Gaussian and Lorentzian the Voigt convolves.
+
+    Raises
+    ------
+    ValueError
+        If either width is negative, or both are zero.
+    """
+    if fwhm_gaussian < 0.0 or fwhm_lorentzian < 0.0:
+        raise ValueError(
+            f"Component widths cannot be negative, got {fwhm_gaussian} "
+            f"and {fwhm_lorentzian}"
+        )
+    if fwhm_gaussian == 0.0 and fwhm_lorentzian == 0.0:
+        raise ValueError("At least one component width must be positive")
+    fwhm = _tch_fwhm(fwhm_gaussian, fwhm_lorentzian)
+    # The cubic reaches 1 at a pure Lorentzian only to rounding.
+    return fwhm, min(_tch_eta(fwhm_lorentzian / fwhm), 1.0)
+
+
+def pseudo_voigt_components(fwhm: float, eta: float) -> tuple[float, float]:
+    """The Gaussian and Lorentzian FWHM of the Voigt a pseudo-Voigt matches.
+
+    The inverse of :func:`pseudo_voigt_from_components`: the Thompson, Cox and
+    Hastings cubic is solved for the Lorentzian fraction of the width, and the
+    quintic then for the Gaussian width that makes up the rest.
+
+    Returns
+    -------
+    tuple[float, float]
+        The Gaussian and Lorentzian FWHM, in the units of ``fwhm``.
+
+    Raises
+    ------
+    ValueError
+        If ``fwhm`` is not positive or ``eta`` lies outside 0 to 1.
+    """
+    if not fwhm > 0.0:
+        raise ValueError(f"fwhm must be positive, got {fwhm}")
+    if not 0.0 <= eta <= 1.0:
+        raise ValueError(f"eta must lie between 0 and 1, got {eta}")
+
+    # The cubic rises steadily from 0 to 1 across the unit interval, so it has
+    # exactly one root there; the ends are settled directly so that rounding in
+    # the coefficients cannot push the root out of the bracket.
+    if eta <= 0.0:
+        fraction = 0.0
+    elif eta >= _tch_eta(1.0):
+        fraction = 1.0
+    else:
+        fraction = optimize.brentq(
+            lambda ratio: _tch_eta(ratio) - eta, 0.0, 1.0, xtol=1e-15
+        )
+    lorentzian = fraction * fwhm
+    if fraction >= 1.0:
+        return 0.0, fwhm
+
+    # The quintic grows with the Gaussian width, from the Lorentzian width
+    # alone at zero up past fwhm, so again there is one root in the bracket.
+    # Where the Lorentzian is so small that rounding leaves the top of the
+    # bracket short of fwhm, the profile is Gaussian to working precision.
+    def shortfall(width: float) -> float:
+        return _tch_fwhm(width, lorentzian) - fwhm
+
+    if shortfall(fwhm) <= 0.0:
+        return fwhm, lorentzian
+    gaussian = optimize.brentq(shortfall, 0.0, fwhm, xtol=1e-15)
+    return float(gaussian), float(lorentzian)
+
+
+def integral_breadth(fwhm_gaussian: float, fwhm_lorentzian: float) -> float:
+    """The integral breadth of a Voigt, from its component FWHM.
+
+    Area over height, exact for the Voigt: beta = beta_G / erfcx(k), with
+    k = beta_L / (sqrt(pi) beta_G), beta_G = (FWHM_G / 2) sqrt(pi / ln 2) and
+    beta_L = (pi / 2) FWHM_L.
+    """
+    beta_gaussian = 0.5 * fwhm_gaussian * np.sqrt(np.pi / np.log(2.0))
+    beta_lorentzian = 0.5 * np.pi * fwhm_lorentzian
+    if beta_gaussian == 0.0:
+        return float(beta_lorentzian)
+    k = beta_lorentzian / (np.sqrt(np.pi) * beta_gaussian)
+    return float(beta_gaussian / special.erfcx(k))
+
+
+def _tch_fwhm(gaussian: float, lorentzian: float) -> float:
+    powers = [
+        gaussian ** (5 - order) * lorentzian**order for order in range(len(TCH_FWHM))
+    ]
+    return float(np.dot(TCH_FWHM, powers) ** 0.2)
+
+
+def _tch_eta(ratio: float) -> float:
+    return float(sum(c * ratio ** (order + 1) for order, c in enumerate(TCH_ETA)))
+
+
+@dataclass
+class BroadeningCorrection:
+    """The sample breadth of a reflection, with the instrument taken out.
+
+    Widths are in the units given, degrees of 2theta in practice. The profile
+    is split into Gaussian and Lorentzian parts by Thompson, Cox and Hastings,
+    the instrumental Lorentzian taken off the observed one linearly and the
+    Gaussian in quadrature, and the two recombined into ``fwhm`` and ``eta``.
+    ``integral_breadth`` is that of the corrected Voigt.
+
+    ``fwhm_linear`` and ``fwhm_quadrature`` are the simple estimates for
+    comparison: the observed minus the instrumental FWHM, as if both were
+    Lorentzian, and the difference of their squares, as if both were Gaussian.
+
+    A sample component that comes out below zero, which noise can do to the
+    Gaussian part of a size broadened peak for instance, is set to zero and
+    flagged; its esd is then that of the difference it was clipped from.
+
+    When ``unresolved``, the observed width is within ``significance`` combined
+    esds of the instrumental one, so the sample breadth is not measurable and
+    every sample quantity is ``None``. ``excess`` is the observed minus the
+    instrumental FWHM over their combined esd either way.
+    """
+
+    fwhm: float | None
+    esd_fwhm: float | None
+    eta: float | None
+    esd_eta: float | None
+    fwhm_gaussian: float | None
+    esd_fwhm_gaussian: float | None
+    fwhm_lorentzian: float | None
+    esd_fwhm_lorentzian: float | None
+    integral_breadth: float | None
+    esd_integral_breadth: float | None
+    fwhm_linear: float | None
+    esd_fwhm_linear: float | None
+    fwhm_quadrature: float | None
+    esd_fwhm_quadrature: float | None
+    gaussian_clipped: bool
+    lorentzian_clipped: bool
+    unresolved: bool
+    excess: float
+
+
+def _quadrature_esd(value: float, esd_squared: float) -> float:
+    """The esd of sqrt(D) from the esd of D.
+
+    Linear propagation gives esd(D) / (2 sqrt(D)), which runs away as D goes to
+    zero; it is capped at sqrt(esd(D)), the width at which D would stand one
+    esd above zero, so a width at or near zero keeps a finite, honest esd.
+    """
+    if value <= 0.0:
+        return float(np.sqrt(esd_squared))
+    return float(min(esd_squared / (2.0 * value), np.sqrt(esd_squared)))
+
+
+def _corrected(inputs: np.ndarray) -> np.ndarray:
+    """Sample (FWHM, eta, G, L, beta, raw L difference, raw G^2 difference)."""
+    fwhm_obs, eta_obs, fwhm_inst, eta_inst = inputs
+    gaussian_obs, lorentzian_obs = pseudo_voigt_components(fwhm_obs, eta_obs)
+    gaussian_inst, lorentzian_inst = pseudo_voigt_components(fwhm_inst, eta_inst)
+    lorentzian_difference = lorentzian_obs - lorentzian_inst
+    squared_difference = gaussian_obs**2 - gaussian_inst**2
+    gaussian = np.sqrt(max(squared_difference, 0.0))
+    lorentzian = max(lorentzian_difference, 0.0)
+    fwhm, eta = pseudo_voigt_from_components(gaussian, lorentzian)
+    return np.array(
+        [
+            fwhm,
+            eta,
+            gaussian,
+            lorentzian,
+            integral_breadth(gaussian, lorentzian),
+            lorentzian_difference,
+            squared_difference,
+        ]
+    )
+
+
+def _jacobian(function, inputs: np.ndarray) -> np.ndarray:
+    """Numerical derivatives of ``function`` at ``inputs``, one column each.
+
+    Central differences, except that a mixing parameter at 0 or 1 is stepped
+    inwards only, since the components are not defined beyond it.
+    """
+    centre = function(inputs)
+    columns = []
+    for index, value in enumerate(inputs):
+        step = DERIVATIVE_STEP * max(abs(value), 1.0e-3)
+        is_eta = index in (1, 3)
+        up = inputs.copy()
+        down = inputs.copy()
+        if is_eta and value + step > 1.0:
+            down[index] -= step
+            columns.append((centre - function(down)) / step)
+        elif is_eta and value - step < 0.0:
+            up[index] += step
+            columns.append((function(up) - centre) / step)
+        else:
+            up[index] += step
+            down[index] -= step
+            columns.append((function(up) - function(down)) / (2.0 * step))
+    return np.column_stack(columns)
+
+
+def correct_broadening(
+    fwhm_obs: float,
+    eta_obs: float,
+    fwhm_inst: float,
+    eta_inst: float,
+    esd_fwhm_obs: float = 0.0,
+    esd_eta_obs: float = 0.0,
+    esd_fwhm_inst: float = 0.0,
+    esd_eta_inst: float = 0.0,
+    significance: float = DEFAULT_SIGNIFICANCE,
+) -> BroadeningCorrection:
+    """Take the instrumental broadening out of an observed pseudo-Voigt.
+
+    Both profiles are split into their Gaussian and Lorentzian FWHM with
+    :func:`pseudo_voigt_components`. Lorentzians convolve by adding widths and
+    Gaussians by adding squares, so the sample Lorentzian is the observed one
+    less the instrumental one, and the sample Gaussian the root of the
+    difference of squares. The two are recombined with
+    :func:`pseudo_voigt_from_components`.
+
+    Esds are propagated linearly through numerical derivatives, treating the
+    four inputs as independent. The observed width and mixing parameter of a
+    fit are in fact correlated, so the esds are indicative rather than exact.
+
+    Parameters
+    ----------
+    fwhm_obs, eta_obs
+        The observed FWHM and mixing parameter.
+    fwhm_inst, eta_inst
+        The instrumental FWHM and mixing parameter at the same angle.
+    esd_fwhm_obs, esd_eta_obs, esd_fwhm_inst, esd_eta_inst
+        Their esds; zero by default.
+    significance
+        How many combined esds the observed width must clear the instrumental
+        one by for the sample breadth to be resolved.
+
+    Raises
+    ------
+    ValueError
+        If a width is not positive, a mixing parameter lies outside 0 to 1, or
+        an esd is negative.
+    """
+    for name, width in (("fwhm_obs", fwhm_obs), ("fwhm_inst", fwhm_inst)):
+        if not width > 0.0:
+            raise ValueError(f"{name} must be positive, got {width}")
+    for name, eta in (("eta_obs", eta_obs), ("eta_inst", eta_inst)):
+        if not 0.0 <= eta <= 1.0:
+            raise ValueError(f"{name} must lie between 0 and 1, got {eta}")
+    esds = np.array([esd_fwhm_obs, esd_eta_obs, esd_fwhm_inst, esd_eta_inst])
+    if np.any(~np.isfinite(esds) | (esds < 0.0)):
+        raise ValueError("Every esd must be finite and not negative")
+
+    combined = float(np.hypot(esd_fwhm_obs, esd_fwhm_inst))
+    difference = fwhm_obs - fwhm_inst
+    # With no esds at all, any positive difference counts as resolved.
+    excess = (
+        difference / combined
+        if combined > 0.0
+        else float(np.copysign(np.inf, difference))
+    )
+    if difference <= 0.0 or difference < significance * combined:
+        return BroadeningCorrection(
+            *([None] * 14),
+            gaussian_clipped=False,
+            lorentzian_clipped=False,
+            unresolved=True,
+            excess=float(excess),
+        )
+
+    inputs = np.array([fwhm_obs, eta_obs, fwhm_inst, eta_inst], dtype=float)
+    values = _corrected(inputs)
+    jacobian = _jacobian(_corrected, inputs)
+    propagated = np.sqrt((jacobian**2) @ esds**2)
+    fwhm, eta, gaussian, lorentzian, breadth, lorentzian_difference, squared = values
+
+    gaussian_clipped = bool(squared < 0.0)
+    lorentzian_clipped = bool(lorentzian_difference < 0.0)
+    esd_lorentzian = float(propagated[5])
+    esd_gaussian = _quadrature_esd(float(gaussian), float(propagated[6]))
+
+    linear = difference
+    esd_linear = combined
+    quadrature_squared = fwhm_obs**2 - fwhm_inst**2
+    quadrature = float(np.sqrt(quadrature_squared))
+    esd_quadrature_squared = 2.0 * float(
+        np.hypot(fwhm_obs * esd_fwhm_obs, fwhm_inst * esd_fwhm_inst)
+    )
+
+    return BroadeningCorrection(
+        fwhm=float(fwhm),
+        esd_fwhm=float(propagated[0]),
+        eta=float(eta),
+        esd_eta=float(propagated[1]),
+        fwhm_gaussian=float(gaussian),
+        esd_fwhm_gaussian=esd_gaussian,
+        fwhm_lorentzian=float(lorentzian),
+        esd_fwhm_lorentzian=esd_lorentzian,
+        integral_breadth=float(breadth),
+        esd_integral_breadth=float(propagated[4]),
+        fwhm_linear=float(linear),
+        esd_fwhm_linear=esd_linear,
+        fwhm_quadrature=quadrature,
+        esd_fwhm_quadrature=_quadrature_esd(quadrature, esd_quadrature_squared),
+        gaussian_clipped=gaussian_clipped,
+        lorentzian_clipped=lorentzian_clipped,
+        unresolved=False,
+        excess=float(excess),
+    )

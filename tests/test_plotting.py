@@ -869,3 +869,20 @@ def test_plot_caglioti_leaves_out_an_empty_excluded_set() -> None:
     labels = [text.get_text() for text in ax.get_legend().get_texts()]
     assert labels == ["Caglioti fit", "Used in fit"]
     assert ax.get_xlim() == (10.0, 110.0)
+
+
+def test_plot_caglioti_takes_its_legend_labels() -> None:
+    fit, two_theta, fwhm = caglioti_fit()
+    flagged = np.zeros(two_theta.size, dtype=bool)
+    flagged[0] = True
+
+    _, ax = plot_caglioti(
+        fit,
+        two_theta,
+        fwhm,
+        included=~flagged,
+        labels=("Instrumental", "Resolved", "Unresolved"),
+    )
+
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert labels == ["Instrumental", "Resolved", "Unresolved"]

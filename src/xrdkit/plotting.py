@@ -34,6 +34,10 @@ X_LABEL = "2θ (degrees)"
 Y_LABEL = "Intensity (arb. units)"
 FWHM_LABEL = "FWHM (degrees)"
 
+# Legend entries of plot_caglioti: the curve, the widths it was fitted to and
+# those left out.
+CAGLIOTI_LABELS = ("Caglioti fit", "Used in fit", "Excluded")
+
 SINGLE_COLUMN = (3.5, 2.6)
 
 X_MAJOR_TICK = 10.0
@@ -610,11 +614,14 @@ def plot_caglioti(
     included: np.ndarray | None = None,
     ax: Axes | None = None,
     two_theta_range: tuple[float, float] | None = None,
+    labels: tuple[str, str, str] = CAGLIOTI_LABELS,
 ) -> tuple[Figure, Axes]:
     """Plot measured peak widths against 2theta with a fitted Caglioti curve.
 
     Widths used in the fit are drawn as filled circles and the rest as open
-    ones, so the two can be told apart without colour.
+    ones, so the two can be told apart without colour. With other ``labels``
+    the same figure serves for sample widths against the instrumental curve,
+    the open circles then marking whatever the caller singles out.
 
     Parameters
     ----------
@@ -631,9 +638,12 @@ def plot_caglioti(
     two_theta_range
         ``(low, high)`` x limits. By default the data span, widened out to
         whole major ticks.
+    labels
+        Legend entries for the curve, the filled points and the open points.
     """
     two_theta = np.asarray(two_theta, dtype=float)
     fwhm = np.asarray(fwhm, dtype=float)
+    curve_label, filled_label, open_label = labels
     used = (
         np.ones(two_theta.size, dtype=bool)
         if included is None
@@ -654,11 +664,11 @@ def plot_caglioti(
     low, high = two_theta_range
     # The curve is undefined at 0 degrees, so it starts just above it.
     curve = np.linspace(max(low, 0.5), high, 400)
-    ax.plot(curve, fit.fwhm(curve), color="black", label="Caglioti fit")
+    ax.plot(curve, fit.fwhm(curve), color="black", label=curve_label)
 
     for mask, face, label in (
-        (used, "black", "Used in fit"),
-        (~used, "white", "Excluded"),
+        (used, "black", filled_label),
+        (~used, "white", open_label),
     ):
         if not np.any(mask):
             continue

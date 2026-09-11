@@ -1,11 +1,18 @@
 """Reusable X-ray diffraction analysis toolkit for electroceramics research."""
 
 from xrdkit.broadening import (
+    BroadeningCorrection,
     Caglioti,
     ProfileFit,
+    correct_broadening,
+    doublet_gaps,
     fit_caglioti,
     fit_profile,
+    integral_breadth,
+    kalpha2_position,
     pseudo_voigt,
+    pseudo_voigt_components,
+    pseudo_voigt_from_components,
     split_pseudo_voigt,
 )
 from xrdkit.density import (
@@ -51,6 +58,7 @@ from xrdkit.plotting import (
 __all__ = [
     "ATOMIC_MASSES",
     "TTB_CELL",
+    "BroadeningCorrection",
     "Caglioti",
     "CellFit",
     "IndexedPeak",
@@ -64,6 +72,8 @@ __all__ = [
     "annotate_hkl",
     "apply_style",
     "cell_volume",
+    "correct_broadening",
+    "doublet_gaps",
     "estimate_zero_offset",
     "exclude_kalpha2",
     "find_peaks",
@@ -76,6 +86,8 @@ __all__ = [
     "index_peaks",
     "indexed_to_csv",
     "indexing_summary",
+    "integral_breadth",
+    "kalpha2_position",
     "lattice_fit_to_dict",
     "mark_peaks",
     "peaks_to_csv",
@@ -83,6 +95,8 @@ __all__ = [
     "plot_pattern",
     "plot_stacked",
     "pseudo_voigt",
+    "pseudo_voigt_components",
+    "pseudo_voigt_from_components",
     "read_xrdml",
     "refine_cell",
     "refine_lattice",
