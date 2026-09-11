@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import matplotlib as mpl
@@ -24,6 +27,7 @@ __all__ = [
     "mark_peaks",
     "plot_caglioti",
     "plot_pattern",
+    "plot_rietveld",
     "plot_stacked",
     "save_figure",
 ]
@@ -96,6 +100,49 @@ AMBIGUOUS_MODES = ("first", "all", "skip")
 
 # Joins the candidate labels of an ambiguous peak under ambiguous="all".
 AMBIGUOUS_SEPARATOR = "/"
+
+# plot_rietveld: the pattern columns the GSAS-II driver exports, the legend
+# entries of the four curves, and how each is drawn. The package draws in
+# black and white, so the observed points are grey to let the black
+# calculated line show through them.
+RIETVELD_COLUMNS = ("two_theta", "observed", "calculated", "background", "difference")
+RIETVELD_LABELS = ("Observed", "Calculated", "Background", "Difference")
+RIETVELD_FIGSIZE = (3.5, 3.0)
+OBSERVED_STYLE = {
+    "linestyle": "none",
+    "marker": "o",
+    "markersize": 1.6,
+    "markerfacecolor": "none",
+    "markeredgecolor": "0.45",
+    "markeredgewidth": 0.4,
+}
+CALCULATED_STYLE = {"color": "black", "linewidth": 0.7}
+BACKGROUND_STYLE = {"color": "0.55", "linewidth": 0.5}
+DIFFERENCE_STYLE = {"color": "black", "linewidth": 0.5}
+
+# Reflection ticks: one row per phase, the first black and the rest in
+# lighter greys, each row this fraction of the pattern's height below the
+# one above, with the difference curve a further row below the last.
+TICK_COLOURS = ("black", "0.5", "0.7", "0.3")
+TICK_MARKER_SIZE = 4.0
+TICK_MARKER_WIDTH = 0.6
+TICK_ROW_FRACTION = 0.06
+
+# Room left above the pattern and below the difference curve, as a fraction
+# of the whole height plotted.
+RIETVELD_MARGIN = 0.03
+
+# The block of fit statistics goes this many points below the legend.
+STATISTICS_GAP_POINTS = 4.0
+STATISTICS_FONTSIZE = 7
+
+# The top of the y axis is raised until the pattern under the legend and the
+# statistics stops this fraction of the axes height below them.
+LEGEND_CLEARANCE = 0.02
+
+# Two lattice parameters closer than this are taken as equal, and an angle
+# this close to 90 degrees as a right angle, when the cell is written out.
+CELL_TOLERANCE = 1e-6
 
 # Written above a peak that the cell does not account for.
 PEAK_MARKER = "*"
@@ -694,6 +741,307 @@ def plot_caglioti(
     ax.xaxis.set_minor_locator(MultipleLocator(X_MINOR_TICK))
     ax.legend(frameon=False)
     return fig, ax
+
+
+def _read_table(table: object, columns: Sequence[str], what: str) -> list[np.ndarray]:
+    """The named columns of a CSV file or of anything indexed by column name.
+
+    A path is read as a CSV file with a header row. Anything else is indexed
+    by the column names, which covers a dict of arrays, a numpy structured
+    array and a pandas DataFrame alike without importing pandas.
+    """
+    if isinstance(table, (str, Path)):
+        table = np.atleast_1d(np.genfromtxt(table, delimiter=",", names=True))
+        names = table.dtype.names or ()
+    else:
+        names = None
+    values = []
+    for column in columns:
+        if names is not None and column not in names:
+            raise ValueError(f"{what} has no {column!r} column")
+        try:
+            values.append(np.asarray(table[column], dtype=float).ravel())
+        except (KeyError, ValueError, IndexError) as error:
+            raise ValueError(f"{what} has no {column!r} column") from error
+    return values
+
+
+def _format_esd(value: float, esd: float | None) -> str:
+    """``value`` with its esd in brackets, as 4.15683(2).
+
+    The esd keeps one significant figure, or two when it begins with a 1, and
+    the value is rounded to match. With no esd, or a zero one for a value
+    held fixed, the value is written as it stands.
+    """
+    if esd is None or not esd > 0.0 or not math.isfinite(esd):
+        return f"{value:.10g}"
+    decimals = -math.floor(math.log10(esd))
+    if round(esd * 10.0**decimals) == 1:
+        decimals += 1
+    decimals = max(decimals, 0)
+    digits = round(esd * 10.0**decimals)
+    return f"{value:.{decimals}f}({digits})"
+
+
+def _cell_text(cell: Mapping[str, float], esd: Mapping[str, float] | None) -> str:
+    """The lattice parameters a reader needs, with the cell's symmetry used.
+
+    Lengths that are equal are given once, as a for a cubic cell and a and c
+    for a tetragonal or hexagonal one, and only angles other than 90 degrees
+    are written.
+    """
+    esd = esd or {}
+    a, b, c = (cell[f"length_{axis}"] for axis in "abc")
+    if abs(a - b) < CELL_TOLERANCE and abs(b - c) < CELL_TOLERANCE:
+        lengths = "a"
+    elif abs(a - b) < CELL_TOLERANCE:
+        lengths = "ac"
+    else:
+        lengths = "abc"
+    parts = [
+        f"{axis} = {_format_esd(cell[f'length_{axis}'], esd.get(f'length_{axis}'))} Å"
+        for axis in lengths
+    ]
+    for key, symbol in (("alpha", "α"), ("beta", "β"), ("gamma", "γ")):
+        angle = cell[f"angle_{key}"]
+        if abs(angle - 90.0) > CELL_TOLERANCE:
+            parts.append(f"{symbol} = {_format_esd(angle, esd.get(f'angle_{key}'))}°")
+    return ", ".join(parts)
+
+
+def _statistics_text(result: Mapping | str | Path) -> str:
+    """Rwp, GOF and the refined cells of a GSAS-II refine result.
+
+    The figures of merit are those of the last stage that succeeded, and the
+    cells those of the result's final values.
+    """
+    if isinstance(result, (str, Path)):
+        result = json.loads(Path(result).read_text(encoding="utf-8"))
+    lines = []
+    good = [stage for stage in result.get("stages", []) if "error" not in stage]
+    if good:
+        last = good[-1]
+        lines.append(
+            rf"$\mathregular{{R_{{wp}}}}$ = {last['rwp']:.2f}%,  GOF = {last['gof']:.2f}"
+        )
+    for phase in result.get("final", {}).get("phases", []):
+        lines.append(
+            f"{phase['name']}: {_cell_text(phase['cell'], phase.get('cell_esd'))}"
+        )
+    return "\n".join(lines)
+
+
+def _below_legend(ax: Axes, legend: object, text: str) -> Text:
+    """Write ``text`` right-aligned just below ``legend``, in axes coordinates."""
+    renderer = _renderer_for(ax.figure)
+    box = legend.get_window_extent(renderer)
+    gap = STATISTICS_GAP_POINTS * ax.figure.dpi / 72.0
+    x, y = ax.transAxes.inverted().transform((box.x1, box.y0 - gap))
+    return ax.text(
+        x,
+        y,
+        text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=STATISTICS_FONTSIZE,
+        linespacing=1.3,
+    )
+
+
+def _clear_of(
+    ax: Axes, artists: list, two_theta: np.ndarray, curves: list[np.ndarray]
+) -> None:
+    """Raise the top of the y axis until ``curves`` pass under ``artists``.
+
+    The legend and the statistics are placed in axes coordinates, so they
+    keep their place in the frame as the y limits change while the pattern
+    shrinks beneath them. Only the stretch of 2theta they span is considered,
+    so a pattern whose tall peaks lie elsewhere is not squashed for nothing.
+    """
+    renderer = _renderer_for(ax.figure)
+    box = Bbox.union([artist.get_window_extent(renderer) for artist in artists])
+    low, high = sorted(
+        ax.transData.inverted().transform([(box.x0, 0.0), (box.x1, 0.0)])[:, 0]
+    )
+    bottom = ax.transAxes.inverted().transform((box.x0, box.y0))[1] - LEGEND_CLEARANCE
+    under = (two_theta >= low) & (two_theta <= high)
+    if not np.any(under) or bottom <= 0.0:
+        return
+    peak = max(float(np.max(curve[under])) for curve in curves)
+    y_min, y_max = ax.get_ylim()
+    needed = y_min + (peak - y_min) / bottom
+    if needed > y_max:
+        ax.set_ylim(y_min, needed)
+
+
+def plot_rietveld(
+    pattern: object,
+    reflections: Mapping[str, object] | Sequence[object] | None = None,
+    title: str | None = None,
+    phase_labels: Sequence[str] | None = None,
+    ax: Axes | None = None,
+    sqrt_scale: bool = False,
+    difference_offset: float | None = None,
+    result: Mapping | str | Path | None = None,
+) -> Figure:
+    """Plot a Rietveld fit: observed, calculated, background and difference.
+
+    The observed points are small open grey circles, the calculated pattern a
+    black line through them and the background a thin grey line. Below the
+    pattern each phase has a row of tick marks at its reflections, the first
+    phase at the top, and below those the observed less the calculated
+    pattern is drawn about a zero of its own. Every curve and tick row is
+    named in the legend.
+
+    Parameters
+    ----------
+    pattern
+        The pattern as the GSAS-II driver exports it, with columns
+        ``two_theta``, ``observed``, ``calculated``, ``background`` and
+        ``difference``: the path of its CSV file, or a table indexed by
+        column name such as a pandas DataFrame or a dict of arrays.
+    reflections
+        Reflection lists, each with a ``two_theta`` column, as paths or
+        tables: a mapping of phase name to list, such as the driver result's
+        ``exports["reflections"]``, or a sequence of lists. Reflections
+        outside the pattern's range are left out.
+    title
+        Axes title.
+    phase_labels
+        Legend names of the phases, in the order of ``reflections``. By
+        default the mapping's keys, or "Phase 1", "Phase 2" and so on for a
+        sequence.
+    ax
+        Axes to draw on. A new figure is created if omitted.
+    sqrt_scale
+        Plot the square root of the counts, which brings up weak reflections.
+        The difference is then that of the square roots, so that it is on the
+        scale of the curves above it.
+    difference_offset
+        Height of the zero of the difference curve. By default it is put
+        below zero and below the lowest tick row, clear of both.
+    result
+        The result of the driver's refine action, as a dict or the path of
+        its JSON file. Given, Rwp and GOF of the last stage that succeeded and
+        each phase's refined cell are written in a small block below the
+        legend.
+
+    Returns
+    -------
+    Figure
+        The figure drawn on.
+
+    Raises
+    ------
+    ValueError
+        If a table lacks a column, or ``phase_labels`` does not have one name
+        per reflection list.
+    """
+    two_theta, observed, calculated, background, difference = _read_table(
+        pattern, RIETVELD_COLUMNS, "pattern"
+    )
+    if sqrt_scale:
+        observed, calculated, background = (
+            np.sqrt(np.clip(values, 0.0, None))
+            for values in (observed, calculated, background)
+        )
+        difference = observed - calculated
+
+    if reflections is None:
+        tables, names = [], []
+    elif isinstance(reflections, Mapping):
+        tables, names = list(reflections.values()), [str(name) for name in reflections]
+    else:
+        tables = list(reflections)
+        names = [f"Phase {index}" for index in range(1, len(tables) + 1)]
+    if phase_labels is not None:
+        if len(phase_labels) != len(tables):
+            raise ValueError(
+                f"Got {len(phase_labels)} phase labels for {len(tables)} "
+                "reflection lists; lengths must match"
+            )
+        names = list(phase_labels)
+    positions = [
+        _read_table(table, ("two_theta",), f"reflections of {name}")[0]
+        for table, name in zip(tables, names)
+    ]
+
+    if ax is None:
+        fig = Figure(figsize=RIETVELD_FIGSIZE)
+        ax = fig.add_subplot()
+    else:
+        fig = ax.figure
+
+    low, high = float(np.min(two_theta)), float(np.max(two_theta))
+    top = float(max(np.max(observed), np.max(calculated)))
+    # The tick rows start below zero, or below the pattern should it dip
+    # under zero, and step down by a fixed share of the pattern's height.
+    base = min(0.0, float(min(np.min(observed), np.min(calculated))))
+    step = TICK_ROW_FRACTION * (top - base)
+    rows = [base - (index + 1) * step for index in range(len(positions))]
+    if difference_offset is None:
+        lowest = rows[-1] if rows else base
+        difference_offset = lowest - step - float(np.max(difference))
+
+    observed_label, calculated_label, background_label, difference_label = (
+        RIETVELD_LABELS
+    )
+    # The background goes down before the calculated line, which then lies
+    # over it where the two meet between the peaks.
+    ax.plot(two_theta, observed, label=observed_label, **OBSERVED_STYLE)
+    ax.plot(two_theta, background, label=background_label, **BACKGROUND_STYLE)
+    ax.plot(two_theta, calculated, label=calculated_label, **CALCULATED_STYLE)
+    ax.plot(
+        two_theta,
+        difference + difference_offset,
+        label=difference_label,
+        **DIFFERENCE_STYLE,
+    )
+    for index, (ticks, name, row) in enumerate(zip(positions, names, rows)):
+        inside = ticks[(ticks >= low) & (ticks <= high)]
+        ax.plot(
+            inside,
+            np.full(inside.shape, row),
+            linestyle="none",
+            marker="|",
+            markersize=TICK_MARKER_SIZE,
+            markeredgewidth=TICK_MARKER_WIDTH,
+            color=TICK_COLOURS[index % len(TICK_COLOURS)],
+            label=name,
+        )
+
+    _format_axes(ax, low, high)
+    if sqrt_scale:
+        ax.set_ylabel("√" + Y_LABEL)
+    bottom = float(np.min(difference)) + difference_offset
+    margin = RIETVELD_MARGIN * (top - bottom)
+    ax.set_ylim(bottom - margin, top + margin)
+    if title:
+        ax.set_title(title)
+
+    # Observed first in the legend, then the curves drawn over it.
+    handles, texts = ax.get_legend_handles_labels()
+    order = [texts.index(label) for label in RIETVELD_LABELS] + list(
+        range(len(RIETVELD_LABELS), len(texts))
+    )
+    legend = ax.legend(
+        [handles[i] for i in order],
+        [texts[i] for i in order],
+        loc="upper right",
+        frameon=False,
+        markerscale=2.0,
+        handlelength=1.5,
+        labelspacing=0.3,
+        borderaxespad=0.4,
+    )
+    artists = [legend]
+    if result is not None:
+        text = _statistics_text(result)
+        if text:
+            artists.append(_below_legend(ax, legend, text))
+    _clear_of(ax, artists, two_theta, [observed, calculated])
+    return fig
 
 
 def save_figure(

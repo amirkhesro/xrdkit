@@ -1,5 +1,7 @@
 """Tests for xrdkit.plotting."""
 
+import json
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -22,6 +24,7 @@ from xrdkit import (
     mark_peaks,
     plot_caglioti,
     plot_pattern,
+    plot_rietveld,
     plot_stacked,
     save_figure,
 )
@@ -37,6 +40,8 @@ from xrdkit.plotting import (
     LABEL_HEIGHT,
     OFFSET_FACTOR,
     PEAK_MARKER,
+    RIETVELD_COLUMNS,
+    RIETVELD_LABELS,
     X_LABEL,
     X_MAJOR_TICK,
     X_MINOR_TICK,
@@ -869,6 +874,261 @@ def test_plot_caglioti_leaves_out_an_empty_excluded_set() -> None:
     labels = [text.get_text() for text in ax.get_legend().get_texts()]
     assert labels == ["Caglioti fit", "Used in fit"]
     assert ax.get_xlim() == (10.0, 110.0)
+
+
+# plot_rietveld
+
+# Two phases on a sloping background, the second with a reflection beyond the
+# end of the pattern that must not be drawn.
+PHASE_A = (21.36, 30.39, 37.44, 43.51)
+PHASE_B = (26.0, 33.0, 95.0)
+
+
+def make_rietveld_pattern() -> dict[str, np.ndarray]:
+    """A synthetic fit in the columns the GSAS-II driver exports."""
+    two_theta = np.linspace(20.0, 50.0, 1501)
+    background = 200.0 - 2.0 * (two_theta - 20.0)
+    calculated = background.copy()
+    for centre, height in zip(PHASE_A + PHASE_B, (900, 1500, 600, 400, 300, 200, 50)):
+        calculated += height * np.exp(-0.5 * ((two_theta - centre) / 0.04) ** 2)
+    observed = calculated + 10.0 * np.sin(7.0 * two_theta)
+    return {
+        "two_theta": two_theta,
+        "observed": observed,
+        "calculated": calculated,
+        "background": background,
+        "difference": observed - calculated,
+    }
+
+
+def make_reflections() -> dict[str, dict[str, np.ndarray]]:
+    return {
+        "LaB6": {"two_theta": np.array(PHASE_A)},
+        "Si": {"two_theta": np.array(PHASE_B)},
+    }
+
+
+def make_result() -> dict:
+    """A refine result as the driver writes it, its last stage failed."""
+    cubic = {
+        "length_a": 4.156826,
+        "length_b": 4.156826,
+        "length_c": 4.156826,
+        "angle_alpha": 90.0,
+        "angle_beta": 90.0,
+        "angle_gamma": 90.0,
+        "volume": 71.83,
+    }
+    tetragonal = {**cubic, "length_a": 12.4512, "length_b": 12.4512, "length_c": 3.9121}
+    return {
+        "stages": [
+            {"name": "scale", "rwp": 23.04, "gof": 6.14},
+            {"name": "zero", "rwp": 7.162, "gof": 1.909},
+            {"name": "cell", "error": "RefinementError: singular"},
+        ],
+        "final": {
+            "phases": [
+                {"name": "LaB6", "cell": cubic, "cell_esd": {"length_a": 0.0}},
+                {
+                    "name": "TTB",
+                    "cell": tetragonal,
+                    "cell_esd": {"length_a": 0.00023, "length_c": 0.00012},
+                },
+            ]
+        },
+    }
+
+
+def write_csv(path, columns: dict[str, np.ndarray]) -> str:
+    names = list(columns)
+    rows = np.column_stack([columns[name] for name in names])
+    np.savetxt(path, rows, delimiter=",", header=",".join(names), comments="")
+    return str(path)
+
+
+def legend_labels(ax: Axes) -> list[str]:
+    return [text.get_text() for text in ax.get_legend().get_texts()]
+
+
+def tick_rows(ax: Axes) -> list:
+    return [line for line in ax.lines if line.get_marker() == "|"]
+
+
+def test_plot_rietveld_draws_the_curves_and_a_tick_row_per_phase() -> None:
+    pattern = make_rietveld_pattern()
+
+    fig = plot_rietveld(pattern, make_reflections())
+
+    assert isinstance(fig, Figure)
+    (ax,) = fig.axes
+    # Four curves and one row of ticks for each of the two phases.
+    assert len(ax.lines) == 6
+    assert len(tick_rows(ax)) == 2
+    assert legend_labels(ax) == [*RIETVELD_LABELS, "LaB6", "Si"]
+    assert ax.get_xlabel() == X_LABEL
+    assert ax.get_ylabel() == Y_LABEL
+    assert ax.get_xlim() == pytest.approx((20.0, 50.0))
+
+    observed, background, calculated, _ = ax.lines[:4]
+    assert observed.get_linestyle() == "None"
+    assert observed.get_marker() == "o"
+    np.testing.assert_allclose(calculated.get_ydata(), pattern["calculated"])
+    np.testing.assert_allclose(background.get_ydata(), pattern["background"])
+
+
+def test_plot_rietveld_stacks_pattern_ticks_and_difference() -> None:
+    pattern = make_rietveld_pattern()
+    fig = plot_rietveld(pattern, make_reflections())
+    ax = fig.axes[0]
+    first, second = tick_rows(ax)
+    difference = ax.lines[3]
+
+    first_y, second_y = (float(row.get_ydata()[0]) for row in (first, second))
+    assert np.all(first.get_ydata() == first_y)
+    # The rows run down from zero, the first phase on top, and the
+    # difference curve lies wholly below the last of them.
+    assert 0.0 > first_y > second_y
+    assert np.max(difference.get_ydata()) < second_y
+    # Its zero is offset, not its shape.
+    offset = difference.get_ydata()[0] - pattern["difference"][0]
+    np.testing.assert_allclose(difference.get_ydata(), pattern["difference"] + offset)
+    # Ticks sit at the reflections inside the pattern, and the one beyond it
+    # is left out.
+    np.testing.assert_allclose(first.get_xdata(), PHASE_A)
+    np.testing.assert_allclose(second.get_xdata(), PHASE_B[:2])
+    bottom, top = ax.get_ylim()
+    assert bottom < np.min(difference.get_ydata())
+    assert top > np.max(pattern["observed"])
+
+
+def test_plot_rietveld_reads_the_driver_csv_files(tmp_path) -> None:
+    pattern = make_rietveld_pattern()
+    path = write_csv(tmp_path / "fit_histogram.csv", pattern)
+    reflections = {
+        name: write_csv(tmp_path / f"fit_reflections_{name}.csv", table)
+        for name, table in make_reflections().items()
+    }
+
+    ax = plot_rietveld(path, reflections).axes[0]
+
+    assert list(RIETVELD_COLUMNS) == list(pattern)
+    assert len(tick_rows(ax)) == 2
+    np.testing.assert_allclose(ax.lines[2].get_ydata(), pattern["calculated"])
+    np.testing.assert_allclose(tick_rows(ax)[1].get_xdata(), PHASE_B[:2])
+
+
+def test_plot_rietveld_without_reflections() -> None:
+    ax = plot_rietveld(make_rietveld_pattern()).axes[0]
+
+    assert len(ax.lines) == 4
+    assert tick_rows(ax) == []
+    assert legend_labels(ax) == list(RIETVELD_LABELS)
+    assert np.max(ax.lines[3].get_ydata()) < 0.0
+
+
+def test_plot_rietveld_phase_labels_and_a_sequence_of_lists() -> None:
+    reflections = list(make_reflections().values())
+
+    unnamed = plot_rietveld(make_rietveld_pattern(), reflections).axes[0]
+    named = plot_rietveld(
+        make_rietveld_pattern(), reflections, phase_labels=["A", "B"]
+    ).axes[0]
+
+    assert legend_labels(unnamed)[-2:] == ["Phase 1", "Phase 2"]
+    assert legend_labels(named)[-2:] == ["A", "B"]
+    with pytest.raises(ValueError, match="lengths must match"):
+        plot_rietveld(make_rietveld_pattern(), reflections, phase_labels=["A"])
+
+
+def test_plot_rietveld_needs_every_column() -> None:
+    pattern = make_rietveld_pattern()
+    del pattern["background"]
+
+    with pytest.raises(ValueError, match="'background'"):
+        plot_rietveld(pattern)
+    with pytest.raises(ValueError, match="reflections of LaB6"):
+        plot_rietveld(make_rietveld_pattern(), {"LaB6": {"d": np.array([1.0])}})
+
+
+def test_plot_rietveld_square_root_scale() -> None:
+    pattern = make_rietveld_pattern()
+
+    ax = plot_rietveld(pattern, make_reflections(), sqrt_scale=True).axes[0]
+
+    observed, _, calculated, difference = ax.lines[:4]
+    np.testing.assert_allclose(observed.get_ydata(), np.sqrt(pattern["observed"]))
+    np.testing.assert_allclose(calculated.get_ydata(), np.sqrt(pattern["calculated"]))
+    shape = np.sqrt(pattern["observed"]) - np.sqrt(pattern["calculated"])
+    offset = difference.get_ydata()[0] - shape[0]
+    np.testing.assert_allclose(difference.get_ydata(), shape + offset)
+    assert ax.get_ylabel() == "√" + Y_LABEL
+
+
+def test_plot_rietveld_explicit_difference_offset_title_and_axes() -> None:
+    pattern = make_rietveld_pattern()
+    fig = Figure()
+    ax = fig.add_subplot()
+
+    drawn = plot_rietveld(
+        pattern, make_reflections(), title="LaB6", ax=ax, difference_offset=-500.0
+    )
+
+    assert drawn is fig
+    assert ax.get_title() == "LaB6"
+    np.testing.assert_allclose(ax.lines[3].get_ydata(), pattern["difference"] - 500.0)
+
+
+def test_plot_rietveld_writes_the_fit_statistics(tmp_path) -> None:
+    result = make_result()
+
+    ax = plot_rietveld(make_rietveld_pattern(), make_reflections(), result=result).axes[
+        0
+    ]
+
+    (text,) = ax.texts
+    lines = text.get_text().splitlines()
+    # The last stage that succeeded, not the failed one after it.
+    assert "7.16%" in lines[0]
+    assert "GOF = 1.91" in lines[0]
+    assert "R_{wp}" in lines[0]
+    # A fixed cell as it stands; a refined one with its esd, the equal
+    # lengths of each cell given once and no right angles.
+    assert lines[1] == "LaB6: a = 4.156826 Å"
+    # An esd that begins with a 1 keeps two figures.
+    assert lines[2] == "TTB: a = 12.4512(2) Å, c = 3.91210(12) Å"
+
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(result), encoding="utf-8")
+    from_file = plot_rietveld(make_rietveld_pattern(), result=path).axes[0]
+    assert from_file.texts[0].get_text() == text.get_text()
+
+
+def test_plot_rietveld_keeps_the_pattern_under_the_legend() -> None:
+    # A tall peak right under the legend and statistics must be pushed down.
+    pattern = make_rietveld_pattern()
+    pattern["observed"] = pattern["observed"] + 3000.0 * np.exp(
+        -0.5 * ((pattern["two_theta"] - 48.0) / 0.04) ** 2
+    )
+    pattern["difference"] = pattern["observed"] - pattern["calculated"]
+    fig = plot_rietveld(pattern, make_reflections(), result=make_result())
+    ax = fig.axes[0]
+
+    renderer = FigureCanvasAgg(fig).get_renderer()
+    fig.canvas.draw()
+    box = ax.texts[0].get_window_extent(renderer)
+    peak = ax.transData.transform((48.0, float(np.max(pattern["observed"]))))
+    assert peak[1] < box.y0
+
+
+def test_plot_rietveld_saves(tmp_path) -> None:
+    fig = plot_rietveld(
+        make_rietveld_pattern(), make_reflections(), result=make_result()
+    )
+
+    written = save_figure(fig, tmp_path / "rietveld")
+
+    assert [path.suffix for path in written] == [".png", ".pdf"]
+    assert all(path.stat().st_size > 0 for path in written)
 
 
 def test_plot_caglioti_takes_its_legend_labels() -> None:

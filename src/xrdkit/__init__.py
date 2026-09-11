@@ -76,6 +76,7 @@ from xrdkit.plotting import (
     mark_peaks,
     plot_caglioti,
     plot_pattern,
+    plot_rietveld,
     plot_stacked,
     save_figure,
 )
@@ -148,6 +149,7 @@ __all__ = [
     "peaks_to_csv",
     "plot_caglioti",
     "plot_pattern",
+    "plot_rietveld",
     "plot_stacked",
     "pseudo_voigt",
     "pseudo_voigt_components",
