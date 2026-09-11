@@ -14,6 +14,7 @@ from matplotlib.text import Text
 from matplotlib.ticker import MultipleLocator
 from matplotlib.transforms import Bbox
 
+from xrdkit.broadening import Caglioti
 from xrdkit.indexing import IndexedPeak, Reflection
 from xrdkit.io import XRDScan
 
@@ -21,6 +22,7 @@ __all__ = [
     "annotate_hkl",
     "apply_style",
     "mark_peaks",
+    "plot_caglioti",
     "plot_pattern",
     "plot_stacked",
     "save_figure",
@@ -30,6 +32,7 @@ SCALES = ("linear", "sqrt", "log")
 
 X_LABEL = "2θ (degrees)"
 Y_LABEL = "Intensity (arb. units)"
+FWHM_LABEL = "FWHM (degrees)"
 
 SINGLE_COLUMN = (3.5, 2.6)
 
@@ -597,6 +600,90 @@ def mark_peaks(
         ax.text(position, y, marker, ha="center", va="bottom", fontsize=fontsize)
         for position in positions
     ]
+
+
+def plot_caglioti(
+    fit: Caglioti,
+    two_theta: np.ndarray,
+    fwhm: np.ndarray,
+    esd: np.ndarray | None = None,
+    included: np.ndarray | None = None,
+    ax: Axes | None = None,
+    two_theta_range: tuple[float, float] | None = None,
+) -> tuple[Figure, Axes]:
+    """Plot measured peak widths against 2theta with a fitted Caglioti curve.
+
+    Widths used in the fit are drawn as filled circles and the rest as open
+    ones, so the two can be told apart without colour.
+
+    Parameters
+    ----------
+    fit
+        The Caglioti function to draw.
+    two_theta, fwhm
+        The measured positions and widths, in degrees.
+    esd
+        Esds of the widths, drawn as error bars when given.
+    included
+        Which widths the fit used. All of them by default.
+    ax
+        Axes to draw on. A new single-column figure is created if omitted.
+    two_theta_range
+        ``(low, high)`` x limits. By default the data span, widened out to
+        whole major ticks.
+    """
+    two_theta = np.asarray(two_theta, dtype=float)
+    fwhm = np.asarray(fwhm, dtype=float)
+    used = (
+        np.ones(two_theta.size, dtype=bool)
+        if included is None
+        else np.asarray(included, dtype=bool)
+    )
+
+    if ax is None:
+        fig = Figure(figsize=SINGLE_COLUMN)
+        ax = fig.add_subplot()
+    else:
+        fig = ax.figure
+
+    if two_theta_range is None:
+        two_theta_range = (
+            X_MAJOR_TICK * np.floor(two_theta.min() / X_MAJOR_TICK),
+            X_MAJOR_TICK * np.ceil(two_theta.max() / X_MAJOR_TICK),
+        )
+    low, high = two_theta_range
+    # The curve is undefined at 0 degrees, so it starts just above it.
+    curve = np.linspace(max(low, 0.5), high, 400)
+    ax.plot(curve, fit.fwhm(curve), color="black", label="Caglioti fit")
+
+    for mask, face, label in (
+        (used, "black", "Used in fit"),
+        (~used, "white", "Excluded"),
+    ):
+        if not np.any(mask):
+            continue
+        ax.errorbar(
+            two_theta[mask],
+            fwhm[mask],
+            yerr=None if esd is None else np.asarray(esd, dtype=float)[mask],
+            fmt="o",
+            markersize=4,
+            markerfacecolor=face,
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            ecolor="black",
+            elinewidth=0.6,
+            capsize=1.5,
+            label=label,
+        )
+
+    ax.set_xlabel(X_LABEL)
+    ax.set_ylabel(FWHM_LABEL)
+    ax.set_xlim(low, high)
+    ax.xaxis.set_major_locator(MultipleLocator(X_MAJOR_TICK))
+    ax.xaxis.set_minor_locator(MultipleLocator(X_MINOR_TICK))
+    ax.legend(frameon=False)
+    return fig, ax
 
 
 def save_figure(

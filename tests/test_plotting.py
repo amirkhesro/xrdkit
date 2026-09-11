@@ -12,12 +12,15 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 
 from xrdkit import (
+    Caglioti,
     IndexedPeak,
     Peak,
     Reflection,
     XRDScan,
     annotate_hkl,
+    fit_caglioti,
     mark_peaks,
+    plot_caglioti,
     plot_pattern,
     plot_stacked,
     save_figure,
@@ -832,3 +835,37 @@ def test_plot_stacked_returns_a_line_per_scan() -> None:
     # Each line is drawn on the base of its own slot.
     for line, base in zip(lines, bases):
         assert float(np.min(line.get_ydata())) >= base - 0.5
+
+
+def caglioti_fit() -> tuple[Caglioti, np.ndarray, np.ndarray]:
+    two_theta = np.array([21.4, 30.4, 43.5, 54.0, 67.5, 75.8, 87.8, 99.7])
+    fwhm = np.array([0.085, 0.078, 0.072, 0.071, 0.073, 0.077, 0.079, 0.087])
+    return fit_caglioti(two_theta, fwhm), two_theta, fwhm
+
+
+def test_plot_caglioti_draws_the_curve_and_both_sets_of_points() -> None:
+    fit, two_theta, fwhm = caglioti_fit()
+    included = np.ones(two_theta.size, dtype=bool)
+    included[-1] = False
+
+    fig, ax = plot_caglioti(fit, two_theta, fwhm, esd=fwhm * 0.02, included=included)
+
+    assert isinstance(fig, Figure)
+    assert isinstance(ax, Axes)
+    assert ax.get_xlabel() == X_LABEL
+    assert ax.get_ylabel() == "FWHM (degrees)"
+    assert ax.get_xlim() == (20.0, 100.0)
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert labels == ["Caglioti fit", "Used in fit", "Excluded"]
+    curve = ax.lines[0]
+    np.testing.assert_allclose(curve.get_ydata(), fit.fwhm(curve.get_xdata()))
+
+
+def test_plot_caglioti_leaves_out_an_empty_excluded_set() -> None:
+    fit, two_theta, fwhm = caglioti_fit()
+
+    _, ax = plot_caglioti(fit, two_theta, fwhm, two_theta_range=(10.0, 110.0))
+
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert labels == ["Caglioti fit", "Used in fit"]
+    assert ax.get_xlim() == (10.0, 110.0)

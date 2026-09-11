@@ -1,5 +1,13 @@
 """Reusable X-ray diffraction analysis toolkit for electroceramics research."""
 
+from xrdkit.broadening import (
+    Caglioti,
+    ProfileFit,
+    fit_caglioti,
+    fit_profile,
+    pseudo_voigt,
+    split_pseudo_voigt,
+)
 from xrdkit.density import (
     ATOMIC_MASSES,
     cell_volume,
@@ -34,6 +42,7 @@ from xrdkit.plotting import (
     annotate_hkl,
     apply_style,
     mark_peaks,
+    plot_caglioti,
     plot_pattern,
     plot_stacked,
     save_figure,
@@ -42,10 +51,12 @@ from xrdkit.plotting import (
 __all__ = [
     "ATOMIC_MASSES",
     "TTB_CELL",
+    "Caglioti",
     "CellFit",
     "IndexedPeak",
     "LatticeFit",
     "Peak",
+    "ProfileFit",
     "Reflection",
     "TetragonalCell",
     "XRDScan",
@@ -56,6 +67,8 @@ __all__ = [
     "estimate_zero_offset",
     "exclude_kalpha2",
     "find_peaks",
+    "fit_caglioti",
+    "fit_profile",
     "flag_kalpha2",
     "formula_mass",
     "generate_reflections",
@@ -66,11 +79,14 @@ __all__ = [
     "lattice_fit_to_dict",
     "mark_peaks",
     "peaks_to_csv",
+    "plot_caglioti",
     "plot_pattern",
     "plot_stacked",
+    "pseudo_voigt",
     "read_xrdml",
     "refine_cell",
     "refine_lattice",
     "save_figure",
+    "split_pseudo_voigt",
     "theoretical_density",
 ]
