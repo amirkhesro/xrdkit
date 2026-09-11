@@ -41,15 +41,28 @@ OFFSET_FACTOR = 1.2
 LABEL_HEIGHT = 0.92
 LABEL_MARGIN = 0.02
 
-# Peaks weaker than this percentage of the strongest carry no hkl label, since
-# a crowded pattern is unreadable if every shoulder is annotated.
-HKL_MIN_RELATIVE_INTENSITY = 5.0
+# The defaults of annotate_hkl, which together set the standing rule for hkl
+# annotation: the labels go in a single row, only the major peaks are labelled,
+# a weaker peak that would collide with a stronger one loses its label, and
+# labels are never stacked into a column.
+#
+# Peaks weaker than this percentage of the strongest carry no hkl label, since a
+# crowded pattern is unreadable if every shoulder is annotated.
+HKL_MIN_RELATIVE_INTENSITY = 10.0
 
 HKL_FONTSIZE = 7
 
 # Upright labels take the least horizontal room, which is what a crowded 2theta
 # axis is short of.
 HKL_ROTATION = 90
+
+# One row. Raising this stacks labels into a column, which is off by default
+# because a column drifts away from the peaks it names.
+HKL_MAX_LEVELS = 1
+
+# A peak that matched more than one reflection is labelled with the one it was
+# assigned; see AMBIGUOUS_MODES for the alternatives.
+HKL_AMBIGUOUS = "first"
 
 # Fallback separation, in degrees, for a caller that wants a fixed one rather
 # than the value annotate_hkl works out from the rendered label size.
@@ -68,11 +81,6 @@ CHARACTER_WIDTH = 0.6
 
 # One level up, as a fraction of the y range of the axes.
 HKL_LABEL_HEIGHT = 0.04
-
-# How many levels of labels to try before giving up on a peak. One keeps the
-# annotation to a single row, which reads best when the labels are meant to be
-# scanned along the axis rather than picked out one at a time.
-HKL_MAX_LEVELS = 1
 
 # How annotate_hkl treats a peak that matched more than one reflection.
 AMBIGUOUS_MODES = ("first", "all", "skip")
@@ -345,10 +353,14 @@ def annotate_hkl(
     rotation: float = HKL_ROTATION,
     min_separation: float | None = None,
     label_height: float | None = None,
-    ambiguous: str = "first",
+    ambiguous: str = HKL_AMBIGUOUS,
     max_levels: int = HKL_MAX_LEVELS,
 ) -> list[Text]:
     """Write an hkl label above the indexed peaks of one trace, strongest first.
+
+    By default the labels go in a single row, only the major peaks are
+    labelled, a weaker peak that would collide with a stronger one loses its
+    label, and labels are never stacked into a column.
 
     Labels are placed at the observed peak position with their base at ``y``,
     so ``y`` is normally the base of the slot the trace occupies plus enough

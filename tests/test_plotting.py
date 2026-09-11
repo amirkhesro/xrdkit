@@ -24,7 +24,11 @@ from xrdkit import (
 from xrdkit.plotting import (
     AMBIGUOUS_SEPARATOR,
     CHARACTER_WIDTH,
+    HKL_AMBIGUOUS,
+    HKL_FONTSIZE,
     HKL_LABEL_HEIGHT,
+    HKL_MAX_LEVELS,
+    HKL_MIN_RELATIVE_INTENSITY,
     HKL_MIN_SEPARATION,
     HKL_THIN_SPACE,
     LABEL_GAP_FACTOR,
@@ -663,3 +667,35 @@ def test_a_label_that_is_not_upright_is_spaced_by_its_length() -> None:
     # so it needs more room and fewer of them fit.
     assert CHARACTER_WIDTH * 3 > UPRIGHT_LABEL_WIDTH
     assert len(flat) < len(upright)
+
+
+def test_the_defaults_are_the_standing_annotation_rule() -> None:
+    """A single row of major peaks, each labelled with its assignment."""
+    assert HKL_MAX_LEVELS == 1
+    assert HKL_MIN_RELATIVE_INTENSITY == 10.0
+    assert HKL_AMBIGUOUS == "first"
+    assert HKL_FONTSIZE == 7
+
+
+def test_the_defaults_put_every_label_in_one_row() -> None:
+    ax = sized_axes(7.0)
+    separation = upright_separation(ax, HKL_FONTSIZE)
+
+    texts = annotate_hkl(ax, make_spaced_indexed(), LABEL_BASE)
+
+    # Crowded peaks are dropped, never raised into a second row.
+    assert len(texts) < len(make_spaced_indexed())
+    assert all(text.get_position()[1] == pytest.approx(LABEL_BASE) for text in texts)
+    assert labelled_offsets(texts) == [
+        offset for offset in OFFSETS if offset > separation
+    ]
+
+
+def test_the_default_intensity_cut_off_drops_a_minor_peak() -> None:
+    indexed = make_indexed()
+    # Above the old 5 per cent default, below the 10 per cent one.
+    indexed[2].peak.relative_intensity = 7.0
+
+    texts = annotate_hkl(annotated_axes(), indexed, LABEL_BASE, max_levels=2)
+
+    assert [text.get_text() for text in texts] == ["311", "420"]
