@@ -322,11 +322,11 @@ def test_index_and_refine_recovers_the_cell_the_peaks_came_from() -> None:
 
 
 def test_index_and_refine_cannot_start_from_too_tight_a_coarse_tolerance() -> None:
-    """The default 0.15 degrees is narrower than the shift TTB_CELL produces."""
+    """A tenth of a degree is narrower than the shift TTB_CELL produces."""
     _, peaks = synthetic_peaks()
 
     with pytest.raises(ValueError, match="at least 3 indexed peaks"):
-        index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+        index_and_refine(peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.15)
 
 
 def test_index_and_refine_rejects_a_cycle_count_below_one() -> None:

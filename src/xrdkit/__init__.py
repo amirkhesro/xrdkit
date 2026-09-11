@@ -14,6 +14,7 @@ from xrdkit.indexing import (
     refine_cell,
 )
 from xrdkit.io import XRDScan, read_xrdml
+from xrdkit.lattice import LatticeFit, lattice_fit_to_dict, refine_lattice
 from xrdkit.peaks import (
     Peak,
     exclude_kalpha2,
@@ -34,6 +35,7 @@ __all__ = [
     "TTB_CELL",
     "CellFit",
     "IndexedPeak",
+    "LatticeFit",
     "Peak",
     "Reflection",
     "TetragonalCell",
@@ -48,11 +50,13 @@ __all__ = [
     "index_peaks",
     "indexed_to_csv",
     "indexing_summary",
+    "lattice_fit_to_dict",
     "mark_peaks",
     "peaks_to_csv",
     "plot_pattern",
     "plot_stacked",
     "read_xrdml",
     "refine_cell",
+    "refine_lattice",
     "save_figure",
 ]
