@@ -129,8 +129,9 @@ for each project.
 
 Phase matching against the Crystallography Open Database needs one further
 library, pymatgen, which comes with the optional extra named phases. It is a
-large download and is worth installing only if the search and match routines in
-`xrdkit.phases` are going to be used. If they are, type:
+large download, and it is what Workflow 2 of the user guide needs; install it
+now if the phases are to be identified, and skip it otherwise. To install it,
+type:
 
 ```
 py -m pip install "xrdkit[phases]"
@@ -270,8 +271,9 @@ for each project.
 
 Phase matching against the Crystallography Open Database needs one further
 library, pymatgen, which comes with the optional extra named phases. It is a
-large download and is worth installing only if the search and match routines in
-`xrdkit.phases` are going to be used. If they are, type:
+large download, and it is what Workflow 2 of the user guide needs; install it
+now if the phases are to be identified, and skip it otherwise. To install it,
+type:
 
 ```
 python3 -m pip install "xrdkit[phases]"
@@ -341,8 +343,8 @@ or Part B.
 
 There is no menu and no dialogue to click through in
 [USER_GUIDE.md](USER_GUIDE.md): the way to use the kit is to put the lines of a
-code block into a file, save the file, and run it. Section 2, each of the three
-workflows, and Section 7 begin with a part headed Start here: the complete
+code block into a file, save the file, and run it. Section 2, each of the four
+workflows, and Section 8 begin with a part headed Start here: the complete
 script, which gives the whole of a script in one block under the name to save
 it as, so one copy is all it takes. The procedure is the same every time.
 
@@ -389,11 +391,11 @@ on its own will stop at a name it has never heard of.
 
 ### Step 7. GSAS-II, if it is needed
 
-GSAS-II is needed for two things only: Workflow 3, which is Rietveld
-refinement, and Route B of Workflow 2, which extracts the lattice parameters
-from a Le Bail fit. Workflow 1 and Route A of Workflow 2 do not use it, and
-neither does anything else in the kit. Skip this step until one of those two is
-actually wanted.
+GSAS-II is needed for two things only: Workflow 4, which is Rietveld
+refinement, and Route B of Workflow 3, which extracts the lattice parameters
+from a Le Bail fit. Workflows 1 and 2 and Route A of Workflow 3 do not use it,
+and neither does anything else in the kit. Skip this step until one of those
+two is actually wanted.
 
 GSAS-II is not a Python library and cannot be installed with pip. It brings its
 own Python with it, and xrdkit runs its refinement jobs under that Python
@@ -448,9 +450,9 @@ print(f"GSAS-II Python: {install.python}")
 print(f"GSAS-II home:   {install.home}")
 ```
 
-It prints the two paths it found, as in the example in Section 5.3 of the user
+It prints the two paths it found, as in the example in Section 6.3 of the user
 guide. If instead it raises `FileNotFoundError`, the message names what was
-missing and both variables, and nothing in Workflow 3 will run until it is
+missing and both variables, and nothing in Workflow 4 will run until it is
 resolved.
 
 ### Step 8. Copying a scan from the diffractometer
@@ -469,8 +471,8 @@ recognise, such as the sample identifier, and note the original instrument file
 name alongside it, in a notebook or in a table of your own. Keep the standard
 scans apart from the samples: a LaB6 or silicon scan measured on the same
 instrument with the same optics belongs in `data/standards`, not in `data/raw`,
-because it describes the instrument rather than a sample. Workflow 2 and
-Workflow 3 both need one.
+because it describes the instrument rather than a sample. Workflow 3 and
+Workflow 4 both need one.
 
 Check that the file arrived, with `ls data/raw` on either system.
 
@@ -516,7 +518,7 @@ finish, or was run under a different Python from the one running the script. A `
 means the terminal is not in the project folder, or the scan is not in
 `data/raw` under the name the script uses. An error from the reader means the
 file is not an `.xrdml`; Section 3 of the user guide gives what the reader
-accepts and Section 7.1 gives what to do with a scan in another format.
+accepts and Section 8.1 gives what to do with a scan in another format.
 
 ### Step 10. VESTA, if structures are to be looked at
 
@@ -540,11 +542,13 @@ guide reads a scan of your own and prints what it is, so the scan has to be in
 to have run, before Section 2 can be followed at all.
 
 Read Section 2 of [USER_GUIDE.md](USER_GUIDE.md) first, which says in numbers
-what a scan has to be for each of the three workflows, and how to check a scan
+what a scan has to be for each of the four workflows, and how to check a scan
 against it. Then take Workflow 1, in Section 4, which plots a pattern and
 labels its reflections and needs nothing beyond what was installed above.
-Workflow 2, in Section 5, refines the lattice parameters and calculates a
-theoretical density. Workflow 3, in Section 6, is the full Rietveld refinement,
+Workflow 2, in Section 5, names the phases the pattern is made of, and needs
+the phases extra of Step 4 of Part A or Part B, and an internet connection.
+Workflow 3, in Section 6, refines the lattice parameters and calculates a
+theoretical density. Workflow 4, in Section 7, is the full Rietveld refinement,
 and needs GSAS-II from Step 7.
 
 #### Reusing the scripts

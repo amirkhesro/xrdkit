@@ -4,22 +4,24 @@
 2. [Data quality, in numbers](#2-data-quality-in-numbers)
 3. [Files and formats](#3-files-and-formats)
 4. [Workflow 1: plotting a pattern with hkl indices](#4-workflow-1-plotting-a-pattern-with-hkl-indices)
-5. [Workflow 2: lattice parameters and theoretical density](#5-workflow-2-lattice-parameters-and-theoretical-density)
-6. [Workflow 3: Rietveld refinement](#6-workflow-3-rietveld-refinement)
-7. [Known limitations of version 0.1.0](#7-known-limitations-of-version-010)
+5. [Workflow 2: identifying the phases](#5-workflow-2-identifying-the-phases)
+6. [Workflow 3: lattice parameters and theoretical density](#6-workflow-3-lattice-parameters-and-theoretical-density)
+7. [Workflow 4: Rietveld refinement](#7-workflow-4-rietveld-refinement)
+8. [Known limitations of version 0.1.0](#8-known-limitations-of-version-010)
 
 If Python is not yet installed on your machine, start with
 [GETTING_STARTED.md](GETTING_STARTED.md), which installs Python and xrdkit
 on Windows or macOS, sets up the folder layout used below, and shows how to
 run the scripts in this guide.
 
-Section 2, each of the three workflows, and Section 7 begin with the complete
+Section 2, each of the four workflows, and Section 8 begin with the complete
 script they need, ready to be copied, saved and run: `check_scan.py` in
 Section 2.1, `plot_pattern.py` and `stack_patterns.py` in Section 4.1,
-`make_instprm.py` and `lattice_density.py` in Section 5.2,
-`config/samples.toml` and `refine_rietveld.py` in Section 6.2, and
-`read_xy.py` in Section 7.1. What follows each of those parts is the same
-script explained in pieces, and does not have to be copied at all.
+`identify_phases.py` in Section 5.3, `make_instprm.py` and
+`lattice_density.py` in Section 6.2, `config/samples.toml` and
+`refine_rietveld.py` in Section 7.2, and `read_xy.py` in Section 8.1. What
+follows each of those parts is the same script explained in pieces, and does
+not have to be copied at all.
 
 ## 1. Introduction
 
@@ -32,16 +34,19 @@ data. It is a library rather than a program: every routine is imported and
 called from a script of your own, so that the same analysis can be run over a
 whole series of samples without anyone clicking through a dialogue.
 
-The kit supports three workflows. The first is plotting a pattern with hkl
-indices on it, which is what a phase check and most figures in a paper need.
-The second is lattice parameters and a theoretical density from a Le Bail fit,
-which is what a composition series or a solid solution study needs. The third
-is a full Rietveld refinement of coordinates and occupancies, which is
-expensive in beam time and in effort and is normally worth it only for selected
-samples. The usual order is to plot every sample first, identify the phases
-present, index the pattern of each sample against the expected cell, refine the
-cell and the density from that, and only then take the few samples that matter
-through a Rietveld refinement.
+The kit supports four workflows, and they are meant to be taken in order. The
+first is plotting a pattern with hkl indices on it, which is what a phase check
+and most figures in a paper need. The second is identifying the phases the
+pattern is made of, against reference structures, which is what says whose
+pattern the rest of the analysis is describing. The third is lattice parameters
+and a theoretical density from a Le Bail fit, which is what a composition
+series or a solid solution study needs. The fourth is a full Rietveld
+refinement of coordinates and occupancies, which is expensive in beam time and
+in effort and is normally worth it only for selected samples. The usual order
+is to plot every sample first, identify the phases present, index the pattern
+of each sample against the cell of the main phase, refine the cell and the
+density from that, and only then take the few samples that matter through a
+Rietveld refinement.
 
 The kit never modifies raw data. The reader opens a scan file for reading and
 returns the numbers it holds; nothing is written back into the file, and no
@@ -59,7 +64,7 @@ ends in `.py`, save that file in the project folder, and run it with
 [GETTING_STARTED.md](GETTING_STARTED.md). Nothing here is meant to be typed at
 a Python prompt.
 
-Section 2, each of the three workflows, and Section 7 begin with a part headed
+Section 2, each of the four workflows, and Section 8 begin with a part headed
 Start here: the complete script. That part gives the whole of the script in one piece,
 ready to be copied in a single action, saved under the name given for it, and
 run. Nothing further in the section has to be copied at all. Everything after
@@ -79,7 +84,7 @@ One line of prose above each block says which file it belongs to and what to do
 with it: start a new file of that name, or add the lines to the end of the file
 already started. A block that continues a script is run with everything before
 it in the same file, never on its own. One block, the settings file in
-Section 6.2, is TOML rather than Python, and the line above it says so. The
+Section 7.2, is TOML rather than Python, and the line above it says so. The
 blocks with no line above them at all are the printed output of the block
 before, which is what your own run should print in its place.
 
@@ -97,7 +102,8 @@ silently changes the analysis.
 What the data must be depends on what you intend to get out of them. A scan
 that is ample for a phase check is not good enough for a lattice parameter, and
 a scan that gives a good lattice parameter is still not good enough for refined
-occupancies. The criteria below are the ones the three workflows need.
+occupancies. The criteria below are the ones the four workflows need. Plotting
+and phase identification share a column, because they ask the same of a scan.
 
 | | Plotting and phase check | Lattice parameters and density, by Le Bail | Rietveld refinement |
 | --- | --- | --- | --- |
@@ -110,7 +116,7 @@ occupancies. The criteria below are the ones the three workflows need.
 | Radiation | K alpha 2 present is acceptable | K alpha 2 present is acceptable, since the fit follows the K alpha 1 positions | Monochromatic Cu K alpha 1 strongly preferred |
 | What goes wrong otherwise | Weak phases hide in the noise and are missed, so the sample is reported as single phase when it is not. Peaks are too noisy for the peak finder to separate, and labels go on the wrong reflections | The cell is refined on low angle reflections alone, where a displacement error and a cell error look alike, so a and c come out precise and wrong, and the density with them | The refinement runs, but the parameters are not determined by the data. Occupancies and coordinates drift to whatever fits the noise, and the esds do not say so unless they are examined |
 
-Two further numbers govern the first two workflows. For hkl labelling, peak
+Two further numbers govern the first three workflows. For hkl labelling, peak
 positions good to about 0.02 degrees are enough, and a zero error of up to 0.05
 degrees does not change which reflection a peak is assigned to. That same zero
 error does change the lattice parameters, which is why the second workflow
@@ -216,7 +222,7 @@ or three column `.xy` or `.xye` files, none for Bruker `.raw` or `.brml`, and
 none for `.gsas` or `.fxye`. A scan in one of those forms has to be converted
 to `.xrdml`, or an `XRDScan` has to be built directly from the columns, since
 it is an ordinary dataclass and every routine downstream of the reader takes an
-`XRDScan` rather than a file path. Section 7.1 shows how.
+`XRDScan` rather than a file path. Section 8.1 shows how.
 
 ### 3.2 Folder layout
 
@@ -512,7 +518,7 @@ zero offset 0.170 degrees
 ```
 
 A cell refined this way is good enough to label reflections with. It is not a
-lattice parameter for publication, which is what Workflow 2 is for: the fit
+lattice parameter for publication, which is what Workflow 3 is for: the fit
 here is a linear least squares on the indexed peaks alone, and the zero offset
 it reports is the one that indexed the most peaks rather than one refined
 alongside the cell.
@@ -716,7 +722,9 @@ and they are told apart by where the peak sits and how strong it is.
 
 A secondary phase gives peaks that do not move with composition across a series
 and that keep a fixed ratio to one another. Look for the strongest two or three
-reflections of the phase you suspect, not just one, and check them all.
+reflections of the phase you suspect, not just one, and check them all. Naming
+that phase is Workflow 2, in Section 5, which takes these positions and weighs
+reference structures against them.
 
 K beta gives a faint copy of a strong reflection at lower angle. Where the
 filter or the monochromator is imperfect, each strong peak has a companion at
@@ -741,7 +749,9 @@ the new scan, `SAMPLE` becomes the label that goes on the figure, and `STEM`
 becomes a short tag for the new sample. Every figure and every CSV file below
 them is named from `STEM` with an f string, so the new run writes a fresh set
 of files and leaves the last sample's alone. In `stack_patterns.py` the same is
-true of `SCAN_FILES`, `LABELS` and `STEM`.
+true of `SCAN_FILES`, `LABELS` and `STEM`, and of the settings of
+`identify_phases.py` in Section 5.3, where `ELEMENTS` changes as well whenever
+the sample is weighed out from a different set of them.
 
 Edit those lines by hand, and only those lines. Do not use Replace All. The
 numbers in the settings are also numbers in the analysis: `10` is the stem of
@@ -754,9 +764,507 @@ labels sit at, so the figure that comes out is not the figure that was asked
 for and nothing says so. Change the two or three lines at the top, save the
 file, and run the script again.
 
-## 5. Workflow 2: lattice parameters and theoretical density
+## 5. Workflow 2: identifying the phases
 
-### 5.1 Which route
+A pattern is not a result until it is known what produced it. This workflow
+takes the peaks of a scan and asks which crystalline phases account for them:
+one phase for a sample that came out as intended, and a main phase with one or
+more secondary phases for a sample that did not. It comes second in the order,
+after plotting and before the cell is refined, because everything after it is a
+statement about a named phase. The indexing in Workflow 1 assumes the phase,
+and Workflows 3 and 4 refine a structure that has to be the right one.
+
+xrdkit does not use the ICDD PDF database. That database is licensed and is not
+redistributable, and there is no reader for it in the kit. What the kit
+identifies phases from is CIFs: one crystal structure per file, simulated into
+a powder pattern and weighed against the peaks that were measured. Two routes
+follow from that. Route A is a search and match in whatever licensed package
+the facility provides, which is where the PDF lives, and it happens outside
+xrdkit. Route B is a search of the Crystallography Open Database with
+`xrdkit.phases`, which is what the package supports. The two are not
+alternatives so much as a sequence: run Route A where it is available, because
+the PDF is the better index of what has been reported, and then use Route B to
+get a CIF for each phase it named, because a Rietveld refinement needs a
+structure and a PDF card is not one.
+
+### 5.1 When it is needed
+
+Three occasions, and none of them is optional.
+
+The first scan of a new composition. Until the phases are known, a cell
+refinement is fitting a model to a pattern that may not be that model's, and
+the numbers it gives will look no different for being wrong. Identify the
+phases once per composition, not once per sample: the next batch of the same
+nominal composition, made the same way, is a phase purity check against the
+first rather than an identification from nothing.
+
+Any peak the main phase leaves unindexed. Workflow 1 marks these with an
+asterisk and Section 4.11 gives the four things they are usually made of. Two
+of those, K beta and a tungsten L line, belong to the instrument and are
+settled by where they sit. The other two, a secondary phase and a mis-set
+cell, are settled here.
+
+Every phase purity scan of a sintered pellet. Sintering is where second phases
+appear that the calcined powder did not have, from a reaction with the
+crucible or the setter, from a volatile component leaving, or from a melt at a
+grain boundary. A pellet that fired well and looks right can still carry two
+weight per cent of something else, which is enough to change a dielectric
+measurement and not enough to be obvious in the pattern unless it is looked
+for.
+
+### 5.2 Route A: a licensed database search and match
+
+If your facility has HighScore, DIFFRAC.EVA, Jade or another package with the
+ICDD PDF behind it, run the search and match there first. It is a better index
+than any free database: the PDF covers the inorganic literature far more
+completely than the COD does, its cards carry measured rather than calculated
+intensities for many phases, and the matching is tuned for it. Nothing in
+xrdkit replaces that, and nothing in xrdkit reads its output.
+
+Restrict the chemistry before searching. A search and match run against the
+whole database on a pattern of nine peaks will offer a list of plausible
+nonsense; the same search restricted to the elements the sample was weighed out
+from, plus the ones a crucible or a furnace could add, will usually name the
+main phase at the top. Add carbon for a carbonate precursor that may not have
+decomposed, and aluminium or platinum where the crucible could have reacted.
+
+Record what the search found, for the main phase and for every secondary phase
+it named: the card number, the formula, the space group, the cell, and the
+release of the database the card came from. That last one matters because cards
+are revised and withdrawn, and a card number alone does not say which version
+was seen. Put those in the sample metadata, and put a row for each in
+`cifs/index.csv`, which is the same index Route B writes. `write_cif_index`
+takes a plain mapping as well as a COD record, so a PDF card goes in as a row
+with `source` set to the database and `identifier` to the card number, and no
+CIF file of its own until one is found.
+
+Then come back to Route B for the CIFs. A card is a pattern; the workflows
+below need a structure.
+
+### 5.3 Start here: the complete script
+
+Route B is one script. `identify_phases.py` reads a scan, finds its peaks,
+searches the Crystallography Open Database for entries made of the elements the
+sample was weighed out from, downloads a CIF for each, records them all in
+`cifs/index.csv`, simulates the powder pattern of every one and scores it
+against the peaks that were measured.
+
+It needs two things the rest of the guide does not. The first is pymatgen,
+which simulates the patterns and comes with the `phases` extra: install it with
+`py -m pip install "xrdkit[phases]"` on Windows, or
+`python3 -m pip install "xrdkit[phases]"` on macOS. pymatgen prints a few
+`UserWarning` lines about stoichiometry while it reads the CIFs of disordered
+structures, which is what a tungsten bronze is; they are warnings about
+rounding in the CIF, not about the simulation, they go to the terminal rather
+than into the output shown below, and they can be ignored.
+
+The second thing is network access: every COD search and download is an HTTP
+request to <https://www.crystallography.net>. Behind a proxy or on an offline
+machine the script cannot run at all, and it is worth knowing that the COD
+occasionally drops a connection, which raises a `URLError`; run the script
+again when it does.
+
+Save this as `identify_phases.py` in the project folder, edit the settings
+lines at the top, and run it with `py identify_phases.py` on Windows, or
+`python3 identify_phases.py` on macOS. It takes about fifteen seconds, most of
+it downloading.
+
+The whole of `identify_phases.py`:
+
+```python
+import math
+import time
+from pathlib import Path
+
+from xrdkit import (
+    cod_fetch,
+    cod_search,
+    exclude_kalpha2,
+    find_peaks,
+    match_candidate,
+    read_xrdml,
+    simulate_pattern,
+    write_cif_index,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/10s.xrdml"
+STEM = "10"
+ELEMENTS = ["Sr", "Ba", "Nb", "O"]
+SPACE_GROUP = None
+ZERO_OFFSET = 0.170
+UNINDEXED = [26.921]
+MAIN_PHASE = "2100720"
+
+TWO_THETA = (10.0, 80.0)
+TOLERANCE = 0.15
+PAUSE_S = 0.5
+
+scan = read_xrdml(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=TWO_THETA))
+observed = [peak.two_theta - ZERO_OFFSET for peak in peaks]
+print(f"{len(observed)} peaks observed from {TWO_THETA[0]} to {TWO_THETA[1]} degrees")
+
+records = sorted(
+    cod_search(ELEMENTS, exact=True, space_group=SPACE_GROUP),
+    key=lambda record: record.cod_id,
+)
+print(f"{len(records)} COD entries made of exactly {', '.join(ELEMENTS)}")
+for record in records:
+    print(f"  {record.cod_id}  {record.formula:22s} {record.space_group}")
+
+for record in records:
+    if not (Path("cifs") / record.filename).is_file():
+        cod_fetch(record.cod_id, "cifs")
+        time.sleep(PAUSE_S)
+print(f"index written to {write_cif_index(records, 'cifs/index.csv', notes=STEM)}")
+
+for record in records:
+    simulated = simulate_pattern(
+        Path("cifs") / record.filename,
+        wavelength=scan.wavelength,
+        two_theta_range=TWO_THETA,
+    )
+    match = match_candidate(observed, simulated, tolerance=TOLERANCE)
+    strongest = max(simulated, key=lambda reflection: reflection.intensity)
+    verdict = "rejected, strongest line absent" if strongest in match.missing else ""
+    print(
+        f"  {record.cod_id}  explained {len(match.explained):2d}/{len(observed)}  "
+        f"missing {len(match.missing):2d}  score {match.score:3d}  {verdict}".rstrip()
+    )
+
+main = simulate_pattern(
+    Path("cifs") / f"{MAIN_PHASE}.cif",
+    wavelength=scan.wavelength,
+    two_theta_range=TWO_THETA,
+)
+for position in UNINDEXED:
+    corrected = position - ZERO_OFFSET
+    d = scan.wavelength / (2.0 * math.sin(math.radians(corrected / 2.0)))
+    near = [r for r in main if abs(r.two_theta - corrected) <= TOLERANCE]
+    if near:
+        cause = max(near, key=lambda reflection: reflection.intensity)
+        print(
+            f"{corrected:.3f} degrees, d = {d:.4f} angstrom: {MAIN_PHASE} "
+            f"{cause.hkl} at {cause.two_theta:.3f}, {cause.intensity:.1f} per cent"
+        )
+    else:
+        print(f"{corrected:.3f} degrees, d = {d:.4f} angstrom: unidentified")
+```
+
+The rest of the section takes that script in pieces and says how to read what
+it prints. None of the pieces needs to be typed again: they are the lines of
+the block above, in the order they appear there.
+
+### 5.4 The peaks, and the search
+
+The peaks to identify from are the ones Workflow 1 already found, and the
+script finds them again rather than reading them back, so that it can be run on
+the first scan of a composition before anything else has been done to it. What
+it does need from Workflow 1 is two numbers. `ZERO_OFFSET` is the zero offset
+the indexing reported, 0.170 degrees for this scan, and it is subtracted from
+every observed position, because a simulated pattern is calculated at true
+angles and the measured one is not. `UNINDEXED` is the list of positions the
+cell did not account for, which Workflow 1 printed as `1 peaks unaccounted for:
+[26.921]`; the same numbers are in `results/indexed_10.csv` if the printed line
+has scrolled away. On a scan that has not been indexed at all, leave
+`ZERO_OFFSET` at 0.0 and `UNINDEXED` empty, and raise `TOLERANCE` below to
+about 0.3 degrees so that an uncorrected shift does not throw the matching out.
+
+`MAIN_PHASE` is the COD id of the entry taken as the main phase, and it is the
+one setting that cannot be filled in before the script has been run: it is read
+off the table the run prints, which Section 5.6 goes through. Put any candidate
+in it for the first run, and the chosen one for the second.
+
+Start a new file named `identify_phases.py`.
+
+```python
+from xrdkit import exclude_kalpha2, find_peaks, read_xrdml
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/10s.xrdml"
+STEM = "10"
+ELEMENTS = ["Sr", "Ba", "Nb", "O"]
+SPACE_GROUP = None
+ZERO_OFFSET = 0.170
+UNINDEXED = [26.921]
+MAIN_PHASE = "2100720"
+
+TWO_THETA = (10.0, 80.0)
+
+scan = read_xrdml(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=TWO_THETA))
+observed = [peak.two_theta - ZERO_OFFSET for peak in peaks]
+print(f"{len(observed)} peaks observed from {TWO_THETA[0]} to {TWO_THETA[1]} degrees")
+```
+
+```
+35 peaks observed from 10.0 to 80.0 degrees
+```
+
+`cod_search` takes the element symbols and returns one `CodRecord` per entry.
+With `exact=True` it returns only entries made of exactly those elements and no
+others, which is what an identification of the main phase wants: the sample was
+weighed out from strontium carbonate, barium carbonate and niobium oxide, so
+the phase it was meant to make is made of Sr, Ba, Nb and O and nothing else.
+Pass `exact=False` to find every entry that contains those elements among
+others, which is what a secondary phase from a crucible reaction needs, and be
+ready for a much longer list.
+
+`SPACE_GROUP` narrows the search further where the structure type is already
+suspected. It is left at `None` here so that the search has to discriminate for
+itself; set it to `"P4bm"` and only the tungsten bronzes come back. An integer
+is taken as the International Tables number, and a string as a Hermann-Mauguin
+symbol written as the COD writes it.
+
+Continues `identify_phases.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit import cod_search
+
+records = sorted(
+    cod_search(ELEMENTS, exact=True, space_group=SPACE_GROUP),
+    key=lambda record: record.cod_id,
+)
+print(f"{len(records)} COD entries made of exactly {', '.join(ELEMENTS)}")
+for record in records:
+    print(f"  {record.cod_id}  {record.formula:22s} {record.space_group}")
+```
+
+```
+11 COD entries made of exactly Sr, Ba, Nb, O
+  1520953  Ba0.247 Nb2 O6 Sr0.744 P 4 b m
+  1537507  Ba3 Nb2 O9 Sr          P 63/m m c
+  2020161  Ba3 Nb2 O9 Sr          P 63/m
+  2100719  Ba0.67 Nb2 O6 Sr0.33   P 4 b m
+  2100720  Ba0.52 Nb2 O6 Sr0.48   P 4 b m
+  2100721  Ba0.39 Nb2 O6 Sr0.61   P 4 b m
+  2100722  Ba0.14 Nb2 O6 Sr0.86   P 4 b m
+  2103856  Ba0.39 Nb2 O6 Sr0.61   X4bm
+  2238610  Ba0.4 Nb2 O6 Sr0.6     P 4 b m
+  2311739  Ba0.476 Nb2 O6 Sr0.524 P 4 b m (a,b,2*c)
+  2311740  Ba0.47 Nb2 O6 Sr0.53   P 4 b m (a,b,2*c)
+```
+
+The records are sorted by COD id so that the run prints the same order every
+time; the database returns them in its own. Two structure types are in that
+list. Nine entries are the tetragonal tungsten bronze at Sr to Ba ratios from
+0.247 to 0.86, two of them, 2311739 and 2311740, in a cell with c doubled, and
+one, 2103856, in a nonstandard centring the COD writes as `X4bm`. The other
+two are a hexagonal perovskite, Sr Ba3 Nb2 O9. Deciding between those two
+structure types is the identification; deciding between nine entries of one of
+them is not, and Section 5.6 says why.
+
+The COD grows, so a search run later may return more entries than eleven. That
+changes the list without changing how it is read.
+
+### 5.5 Fetching the CIFs and recording them
+
+`cod_fetch` downloads one entry's CIF into a folder and returns the path it
+wrote, naming the file after the COD id. A file already there is skipped by the
+test in the loop, so the script can be run again without downloading anything
+twice, and the half second pause between downloads is ordinary courtesy to a
+free database that nobody is paying for.
+
+`write_cif_index` writes or updates `cifs/index.csv`, one row per CIF, with the
+source, the identifier, the formula, the space group, the cell and a one line
+citation. A row already in the file is replaced in place and a row nothing
+names is left alone, so the index accumulates over a project rather than being
+rewritten by each run, and notes typed into it by hand survive a fresh
+download. `notes` here is the stem of the sample the candidates were gathered
+for.
+
+Continues `identify_phases.py`. Add these lines at the end of the file.
+
+```python
+import time
+from pathlib import Path
+
+from xrdkit import cod_fetch, write_cif_index
+
+PAUSE_S = 0.5
+
+for record in records:
+    if not (Path("cifs") / record.filename).is_file():
+        cod_fetch(record.cod_id, "cifs")
+        time.sleep(PAUSE_S)
+print(f"index written to {write_cif_index(records, 'cifs/index.csv', notes=STEM)}")
+```
+
+```
+index written to cifs\index.csv
+```
+
+### 5.6 Simulating and matching
+
+`simulate_pattern` turns a CIF into a list of `SimulatedReflection`, each with
+a two theta, an intensity relative to the strongest line as 100, and one hkl of
+its family. It is pymatgen's calculation on the structure as the CIF gives it,
+at a single wavelength, so there are no K alpha 2 lines in it. Simulate over
+the range that was measured and no wider: a reflection calculated outside the
+scan would be counted as missing when nothing looked for it.
+
+`match_candidate` weighs the simulated pattern against the observed positions.
+An observed position is explained when a simulated reflection of any strength
+falls within `tolerance` of it. A simulated reflection is missing when it is
+stronger than `min_intensity`, 10 per cent by default, and no observed position
+is anywhere near it. The score is the count explained less the count missing.
+
+The tolerance is 0.15 degrees here, which is far looser than the 0.02 degrees
+Section 2 asks of a peak position for hkl labelling, and deliberately so. The
+CIFs are of compositions that are not the sample's, so their cells are not the
+sample's either, and their high angle lines drift accordingly; the zero
+correction above removes the constant part of the mismatch and nothing removes
+the rest. Identification survives that. A cell refinement would not, which is
+why it is a separate workflow with its own scan requirements.
+
+Continues `identify_phases.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit import match_candidate, simulate_pattern
+
+TOLERANCE = 0.15
+
+for record in records:
+    simulated = simulate_pattern(
+        Path("cifs") / record.filename,
+        wavelength=scan.wavelength,
+        two_theta_range=TWO_THETA,
+    )
+    match = match_candidate(observed, simulated, tolerance=TOLERANCE)
+    strongest = max(simulated, key=lambda reflection: reflection.intensity)
+    verdict = "rejected, strongest line absent" if strongest in match.missing else ""
+    print(
+        f"  {record.cod_id}  explained {len(match.explained):2d}/{len(observed)}  "
+        f"missing {len(match.missing):2d}  score {match.score:3d}  {verdict}".rstrip()
+    )
+```
+
+```
+  1520953  explained 27/35  missing  3  score  24
+  1537507  explained 14/35  missing  6  score   8
+  2020161  explained 16/35  missing  8  score   8
+  2100719  explained 26/35  missing  9  score  17
+  2100720  explained 27/35  missing  5  score  22
+  2100721  explained 34/35  missing  0  score  34
+  2100722  explained 16/35  missing 19  score  -3  rejected, strongest line absent
+  2103856  explained 35/35  missing 19  score  16  rejected, strongest line absent
+  2238610  explained 26/35  missing  7  score  19
+  2311739  explained 33/35  missing  2  score  31
+  2311740  explained 33/35  missing  2  score  31
+```
+
+Read that table in this order.
+
+Take the rejections first, because they are the only column that is a verdict
+rather than a measure. A candidate whose strongest reflection falls
+where nothing at all was observed is not present in the sample, whatever its
+score: the strongest line of a phase is the last one to disappear, so if it is
+not there the phase is not there. That rule is what the `strongest in
+match.missing` test writes down. It rejects 2100722 here, whose cell at
+Ba 0.14 is too far from the sample's for its lines to land anywhere near the
+right places, and 2103856, which is the same tungsten bronze but in the
+nonstandard `X4bm` centring, and the simulator expands that into a structure
+with nineteen strong lines the sample does not have. A rejection is a statement
+about the CIF as it was read, not only about the sample, and an entry rejected
+for a reason like that one is worth looking at rather than deleting.
+
+Then read `missing`. It is the count that discriminates, because a strong line
+predicted where nothing was seen is hard evidence against a phase, while an
+explained peak may be a coincidence in a crowded pattern. The two hexagonal
+perovskites, 1537507 and 2020161, explain fewer than half the peaks and miss
+six and eight strong lines; the tungsten bronzes near the sample's composition
+miss none or two. That gap is the identification: the sample is the tetragonal
+tungsten bronze, and it is not the hexagonal perovskite.
+
+Read `explained` and the score last, and do not read them as a ranking of
+composition. 2100721 scores 34 and 2100720 scores 22, and both are the same
+phase; what separates them is how close each entry's cell is to the sample's,
+which this workflow is not measuring and Workflow 3 is. The entry to carry
+forward is the one whose composition is nearest the nominal one, which for
+Sr0.40Ba0.50La0.10Nb1.90Ti0.10O6 is 2100720 at Ba 0.52 to Sr 0.48, and its cell
+is replaced by a refined one in Workflows 3 and 4 in any case.
+
+That leaves the peaks Workflow 1 could not index. Each is printed with its d
+spacing, which is the form a spacing is quoted in and searched on, and beside
+it the reflection of `MAIN_PHASE` that falls within the tolerance of it, or the
+word unidentified where none does.
+
+Continues `identify_phases.py`. Add these lines at the end of the file.
+
+```python
+import math
+
+main = simulate_pattern(
+    Path("cifs") / f"{MAIN_PHASE}.cif",
+    wavelength=scan.wavelength,
+    two_theta_range=TWO_THETA,
+)
+for position in UNINDEXED:
+    corrected = position - ZERO_OFFSET
+    d = scan.wavelength / (2.0 * math.sin(math.radians(corrected / 2.0)))
+    near = [r for r in main if abs(r.two_theta - corrected) <= TOLERANCE]
+    if near:
+        cause = max(near, key=lambda reflection: reflection.intensity)
+        print(
+            f"{corrected:.3f} degrees, d = {d:.4f} angstrom: {MAIN_PHASE} "
+            f"{cause.hkl} at {cause.two_theta:.3f}, {cause.intensity:.1f} per cent"
+        )
+    else:
+        print(f"{corrected:.3f} degrees, d = {d:.4f} angstrom: unidentified")
+```
+
+```
+26.751 degrees, d = 3.3298 angstrom: 2100720 (2, 0, 1) at 26.650, 6.6 per cent
+```
+
+The one peak the cell left over turns out not to be a second phase at all. It
+is the 201 of the main phase, calculated at 26.650 degrees with 6.6 per cent of
+the strongest intensity, and the indexing in Workflow 1 passed over it because
+that step works to 0.02 degrees and the calculated position is 0.10 degrees
+away, on a cell taken from a different composition. A weak reflection of the
+phase you already have is the commonest explanation of an asterisk, and it is
+worth ruling out before anything else.
+
+Where a peak does come back as unidentified, widening the search is the next
+step: `exact=False` so that entries carrying other elements come back too, and
+the elements a crucible or an incompletely decomposed carbonate could
+contribute added to `ELEMENTS`. What is not the next step is deciding that one
+peak does not matter.
+
+### 5.7 Where the result goes
+
+Three things come out of this workflow and each has somewhere to be.
+
+The CIF of the main phase is the input to the two workflows that follow. It is
+`cifs/ttb.cif` in Sections 6 and 7, which is COD 2100720 saved under a name
+that says what it is rather than what its accession number is. Copy or rename
+the chosen file rather than pointing the later scripts at a bare COD id, and
+keep the original alongside it, because the index ties the two together. The
+cell in that CIF is not the sample's and does not need to be: Workflow 3
+replaces it with the cell it refines, and Workflow 4 starts from that.
+
+`cifs/index.csv` and the sample metadata are the record. Between them they
+should let a reader of the paper find every structure that was used: the source
+of each, whether the COD or the ICDD PDF or a paper's supporting information,
+the identifier within that source, the formula and space group and cell as the
+source gave them, and the citation. This is the part that is tedious to
+reconstruct afterwards and cheap to write down at the time. Say in the paper
+which database and which release the phases were identified against, in the
+same sentence that names the instrument.
+
+Peaks that nothing accounted for are reported as unidentified, with their d
+spacings, and not attributed to a phase that nearly fits. That is the report
+even when, as here, every one of them turns out to be a weak line of the main
+phase: what goes in the record is what the evidence supports, checked rather
+than assumed. An unidentified reflection is an ordinary thing to report, and a
+wrongly named secondary phase is not: it will be quoted, and it will be wrong.
+Where a weak reflection matters to the conclusion, the answer is a longer scan
+over that angle rather than a better guess.
+
+## 6. Workflow 3: lattice parameters and theoretical density
+
+### 6.1 Which route
 
 Route A refines the cell from the peak positions alone, by least squares, with
 `xrdkit.lattice.refine_lattice`. It needs nothing but the indexed peaks that
@@ -779,12 +1287,12 @@ compute a density from. Take Route A when the answer is a trend; take Route B
 when the answer is a number that goes in a table, and always when a density
 follows from it.
 
-### 5.2 Start here: the complete scripts
+### 6.2 Start here: the complete scripts
 
-Workflow 2 is two scripts. `make_instprm.py` measures the diffractometer
+Workflow 3 is two scripts. `make_instprm.py` measures the diffractometer
 against a standard and writes the instrument parameter file, and is run once
 for the instrument rather than once for each sample; it needs GSAS-II, and
-Section 5.3 says how to install it and point the kit at it.
+Section 6.3 says how to install it and point the kit at it.
 `lattice_density.py` is the work for one sample, and reads the instrument
 parameter file the first script wrote. Run them in that order the first time,
 and only the second one thereafter.
@@ -1026,7 +1534,7 @@ is for and how to read what it prints. None of the pieces needs to be typed
 again: they are the lines of the two blocks above, in the order they appear
 there.
 
-### 5.3 One time setup for Route B
+### 6.3 One time setup for Route B
 
 Route B needs GSAS-II installed and an instrument parameter file for the
 diffractometer. Both are done once, not once per sample.
@@ -1201,7 +1709,7 @@ up whatever the other leaves. Measuring the instrument once on a standard that
 is known to be sharp fixes the instrument half, and whatever width is left over
 in a sample pattern is then the sample's.
 
-### 5.4 Route A step by step
+### 6.4 Route A step by step
 
 Route A starts from the indexed peaks of Workflow 1. The function is
 `refine_lattice` in `xrdkit.lattice`, which refines a and c together with the
@@ -1296,7 +1804,7 @@ cos(theta), and over a short range the two cannot be told apart.
 Route A ends here. Everything below needs GSAS-II, so a run that stops at this
 point is a complete piece of work on its own.
 
-### 5.5 Route B step by step
+### 6.5 Route B step by step
 
 A Le Bail refinement is described as a list of stages, each adding flags to the
 ones before it. The stage that switches `le_bail` on extracts an intensity for
@@ -1465,7 +1973,7 @@ something else entirely: a second phase. The two are easy to tell apart in the
 figure and impossible to tell apart from Rwp alone, which is why the figure is
 drawn before the numbers are quoted, not after.
 
-### 5.6 Theoretical density
+### 6.6 Theoretical density
 
 The density module takes the refined cell, a composition and the number of
 formula units per cell, and gives the cell volume, the mass of one formula unit
@@ -1551,7 +2059,7 @@ essentially its uncertainty alone. Once the cell is refined to this precision, m
 time buys nothing; a better balance, or more repeats of the weighing, is what
 improves the relative density.
 
-### 5.7 Judging the result
+### 6.7 Judging the result
 
 Take the following in order before quoting a cell or a density.
 
@@ -1601,9 +2109,9 @@ mounted proud of the holder, with no internal standard and no displacement term,
 gives a cell that is precise and wrong, and remounting it flush takes less time
 than arguing with the numbers.
 
-## 6. Workflow 3: Rietveld refinement
+## 7. Workflow 4: Rietveld refinement
 
-### 6.1 What Rietveld adds, and when to do it
+### 7.1 What Rietveld adds, and when to do it
 
 A Le Bail fit lets every reflection take whatever intensity fits best. That is
 why it is so good at cells: the positions and the widths of the peaks are
@@ -1620,19 +2128,19 @@ it demanding. Getting an occupancy or a coordinate out of a powder pattern means
 the calculated intensities have to be wrong in a way the data can see, which
 needs the counting statistics, the angular range and the profile description set
 out in the Rietveld column of Section 2. Refine one or two samples per series
-this way, chosen because the question needs a structure, and use Workflow 2 for
+this way, chosen because the question needs a structure, and use Workflow 3 for
 everything else.
 
-### 6.2 Start here: the complete script
+### 7.2 Start here: the complete script
 
-Workflow 3 is one settings file and one script. The settings file describes the
+Workflow 4 is one settings file and one script. The settings file describes the
 sample and the structure, which is the part that cannot be automated because it
-is the chemistry, and Section 6.3 goes through it table by table. The script
+is the chemistry, and Section 7.3 goes through it table by table. The script
 reads it and refines.
 
 Save this as `config/samples.toml` in the project folder. For a new sample,
 edit the `[samples.x10]` table: the name of the table, the `id` the script
-looks the sample up by, the scan, the composition, the cell Workflow 2 refined
+looks the sample up by, the scan, the composition, the cell Workflow 3 refined
 and the range to refine over. The `[structures.ttb]` table below it describes
 the structure rather than the sample, and is written once for a structure type
 rather than once for a sample.
@@ -1684,7 +2192,7 @@ added = { La = "Sr", Ti = "Nb" }
 Save this as `refine_rietveld.py` in the project folder, edit the settings
 lines at the top, and run it with `py refine_rietveld.py` on Windows, or
 `python3 refine_rietveld.py` on macOS. It takes three to four minutes on a
-laptop, and it needs GSAS-II, which Section 5.3 installs.
+laptop, and it needs GSAS-II, which Section 6.3 installs.
 
 The whole of `refine_rietveld.py`:
 
@@ -1692,14 +2200,11 @@ The whole of `refine_rietveld.py`:
 from pathlib import Path
 
 from xrdkit import (
-    Gsas2Error,
     apply_style,
     build_refine_job,
     cell_contents,
     composition_edits,
-    failure_markdown,
     load_config,
-    log_tail,
     plot_rietveld,
     run_job,
     sample_settings,
@@ -1868,42 +2373,18 @@ fig, ax = plot_rietveld(
     result=result,
 )
 print(save_figure(fig, f"figures/rietveld_{STEM}"))
-
-broken = build_refine_job(
-    Path(f"results/broken/{STEM}.gpx").resolve(),
-    [{"name": "profile", "scale": True}],
-    data_file=Path(sample["scan"]).resolve(),
-    instprm=Path("data/standards/missing.instprm").resolve(),
-    phases=[{"cif": Path(structure["cif"]).resolve(), "name": phase_name}],
-)
-work = Path(f"results/broken/gsas2_work/{STEM}")
-try:
-    run_job(broken, work)
-except Gsas2Error as error:
-    report = failure_markdown(
-        f"{STEM}, coordinates", None, str(error), log_tail(work / "refine.log")
-    )
-    Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
-    headings = [line for line in report.splitlines() if line.startswith("## ")]
-    print(f"{len(report.splitlines())} lines written, sections {headings}")
-    print(next(line for line in report.splitlines() if "failed with exit code" in line))
 ```
-
-The last block of that script asks on purpose for an instrument parameter file
-that does not exist, so that a failure can be shown and written up. It is the
-one part of the script that is there to be read rather than used, and it can be
-deleted once its point has been taken.
 
 The rest of the section says what the settings file has to hold and why, why
 the stages come in the order they do, and then takes the script in pieces. None
 of the pieces needs to be typed again: they are the lines of the block above,
 in the order they appear there.
 
-### 6.3 What you need
+### 7.3 What you need
 
 Four things, beyond the raw scan.
 
-The Le Bail result of Workflow 2 supplies the starting cell and confirms that
+The Le Bail result of Workflow 3 supplies the starting cell and confirms that
 the instrument parameter file describes the peak shapes. Start a Rietveld
 refinement from a cell that has already been refined against the whole pattern,
 not from the cell in the CIF, which came from somebody else's composition.
@@ -1945,13 +2426,13 @@ and titanium where niobium is.
 The kit reads all of this from a TOML file with `load_config`, which checks it as
 it reads and raises `ConfigError` naming the table and the key on the first
 thing that is wrong, including a composition that will not fit on the sites. The
-`config/samples.toml` of Section 6.2 is a minimal one for this sample and this
+`config/samples.toml` of Section 7.2 is a minimal one for this sample and this
 structure.
 
 `free_coordinates` says what each Wyckoff position of this space group leaves
 free, so that the kit never refines a coordinate that symmetry fixes.
 `exchange` names the elements the occupancy stage trades and the sites it trades
-them between. `start_cell` here is the cell Workflow 2 refined.
+them between. `start_cell` here is the cell Workflow 3 refined.
 
 The script's own settings are shorter, because the sample is described in the
 TOML rather than in the script: the settings file to read, the `id` of the
@@ -1997,7 +2478,7 @@ table, which is why it is `10` here and the table is `[samples.x10]`. `STEM` is
 what the GSAS-II project, the exports and the figure are named from, and it is
 the only thing that keeps one sample's output apart from another's.
 
-### 6.4 The stage sequence, and why it is ordered this way
+### 7.4 The stage sequence, and why it is ordered this way
 
 A refinement is a list of stages, and each stage adds flags to the ones before
 it, so by the last stage everything named along the way is refining together.
@@ -2088,7 +2569,7 @@ the stage's status, and a clean stage can still leave undetermined parameters.
 An undetermined value is not a result and should not go in a table of refined
 parameters. Report it as held, or report the refinement without it.
 
-### 6.5 Step by step
+### 7.5 Step by step
 
 The structure has to be set up before it can be refined, and setting it up needs
 the atoms as GSAS-II reads them from the CIF, which means creating the project
@@ -2197,14 +2678,14 @@ print([stage["name"] for stage in stages])
 ['profile', 'overall Uiso', 'Uiso groups', 'B site coordinates', 'A site coordinates', 'O site coordinates']
 ```
 
-Now build the job and run it. As in Section 5, every path is made absolute,
+Now build the job and run it. As in Section 6, every path is made absolute,
 because the driver runs inside the working directory it is given. `bonds=True`
 asks the run to add the final model's cation to anion distances to the result.
 This refinement takes about three to four minutes on a laptop.
 
 The scan refined here is a longer powder scan of the same composition as the one
-Section 5 used, over the narrower range 17 to 98 degrees rather than 10 to 98, so
-the residuals below are not comparable with the Le Bail ones in Section 5.5.
+Section 6 used, over the narrower range 17 to 98 degrees rather than 10 to 98, so
+the residuals below are not comparable with the Le Bail ones in Section 6.5.
 Compare a Rietveld refinement with a Le Bail fit only when both were run on the
 same scan over the same range.
 
@@ -2410,44 +2891,7 @@ site stage, while the curve it draws is the A site model whose Rwp is 4.155. Tak
 the residuals from the stage table, not from the figure, whenever `rejected` is
 not empty.
 
-When a stage fails outright rather than being rejected, `run_job` raises
-`Gsas2Error` and there is no result to read. `failure_markdown` turns what there
-is into a write up: the error, the stages that did run, and the tail of the
-GSAS-II log. The block below asks for an instrument file that does not exist, so
-that the failure is real. It is there to be read rather than used, and can be
-left out of the script once its point has been taken.
-
-Continues `refine_rietveld.py`. Add these lines at the end of the file.
-
-```python
-from xrdkit import Gsas2Error, failure_markdown, log_tail
-
-broken = build_refine_job(
-    Path(f"results/broken/{STEM}.gpx").resolve(),
-    [{"name": "profile", "scale": True}],
-    data_file=Path(sample["scan"]).resolve(),
-    instprm=Path("data/standards/missing.instprm").resolve(),
-    phases=[{"cif": Path(structure["cif"]).resolve(), "name": phase_name}],
-)
-work = Path(f"results/broken/gsas2_work/{STEM}")
-try:
-    run_job(broken, work)
-except Gsas2Error as error:
-    report = failure_markdown(
-        f"{STEM}, coordinates", None, str(error), log_tail(work / "refine.log")
-    )
-    Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
-    headings = [line for line in report.splitlines() if line.startswith("## ")]
-    print(f"{len(report.splitlines())} lines written, sections {headings}")
-    print(next(line for line in report.splitlines() if "failed with exit code" in line))
-```
-
-```
-104 lines written, sections ['## Error', '## Stages', '## GSAS-II log, last 40 lines']
-GSAS-II job 'refine' failed with exit code 1:
-```
-
-### 6.6 Reading the outcome
+### 7.6 Reading the outcome
 
 Take the run above as it stands. Four stages came out clean: the profile, the
 overall Uiso, the Uiso groups and the niobium coordinates. Rwp fell from 4.594 to
@@ -2498,7 +2942,7 @@ strongest peak near 10000 counts, which is a good Le Bail scan and a marginal
 Rietveld one. That, and not the refinement strategy, is why the A site
 coordinates would not settle.
 
-### 6.7 Troubleshooting
+### 7.7 Troubleshooting
 
 | Symptom | Cause | What to do |
 | --- | --- | --- |
@@ -2509,13 +2953,72 @@ coordinates would not settle.
 | A negative Uiso on the first structural stage | Intensity missing at high angle, not cold atoms | Check the instrument file against a fresh standard scan, check the sample sat flush in the holder, and check the composition: too much heavy scattering in the model shows up this way |
 | Rwp at fixed atoms far above the Le Bail value | Expected, but only by so much. A Le Bail fit has a free intensity per reflection, so it always fits better | A gap of one to two percentage points is normal. A gap of five or more means the structure is wrong, not merely imperfect: check the space group, the composition on the sites, and whether a second phase is present |
 
-## 7. Known limitations of version 0.1.0
+When a stage fails outright rather than being rejected, `run_job` raises
+`Gsas2Error` and there is no result to read. `failure_markdown` turns what
+there is into a write up: the error, the stages that did run, and the tail of
+the GSAS-II log. `troubleshooting_example.py` below exists to show what a
+failure looks like, and asks on purpose for an instrument parameter file that
+is not there, because a report of a failure cannot be demonstrated without one.
+It is a script of its own rather than part of `refine_rietveld.py`, so that the
+refinement script runs to the end without an error in it.
+
+Save this as `troubleshooting_example.py` in the project folder and run it with
+`py troubleshooting_example.py` on Windows, or
+`python3 troubleshooting_example.py` on macOS.
+
+Start a new file named `troubleshooting_example.py`.
+
+```python
+from pathlib import Path
+
+from xrdkit import Gsas2Error, build_refine_job, failure_markdown, log_tail, run_job
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/sample.xrdml"
+STEM = "x10"
+PHASE_CIF = "cifs/ttb.cif"
+PHASE = "TTB"
+# This one is wrong on purpose: no file of that name exists, so the run fails
+# and there is a failure to write up.
+INSTPRM = "data/standards/missing.instprm"
+
+job = build_refine_job(
+    Path(f"results/broken/{STEM}.gpx").resolve(),
+    [{"name": "profile", "scale": True}],
+    data_file=Path(SCAN_FILE).resolve(),
+    instprm=Path(INSTPRM).resolve(),
+    phases=[{"cif": Path(PHASE_CIF).resolve(), "name": PHASE}],
+)
+work = Path(f"results/broken/gsas2_work/{STEM}")
+try:
+    run_job(job, work)
+except Gsas2Error as error:
+    report = failure_markdown(
+        f"{STEM}, profile", None, str(error), log_tail(work / "refine.log")
+    )
+    Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
+    headings = [line for line in report.splitlines() if line.startswith("## ")]
+    print(f"{len(report.splitlines())} lines written, sections {headings}")
+    print(next(line for line in report.splitlines() if "failed with exit code" in line))
+```
+
+```
+104 lines written, sections ['## Error', '## Stages', '## GSAS-II log, last 40 lines']
+GSAS-II job 'refine' failed with exit code 1:
+```
+
+That one block is the whole of it. Point `INSTPRM` at a real instrument
+parameter file and the same script becomes the shape to wrap a refinement of
+your own in: build the job, run it inside `try`, and on `Gsas2Error` write the
+report out rather than losing what the log had to say.
+
+## 8. Known limitations of version 0.1.0
 
 Six things the kit does not do yet, all of them met somewhere in this guide.
 Each is on the list for the next release. Only the first of them needs code to
 work round, and that code is the script below.
 
-### 7.1 Start here: the complete script
+### 8.1 Start here: the complete script
 
 The reader accepts `.xrdml` and nothing else, so a scan in any other format has
 to be loaded by hand. `XRDScan` is an ordinary dataclass and every routine
@@ -2565,7 +3068,7 @@ x10: 10.01 to 99.98 degrees, 49 peaks
 That one block is the whole of `read_xy.py`. There is nothing further to copy:
 the rest of the section is the six limitations themselves, this one included.
 
-### 7.2 The six limitations
+### 8.2 The six limitations
 
 The reader accepts `.xrdml` and nothing else. There is no reader for two or
 three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
@@ -2582,14 +3085,14 @@ forbidden. Nothing in the module handles a lower symmetry cell.
 `standard_stages` is the instrument calibration sequence, background and scale,
 zero, cell, U V W, X Y, SH/L, and not a sample refinement sequence. There is no
 helper that builds a Le Bail or a Rietveld stage list, so those are written out
-in full, as in Sections 5.5 and 6.5.
+in full, as in Sections 6.5 and 7.5.
 
 The caption `plot_rietveld` writes takes its Rwp and goodness of fit from the
 last stage that has no error entry, and a stage that was rejected has none: it
 was rolled back, not failed. The cell in the same caption comes from the final
 model. So when a run has rejected a stage, the two halves of that caption come
 from different stages, and the residuals should be read from the stage table
-instead, as Section 6.5 says.
+instead, as Section 7.5 says.
 
 `formula_mass`, and through it `theoretical_density`, takes a dictionary of
 element symbol to atoms per formula unit. It does not parse a formula string:
@@ -2599,5 +3102,5 @@ confusing way to be told that the argument was of the wrong kind.
 Every path handed to `build_refine_job` must be absolute. `run_job` runs the
 GSAS-II driver inside the working directory it is given, so a relative path in
 the job is resolved from there and the file is not found. Passing each one
-through `Path(...).resolve()`, as every snippet in Sections 5 and 6 does, is the
+through `Path(...).resolve()`, as every snippet in Sections 6 and 7 does, is the
 whole of the workaround.
