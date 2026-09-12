@@ -337,21 +337,24 @@ To open the project folder in the editor, choose File, then Open Folder on
 Windows or Open on macOS, and select the `xrd` folder made in Step 3 of Part A
 or Part B.
 
-### Step 6. Running the code blocks in the user guide
+### Step 6. Running the scripts in the user guide
 
-Every code block in [USER_GUIDE.md](USER_GUIDE.md) is a piece of a script.
-There is no menu and no dialogue to click through: the way to use the kit is to
-put the lines of a block into a file, save the file, and run it. The procedure
-is the same every time.
+There is no menu and no dialogue to click through in
+[USER_GUIDE.md](USER_GUIDE.md): the way to use the kit is to put the lines of a
+code block into a file, save the file, and run it. Section 2, each of the three
+workflows, and Section 7 begin with a part headed Start here: the complete
+script, which gives the whole of a script in one block under the name to save
+it as, so one copy is all it takes. The procedure is the same every time.
 
 1. In the editor, make a new file and paste the block into it.
-2. Save it in the project folder made in Step 3, under a name ending in `.py`,
-   for example `plot.py`. The name is yours to choose, but it should not be
-   `xrdkit.py`, because a file of that name would be found instead of the
-   library.
+2. Save it in the project folder made in Step 3, under the name the guide gives
+   for it, such as `plot_pattern.py`. A name of your own works as well, as long
+   as it ends in `.py` and is not `xrdkit.py`, because a file of that name
+   would be found instead of the library.
 3. In the terminal, change to the project folder, which is
    `cd C:\Users\<name>\xrd` on Windows or `cd ~/xrd` on macOS.
-4. Run it, with `py plot.py` on Windows or `python3 plot.py` on macOS.
+4. Run it, with `py plot_pattern.py` on Windows or `python3 plot_pattern.py` on
+   macOS.
 
 Four things follow from running a script that way.
 
@@ -370,10 +373,19 @@ was not found. If that happens, check with `pwd` that the terminal really is in
 the project folder. Forward slashes in a path work on Windows as well as on
 macOS, which is why the guide uses them throughout.
 
-A block part way through a workflow usually depends on the blocks before it in
-the same section, which is where its `scan` or its `peaks` came from. Put the
-blocks of a section into one file, in the order they appear, rather than
-running each alone.
+Every script begins with its settings, under the comment `Edit these lines for
+each new sample. Nothing below needs changing.` Those two or three lines name
+the scan, the label for the figure and the stem the output files are named
+from, and they are the lines to change for a sample of your own. Change them by
+hand rather than with Replace All: the same numbers appear further down the
+script as two theta ranges and intensity thresholds, and replacing those
+changes the analysis without saying so.
+
+The blocks that come after the complete script are the same script taken in
+pieces, and a piece part way through depends on the pieces before it, which is
+where its `scan` or its `peaks` came from. Copy the complete script instead, or
+put the pieces of a section into one file in the order they appear; a piece run
+on its own will stop at a name it has never heard of.
 
 ### Step 7. GSAS-II, if it is needed
 
@@ -436,7 +448,7 @@ print(f"GSAS-II Python: {install.python}")
 print(f"GSAS-II home:   {install.home}")
 ```
 
-It prints the two paths it found, as in the example in Section 5.2 of the user
+It prints the two paths it found, as in the example in Section 5.3 of the user
 guide. If instead it raises `FileNotFoundError`, the message names what was
 missing and both variables, and nothing in Workflow 3 will run until it is
 resolved.
@@ -504,7 +516,7 @@ finish, or was run under a different Python from the one running the script. A `
 means the terminal is not in the project folder, or the scan is not in
 `data/raw` under the name the script uses. An error from the reader means the
 file is not an `.xrdml`; Section 3 of the user guide gives what the reader
-accepts and Section 7 gives what to do with a scan in another format.
+accepts and Section 7.1 gives what to do with a scan in another format.
 
 ### Step 10. VESTA, if structures are to be looked at
 
@@ -539,8 +551,9 @@ and needs GSAS-II from Step 7.
 
 None of it has to be written twice. Once a workflow has been saved as a script
 and has run on one scan, the next dataset needs no new code at all: open the
-script, change the name of the scan file and the sample labels at the top of
-it, change the figure and results names as well if the first set is worth
-keeping, and run the script again. That is the whole of the work for each
+script, change the settings lines at the top of it, which are the scan file,
+the sample label and the stem the figures and results files are named from, and
+run the script again. Nothing below those lines is touched, because every
+output path is built from the stem. That is the whole of the work for each
 further sample, and it is why the guide is written as scripts rather than as
 commands typed one at a time.

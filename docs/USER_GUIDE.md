@@ -11,7 +11,15 @@
 If Python is not yet installed on your machine, start with
 [GETTING_STARTED.md](GETTING_STARTED.md), which installs Python and xrdkit
 on Windows or macOS, sets up the folder layout used below, and shows how to
-run the code blocks in this guide.
+run the scripts in this guide.
+
+Section 2, each of the three workflows, and Section 7 begin with the complete
+script they need, ready to be copied, saved and run: `check_scan.py` in
+Section 2.1, `plot_pattern.py` and `stack_patterns.py` in Section 4.1,
+`make_instprm.py` and `lattice_density.py` in Section 5.2,
+`config/samples.toml` and `refine_rietveld.py` in Section 6.2, and
+`read_xy.py` in Section 7.1. What follows each of those parts is the same
+script explained in pieces, and does not have to be copied at all.
 
 ## 1. Introduction
 
@@ -43,7 +51,7 @@ figures to the path you give, refinement projects and exports to the working
 directory you name in the job. A raw scan can therefore be reprocessed any
 number of times and remains the record of what the instrument measured.
 
-### How the code blocks work
+### 1.1 How the code blocks work
 
 Every block of Python below is part of a script. Put it in a file whose name
 ends in `.py`, save that file in the project folder, and run it with
@@ -51,26 +59,38 @@ ends in `.py`, save that file in the project folder, and run it with
 [GETTING_STARTED.md](GETTING_STARTED.md). Nothing here is meant to be typed at
 a Python prompt.
 
-One line above each block says which file it belongs to. A block that starts a
-new script says so and gives the name to save it under; a block that continues
-the script above says so, which means it goes at the end of that same file and
-is run with everything before it rather than on its own. One block, the
-settings in Section 6.2, is TOML rather than Python, and the line above it says
-so. The blocks with no line above them at all are the printed output of the
-block before, which is what your own run should print in its place.
+Section 2, each of the three workflows, and Section 7 begin with a part headed
+Start here: the complete script. That part gives the whole of the script in one piece,
+ready to be copied in a single action, saved under the name given for it, and
+run. Nothing further in the section has to be copied at all. Everything after
+that part takes the same script in pieces and says what each piece is for, for
+a reader who wants to know why the script is what it is, or who would rather
+build it up a block at a time.
 
-Section 2 and each of the three workflows end with a part headed The complete
-script. Where the blocks have to be assembled it gives the whole of the script
-in one piece, so that it can be copied in a single action; where they are
-already one script it says so rather than repeating them.
+Every script begins with its settings, marked by the comment line `Edit these
+lines for each new sample. Nothing below needs changing.` Those lines hold the
+scan file, the label that goes on the figure, and the stem the figures and the
+results files are named from. They are the only lines that change from one
+sample to the next: everything below them builds its file names from the stem
+with an f string, so a new sample means editing two or three lines and running
+the script again.
 
-The names inside the blocks are this guide's examples and are meant to be
-replaced. `10s.xrdml` is the file name of one scan of one sample here, "Sample
-10" is the label that went with it, and `pattern_10` and the other figure stems
-are what its figures were called. Change every one of them, in every block that
-carries it, to your own file name and your own labels. A script left with the
-names as they stand will look for a scan that is not there, and any figure it
-does write will be named after a sample that is not yours.
+One line of prose above each block says which file it belongs to and what to do
+with it: start a new file of that name, or add the lines to the end of the file
+already started. A block that continues a script is run with everything before
+it in the same file, never on its own. One block, the settings file in
+Section 6.2, is TOML rather than Python, and the line above it says so. The
+blocks with no line above them at all are the printed output of the block
+before, which is what your own run should print in its place.
+
+The names in the settings lines are this guide's examples and are meant to be
+replaced. `10s.xrdml` is the file name of one scan of one sample here,
+`Sample 10` is the label that went with it, and `10` is the stem its figures
+and CSV files were named from. Change those lines, and nothing else. In
+particular, do not use Replace All on a number: `10` is the stem here, and it
+is also the `10.0` that starts a two theta range and the `10.0` of an intensity
+threshold further down the same script, and replacing every one of them
+silently changes the analysis.
 
 ## 2. Data quality, in numbers
 
@@ -110,21 +130,28 @@ the case of an occupancy larger than half its allowed range, is recorded as
 undetermined. An undetermined value is not a result, whatever the fit looks
 like.
 
-### Checking a scan against these criteria
+### 2.1 Start here: the complete script
 
-Read the scan and print what it is: the range covered, the step, the count
-time, the strongest intensity and the median intensity. The median stands in
-for the background, since most of the points in a powder pattern are
-background.
+`check_scan.py` reads a scan and prints what it is: the range covered, the
+step, the count time, the strongest intensity and the median intensity. The
+median stands in for the background, since most of the points in a powder
+pattern are background.
 
-New script, save as `check_scan.py`:
+Save this as `check_scan.py` in the project folder, edit the settings line at
+the top, and run it with `py check_scan.py` on Windows, or
+`python3 check_scan.py` on macOS.
+
+Start a new file named `check_scan.py`.
 
 ```python
 import numpy as np
 
 from xrdkit import read_xrdml
 
-scan = read_xrdml("data/raw/10s.xrdml")
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/10s.xrdml"
+
+scan = read_xrdml(SCAN_FILE)
 print(f"range   {scan.start_angle:.2f} to {scan.end_angle:.2f} degrees")
 print(f"step    {scan.step_size:.4f} degrees")
 print(f"points  {scan.intensity.size}")
@@ -144,17 +171,21 @@ median  998 counts
 peak over median 14
 ```
 
+That one block is the whole of `check_scan.py`. There is nothing further to
+copy and nothing to assemble: the rest of the section reads what it printed
+against the table above.
+
+### 2.2 Reading what it printed
+
 Read against the table, that scan is comfortable for plotting and for phase
 identification, and it reaches nearly to 100 degrees, but its strongest peak is
 below the 10000 counts a Le Bail cell refinement wants and its peak to
 background ratio of 14 is short of 20, so weak secondary phases may not be
 visible in it.
 
-### The complete script
-
-The one block above is the whole of `check_scan.py`, so there is nothing to
-assemble: copy it as it stands, change `data/raw/10s.xrdml` to the name of your
-own scan, and run it.
+`SCAN_FILE` is the only setting the script has, because it writes nothing: no
+figure and no results file, so there is no stem to name them from. Change that
+one line for the next sample and run it again.
 
 ## 3. Files and formats
 
@@ -168,7 +199,7 @@ own scan, and run it.
 | Archimedes density | A number, in g/cm3 | Sample | Your own measurement | Optional, and needed only to quote a relative density against the theoretical one |
 | GSAS-II installation | A separate Python installation | Machine | Installed separately from xrdkit, and pointed at with the environment variables `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME`, or left at `~/gsas2main` | Required for the Rietveld workflow only |
 
-### What the reader accepts
+### 3.1 What the reader accepts
 
 The reader in `xrdkit.io` is `read_xrdml`, and `.xrdml` is the only format it
 accepts. It parses the XML, takes the intensities from the `counts` element or,
@@ -185,9 +216,9 @@ or three column `.xy` or `.xye` files, none for Bruker `.raw` or `.brml`, and
 none for `.gsas` or `.fxye`. A scan in one of those forms has to be converted
 to `.xrdml`, or an `XRDScan` has to be built directly from the columns, since
 it is an ordinary dataclass and every routine downstream of the reader takes an
-`XRDScan` rather than a file path. Section 7 shows how.
+`XRDScan` rather than a file path. Section 7.1 shows how.
 
-### Folder layout
+### 3.2 Folder layout
 
 The recommended layout separates what the instrument produced from everything
 derived from it.
@@ -206,47 +237,190 @@ be versioned without the scans going with it.
 
 ## 4. Workflow 1: plotting a pattern with hkl indices
 
-This workflow takes a scan and produces a figure with the reflections labelled.
-There are two routes through it, a single pattern and a stack of several
-patterns, and they are alternatives rather than steps: the peak finding and
+This workflow takes a scan and produces a figure with the reflections labelled,
+and it is two scripts. `plot_pattern.py` handles one scan: it plots it, finds
+the peaks, indexes them against a cell, writes the hkl labels on and marks
+whatever the cell does not account for. `stack_patterns.py` handles the other
+job, several scans drawn one above another for comparison, with the labels on
+the top trace. The two are alternatives rather than steps: the peak finding and
 the indexing in the middle are the same either way, and only the plotting
-differs.
+differs. With one scan to plot, `plot_pattern.py` on its own is the whole of
+the workflow, and `stack_patterns.py` can be ignored.
 
-### Step 1. Read the scan
+### 4.1 Start here: the complete scripts
+
+Save this as `plot_pattern.py` in the project folder, edit the settings lines
+at the top, and run it with `py plot_pattern.py` on Windows, or
+`python3 plot_pattern.py` on macOS.
+
+The whole of `plot_pattern.py`:
+
+```python
+from xrdkit import (
+    TTB_CELL,
+    annotate_hkl,
+    apply_style,
+    exclude_kalpha2,
+    find_peaks,
+    index_and_refine,
+    index_peaks,
+    indexed_to_csv,
+    indexing_summary,
+    mark_peaks,
+    peaks_to_csv,
+    plot_pattern,
+    read_xrdml,
+    save_figure,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/10s.xrdml"
+SAMPLE = "Sample 10"
+STEM = "10"
+
+apply_style()
+scan = read_xrdml(SCAN_FILE)
+
+fig, ax = plot_pattern(scan, scale="linear", colour="black")
+ax.set_title(f"{SAMPLE}, as measured")
+print(save_figure(fig, f"figures/pattern_{STEM}"))
+
+fig, ax = plot_pattern(scan, scale="sqrt")
+print(save_figure(fig, f"figures/pattern_{STEM}_sqrt", formats=("png", "pdf"), dpi=600))
+
+peaks = find_peaks(scan, min_prominence=0.02, two_theta_range=(10.0, 80.0))
+clean = exclude_kalpha2(peaks)
+peaks_to_csv(clean, f"results/peaks_{STEM}.csv")
+print(f"{len(peaks)} peaks found, {len(clean)} after removing K alpha 2 satellites")
+
+indexed, fit = index_and_refine(
+    clean, start_cell=TTB_CELL, wavelength=scan.wavelength, space_group="P4bm"
+)
+indexed_to_csv(indexed, f"results/indexed_{STEM}.csv")
+print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
+print(f"{fit.n_peaks} peaks used, rms {fit.rms_two_theta:.4f} degrees")
+print(f"zero offset {fit.zero_offset:.3f} degrees")
+print(indexing_summary(indexed))
+
+fig, ax = plot_pattern(scan, scale="sqrt")
+ax.set_xlim(10.0, 80.0)
+labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
+print(save_figure(fig, f"figures/pattern_hkl_{STEM}"))
+print(f"{len(labels)} labels written")
+
+fig, ax = plot_pattern(scan, scale="sqrt", normalise=True)
+ax.set_xlim(10.0, 80.0)
+ax.set_ylim(0.0, 1.35)
+labels = annotate_hkl(ax, indexed, y=1.05, min_relative_intensity=10.0, rotation=90)
+print(save_figure(fig, f"figures/pattern_hkl_row_{STEM}"))
+
+unindexed = [entry.peak.two_theta for entry in indexed if not entry.is_indexed]
+print(f"{len(unindexed)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
+
+tight = index_peaks(
+    clean, fit.cell, scan.wavelength, tolerance=0.02, zero_offset=fit.zero_offset
+)
+unindexed = [entry.peak.two_theta for entry in tight if not entry.is_indexed]
+
+fig, ax = plot_pattern(scan, scale="sqrt", normalise=True)
+ax.set_xlim(10.0, 80.0)
+ax.set_ylim(0.0, 1.35)
+annotate_hkl(ax, tight, y=1.02, min_relative_intensity=10.0)
+markers = mark_peaks(ax, unindexed, y=1.02)
+print(save_figure(fig, f"figures/pattern_star_{STEM}"))
+print(f"{len(markers)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
+```
+
+Save this as `stack_patterns.py` in the project folder, edit the settings lines
+at the top, and run it with `py stack_patterns.py` on Windows, or
+`python3 stack_patterns.py` on macOS. It is needed only when several scans are
+to be compared in one figure; skip it otherwise.
+
+The whole of `stack_patterns.py`:
+
+```python
+from xrdkit import (
+    TTB_CELL,
+    annotate_hkl,
+    apply_style,
+    exclude_kalpha2,
+    find_peaks,
+    index_and_refine,
+    plot_stacked,
+    read_xrdml,
+    save_figure,
+)
+
+# Edit these lines for each new comparison. Nothing below needs changing.
+SCAN_FILES = ["data/raw/10s.xrdml", "data/raw/12s.xrdml"]
+LABELS = ["x = 0.10", "x = 0.12"]
+STEM = "10_12"
+
+apply_style()
+scans = [read_xrdml(path) for path in SCAN_FILES]
+fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt", offset=None)
+print(save_figure(fig, f"figures/stack_{STEM}"))
+
+top_scan = scans[-1]
+top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
+top_indexed, top_fit = index_and_refine(
+    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
+)
+
+fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt")
+ax.set_xlim(10.0, 80.0)
+top = annotate_hkl(ax, top_indexed, line=lines[-1], min_relative_intensity=10.0)
+print(save_figure(fig, f"figures/stack_hkl_{STEM}"))
+print(f"a = {top_fit.cell.a:.4f}, c = {top_fit.cell.c:.4f} angstrom, {len(top)} labels")
+```
+
+The rest of the section takes those same two scripts in pieces and says what
+each piece is for. None of the pieces needs to be typed again: they are the
+lines of the two blocks above, in the order they appear there.
+
+### 4.2 Reading the scan
 
 Reading gives an `XRDScan`, which carries the two theta and intensity arrays
-and the wavelength that every later step needs.
+and the wavelength that every later step needs. The three settings at the top
+of the block are the whole of what changes from one sample to the next: the
+scan file, the label that goes on the figure, and the stem the figures and the
+CSV files are named from.
 
-New script, save as `plot_pattern.py`:
+Start a new file named `plot_pattern.py`.
 
 ```python
 from xrdkit import apply_style, read_xrdml
 
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/10s.xrdml"
+SAMPLE = "Sample 10"
+STEM = "10"
+
 apply_style()
-scan = read_xrdml("data/raw/10s.xrdml")
+scan = read_xrdml(SCAN_FILE)
 ```
 
 `apply_style` sets the matplotlib rcParams to a clean single column journal
 style. Call it once, before any plotting.
 
-### Step 2a. Plot a single pattern
+### 4.3 Plotting a single pattern
 
 `plot_pattern` draws one scan and returns the figure and the axes, so that a
 title, the limits, or anything else can be set before the figure is saved. A
 linear scale shows the strong reflections in proportion; a square root scale
 brings up the weak ones, which is what a phase check wants.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import plot_pattern, save_figure
 
 fig, ax = plot_pattern(scan, scale="linear", colour="black")
-ax.set_title("Sample 10, as measured")
-print(save_figure(fig, "figures/pattern_10"))
+ax.set_title(f"{SAMPLE}, as measured")
+print(save_figure(fig, f"figures/pattern_{STEM}"))
 
 fig, ax = plot_pattern(scan, scale="sqrt")
-print(save_figure(fig, "figures/pattern_10_sqrt", formats=("png", "pdf"), dpi=600))
+print(save_figure(fig, f"figures/pattern_{STEM}_sqrt", formats=("png", "pdf"), dpi=600))
 ```
 
 ```
@@ -259,39 +433,11 @@ pdf by default, at 300 dpi by default. It returns the list of paths written,
 which is why every call to it here is wrapped in `print`: the files a script
 wrote are then named in the terminal, and there is no doubt about which folder
 they went to. The paths print as `WindowsPath` on Windows, as here, and as
-`PosixPath` on macOS.
+`PosixPath` on macOS. Every one of those names is built from `STEM`, so
+changing that one setting sends the whole run to a fresh set of files and
+leaves the last sample's figures where they are.
 
-### Step 2b. Plot several scans stacked
-
-`plot_stacked` draws a list of scans one above another with a constant offset,
-each labelled at its upper right. The traces are normalised by default, so that
-samples measured for different times can be compared. It returns four things:
-the figure, the axes, the vertical base of each slot, and the line drawn for
-each scan. The bases and the lines are what the annotation step needs in order
-to put labels against a chosen trace.
-
-Continues `plot_pattern.py`:
-
-```python
-from xrdkit import plot_stacked, save_figure
-
-scans = [read_xrdml(path) for path in ("data/raw/10s.xrdml", "data/raw/12s.xrdml")]
-fig, ax, bases, lines = plot_stacked(
-    scans, labels=["x = 0.10", "x = 0.12"], scale="sqrt", offset=None
-)
-print(save_figure(fig, "figures/stack"))
-```
-
-```
-[WindowsPath('figures/stack.png'), WindowsPath('figures/stack.pdf')]
-```
-
-With `offset=None` the spacing is 1.2 times the tallest scaled trace, which
-keeps the tallest peak of one pattern clear of the pattern above it. Pass a
-number to set the spacing yourself. For the two scans above, the bases came
-back as `[0.0, 1.2]`.
-
-### Step 3. Find the peaks
+### 4.4 Finding the peaks
 
 `find_peaks` locates the reflections and returns them in two theta order, each
 with its position, intensity, prominence, full width at half maximum, d spacing
@@ -304,14 +450,14 @@ that they can be removed when it suits. Remove them before indexing: a
 satellite sits at the position its parent's d spacing gives at the longer
 wavelength, so indexing it against the cell is meaningless.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import exclude_kalpha2, find_peaks, peaks_to_csv
 
 peaks = find_peaks(scan, min_prominence=0.02, two_theta_range=(10.0, 80.0))
 clean = exclude_kalpha2(peaks)
-peaks_to_csv(clean, "results/peaks_10.csv")
+peaks_to_csv(clean, f"results/peaks_{STEM}.csv")
 print(f"{len(peaks)} peaks found, {len(clean)} after removing K alpha 2 satellites")
 ```
 
@@ -323,7 +469,13 @@ print(f"{len(peaks)} peaks found, {len(clean)} after removing K alpha 2 satellit
 against the strongest of the survivors, so the strongest is again 100. Below
 about 50 degrees the doublet is not resolved and there is nothing to flag.
 
-### Step 4. Index against a known cell
+The `10.0` and the `80.0` in `two_theta_range` belong to the analysis and not
+to the settings. They say what part of the pattern is being examined, they are
+the same for every sample measured the same way, and they have nothing to do
+with the `10` that happens to be the stem of this sample. That is the reason
+the settings are edited by hand rather than with Replace All.
+
+### 4.5 Indexing against a known cell
 
 `index_and_refine` assigns a reflection of the cell to each peak and refines
 the cell as it goes. It works in cycles: the first indexes only the low angle
@@ -337,7 +489,7 @@ group whose reflection conditions it knows; pass `space_group=None` to apply
 none. `TTB_CELL` is the tetragonal tungsten bronze starting cell, a = 12.45 and
 c = 3.94 angstrom.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import TTB_CELL, index_and_refine, indexed_to_csv, indexing_summary
@@ -345,7 +497,7 @@ from xrdkit import TTB_CELL, index_and_refine, indexed_to_csv, indexing_summary
 indexed, fit = index_and_refine(
     clean, start_cell=TTB_CELL, wavelength=scan.wavelength, space_group="P4bm"
 )
-indexed_to_csv(indexed, "results/indexed_10.csv")
+indexed_to_csv(indexed, f"results/indexed_{STEM}.csv")
 print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
 print(f"{fit.n_peaks} peaks used, rms {fit.rms_two_theta:.4f} degrees")
 print(f"zero offset {fit.zero_offset:.3f} degrees")
@@ -365,7 +517,7 @@ here is a linear least squares on the indexed peaks alone, and the zero offset
 it reports is the one that indexed the most peaks rather than one refined
 alongside the cell.
 
-### Step 5a. Label a single pattern
+### 4.6 Labelling a single pattern
 
 `annotate_hkl` writes an hkl label above each indexed peak. Given the line of
 the trace, each label rides on top of its own peak, a couple of points above
@@ -374,20 +526,20 @@ the pattern rises and falls. Set the figure size and the x limits before
 calling it, because it measures the rendered labels against the geometry as it
 stands.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
-from xrdkit import annotate_hkl, plot_pattern, save_figure
+from xrdkit import annotate_hkl
 
 fig, ax = plot_pattern(scan, scale="sqrt")
 ax.set_xlim(10.0, 80.0)
 labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
-print(save_figure(fig, "figures/pattern_hkl"))
+print(save_figure(fig, f"figures/pattern_hkl_{STEM}"))
 print(f"{len(labels)} labels written")
 ```
 
 ```
-[WindowsPath('figures/pattern_hkl.png'), WindowsPath('figures/pattern_hkl.pdf')]
+[WindowsPath('figures/pattern_hkl_10.png'), WindowsPath('figures/pattern_hkl_10.pdf')]
 20 labels written
 ```
 
@@ -396,57 +548,21 @@ normalised trace with room left above it. Labels are placed strongest first,
 and a weaker peak that would collide with one already placed keeps no label, so
 in a crowded stretch it is the weak reflections that lose theirs.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 fig, ax = plot_pattern(scan, scale="sqrt", normalise=True)
 ax.set_xlim(10.0, 80.0)
 ax.set_ylim(0.0, 1.35)
 labels = annotate_hkl(ax, indexed, y=1.05, min_relative_intensity=10.0, rotation=90)
-print(save_figure(fig, "figures/pattern_hkl_row"))
+print(save_figure(fig, f"figures/pattern_hkl_row_{STEM}"))
 ```
 
 ```
-[WindowsPath('figures/pattern_hkl_row.png'), WindowsPath('figures/pattern_hkl_row.pdf')]
+[WindowsPath('figures/pattern_hkl_row_10.png'), WindowsPath('figures/pattern_hkl_row_10.pdf')]
 ```
 
-### Step 5b. Label the top trace of a stack
-
-In a stack the labels normally go on the top trace only, which is enough to
-tell the reader what every trace below shows. Pass the line of that trace as
-`line`, and index the peaks of that same scan, not of another one: a label
-stands over an observed position, so it belongs to the pattern it was found in.
-
-Continues `plot_pattern.py`:
-
-```python
-from xrdkit import annotate_hkl, plot_stacked, save_figure
-
-top_scan = scans[-1]
-top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
-top_indexed, top_fit = index_and_refine(
-    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
-)
-
-fig, ax, bases, lines = plot_stacked(
-    scans, labels=["x = 0.10", "x = 0.12"], scale="sqrt"
-)
-ax.set_xlim(10.0, 80.0)
-top = annotate_hkl(ax, top_indexed, line=lines[-1], min_relative_intensity=10.0)
-print(save_figure(fig, "figures/stack_hkl"))
-print(f"a = {top_fit.cell.a:.4f}, c = {top_fit.cell.c:.4f} angstrom, {len(top)} labels")
-```
-
-```
-[WindowsPath('figures/stack_hkl.png'), WindowsPath('figures/stack_hkl.pdf')]
-a = 12.4707, c = 3.9268 angstrom, 19 labels
-```
-
-To put the labels in a row above a chosen trace instead of on it, pass that
-trace's base from `bases` as `y`, raised by enough to clear its tallest peak,
-and leave `line` out.
-
-### Step 6. Mark the peaks the cell does not account for
+### 4.7 Marking the peaks the cell does not account for
 
 A peak that matched no reflection carries no hkl, and is exactly the peak a
 reader should be looking at. `mark_peaks` writes an asterisk above each
@@ -456,7 +572,7 @@ A peak counts as indexed if any reflection falls within the tolerance, and the
 tolerance `index_and_refine` works at is generous enough that a pattern of a
 single well behaved phase often leaves nothing unindexed at all.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 unindexed = [entry.peak.two_theta for entry in indexed if not entry.is_indexed]
@@ -473,7 +589,7 @@ accounts for, index again with `index_peaks` against the refined cell at a
 tighter tolerance, passing the zero offset the refinement found, and mark what
 is left over.
 
-Continues `plot_pattern.py`:
+Continues `plot_pattern.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import index_peaks, mark_peaks
@@ -488,16 +604,98 @@ ax.set_xlim(10.0, 80.0)
 ax.set_ylim(0.0, 1.35)
 annotate_hkl(ax, tight, y=1.02, min_relative_intensity=10.0)
 markers = mark_peaks(ax, unindexed, y=1.02)
-print(save_figure(fig, "figures/pattern_star"))
+print(save_figure(fig, f"figures/pattern_star_{STEM}"))
 print(f"{len(markers)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
 ```
 
 ```
-[WindowsPath('figures/pattern_star.png'), WindowsPath('figures/pattern_star.pdf')]
+[WindowsPath('figures/pattern_star_10.png'), WindowsPath('figures/pattern_star_10.pdf')]
 1 peaks unaccounted for: [26.921]
 ```
 
-### The tunables
+That is the end of `plot_pattern.py`. The two subsections that follow belong to
+the other script, and are needed only when several scans are to be compared in
+one figure.
+
+### 4.8 Stacking several scans
+
+`plot_stacked` draws a list of scans one above another with a constant offset,
+each labelled at its upper right. The traces are normalised by default, so that
+samples measured for different times can be compared. It returns four things:
+the figure, the axes, the vertical base of each slot, and the line drawn for
+each scan. The bases and the lines are what the annotation step needs in order
+to put labels against a chosen trace.
+
+The settings here are two lists rather than one file name, and a stem for the
+comparison as a whole. The two lists must be the same length and in the same
+order, because the label at each position names the scan at that position.
+
+Start a new file named `stack_patterns.py`.
+
+```python
+from xrdkit import apply_style, plot_stacked, read_xrdml, save_figure
+
+# Edit these lines for each new comparison. Nothing below needs changing.
+SCAN_FILES = ["data/raw/10s.xrdml", "data/raw/12s.xrdml"]
+LABELS = ["x = 0.10", "x = 0.12"]
+STEM = "10_12"
+
+apply_style()
+scans = [read_xrdml(path) for path in SCAN_FILES]
+fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt", offset=None)
+print(save_figure(fig, f"figures/stack_{STEM}"))
+```
+
+```
+[WindowsPath('figures/stack_10_12.png'), WindowsPath('figures/stack_10_12.pdf')]
+```
+
+With `offset=None` the spacing is 1.2 times the tallest scaled trace, which
+keeps the tallest peak of one pattern clear of the pattern above it. Pass a
+number to set the spacing yourself. For the two scans above, the bases came
+back as `[0.0, 1.2]`.
+
+### 4.9 Labelling the top trace of a stack
+
+In a stack the labels normally go on the top trace only, which is enough to
+tell the reader what every trace below shows. Pass the line of that trace as
+`line`, and index the peaks of that same scan, not of another one: a label
+stands over an observed position, so it belongs to the pattern it was found in.
+
+Continues `stack_patterns.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit import (
+    TTB_CELL,
+    annotate_hkl,
+    exclude_kalpha2,
+    find_peaks,
+    index_and_refine,
+)
+
+top_scan = scans[-1]
+top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
+top_indexed, top_fit = index_and_refine(
+    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
+)
+
+fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt")
+ax.set_xlim(10.0, 80.0)
+top = annotate_hkl(ax, top_indexed, line=lines[-1], min_relative_intensity=10.0)
+print(save_figure(fig, f"figures/stack_hkl_{STEM}"))
+print(f"a = {top_fit.cell.a:.4f}, c = {top_fit.cell.c:.4f} angstrom, {len(top)} labels")
+```
+
+```
+[WindowsPath('figures/stack_hkl_10_12.png'), WindowsPath('figures/stack_hkl_10_12.pdf')]
+a = 12.4707, c = 3.9268 angstrom, 19 labels
+```
+
+To put the labels in a row above a chosen trace instead of on it, pass that
+trace's base from `bases` as `y`, raised by enough to clear its tallest peak,
+and leave `line` out.
+
+### 4.10 The tunables
 
 | Setting | Where | What it does |
 | --- | --- | --- |
@@ -511,7 +709,7 @@ print(f"{len(markers)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}
 | `ambiguous` | `annotate_hkl` | What to do with a peak that matched more than one reflection: `"first"` labels the assigned one, `"all"` joins every candidate with a solidus, `"skip"` leaves it unlabelled |
 | `formats`, `dpi` | `save_figure` | Which files to write, and at what resolution. `("png", "pdf")` at 300 dpi by default |
 
-### Reading the unindexed peaks
+### 4.11 Reading the unindexed peaks
 
 An asterisk is a question, not an answer. There are four common explanations,
 and they are told apart by where the peak sits and how strong it is.
@@ -535,121 +733,26 @@ intensity. These should have been removed by `exclude_kalpha2` before indexing;
 one that survives is a sign that the flagging tolerance or the intensity range
 did not suit the pattern, rather than a sign of anything wrong with the sample.
 
-### The complete script
+### 4.12 Reusing the scripts
 
-The blocks of Steps 1 to 6 in one piece, with the imports of each gathered at
-the top, which is how a script of this kind is usually written. It draws both
-routes, the single pattern and the stack, because the guide showed both; delete
-whichever of the two is not wanted.
+The next sample needs no new code. In `plot_pattern.py` the three settings
+lines at the top are the whole of what changes: `SCAN_FILE` becomes the path to
+the new scan, `SAMPLE` becomes the label that goes on the figure, and `STEM`
+becomes a short tag for the new sample. Every figure and every CSV file below
+them is named from `STEM` with an f string, so the new run writes a fresh set
+of files and leaves the last sample's alone. In `stack_patterns.py` the same is
+true of `SCAN_FILES`, `LABELS` and `STEM`.
 
-The whole of `plot_pattern.py`:
-
-```python
-from xrdkit import (
-    TTB_CELL,
-    annotate_hkl,
-    apply_style,
-    exclude_kalpha2,
-    find_peaks,
-    index_and_refine,
-    index_peaks,
-    indexed_to_csv,
-    indexing_summary,
-    mark_peaks,
-    peaks_to_csv,
-    plot_pattern,
-    plot_stacked,
-    read_xrdml,
-    save_figure,
-)
-
-apply_style()
-scan = read_xrdml("data/raw/10s.xrdml")
-
-fig, ax = plot_pattern(scan, scale="linear", colour="black")
-ax.set_title("Sample 10, as measured")
-print(save_figure(fig, "figures/pattern_10"))
-
-fig, ax = plot_pattern(scan, scale="sqrt")
-print(save_figure(fig, "figures/pattern_10_sqrt", formats=("png", "pdf"), dpi=600))
-
-scans = [read_xrdml(path) for path in ("data/raw/10s.xrdml", "data/raw/12s.xrdml")]
-fig, ax, bases, lines = plot_stacked(
-    scans, labels=["x = 0.10", "x = 0.12"], scale="sqrt", offset=None
-)
-print(save_figure(fig, "figures/stack"))
-
-peaks = find_peaks(scan, min_prominence=0.02, two_theta_range=(10.0, 80.0))
-clean = exclude_kalpha2(peaks)
-peaks_to_csv(clean, "results/peaks_10.csv")
-print(f"{len(peaks)} peaks found, {len(clean)} after removing K alpha 2 satellites")
-
-indexed, fit = index_and_refine(
-    clean, start_cell=TTB_CELL, wavelength=scan.wavelength, space_group="P4bm"
-)
-indexed_to_csv(indexed, "results/indexed_10.csv")
-print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
-print(f"{fit.n_peaks} peaks used, rms {fit.rms_two_theta:.4f} degrees")
-print(f"zero offset {fit.zero_offset:.3f} degrees")
-print(indexing_summary(indexed))
-
-fig, ax = plot_pattern(scan, scale="sqrt")
-ax.set_xlim(10.0, 80.0)
-labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
-print(save_figure(fig, "figures/pattern_hkl"))
-print(f"{len(labels)} labels written")
-
-fig, ax = plot_pattern(scan, scale="sqrt", normalise=True)
-ax.set_xlim(10.0, 80.0)
-ax.set_ylim(0.0, 1.35)
-labels = annotate_hkl(ax, indexed, y=1.05, min_relative_intensity=10.0, rotation=90)
-print(save_figure(fig, "figures/pattern_hkl_row"))
-
-top_scan = scans[-1]
-top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
-top_indexed, top_fit = index_and_refine(
-    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
-)
-
-fig, ax, bases, lines = plot_stacked(
-    scans, labels=["x = 0.10", "x = 0.12"], scale="sqrt"
-)
-ax.set_xlim(10.0, 80.0)
-top = annotate_hkl(ax, top_indexed, line=lines[-1], min_relative_intensity=10.0)
-print(save_figure(fig, "figures/stack_hkl"))
-print(f"a = {top_fit.cell.a:.4f}, c = {top_fit.cell.c:.4f} angstrom, {len(top)} labels")
-
-unindexed = [entry.peak.two_theta for entry in indexed if not entry.is_indexed]
-print(f"{len(unindexed)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
-
-tight = index_peaks(
-    clean, fit.cell, scan.wavelength, tolerance=0.02, zero_offset=fit.zero_offset
-)
-unindexed = [entry.peak.two_theta for entry in tight if not entry.is_indexed]
-
-fig, ax = plot_pattern(scan, scale="sqrt", normalise=True)
-ax.set_xlim(10.0, 80.0)
-ax.set_ylim(0.0, 1.35)
-annotate_hkl(ax, tight, y=1.02, min_relative_intensity=10.0)
-markers = mark_peaks(ax, unindexed, y=1.02)
-print(save_figure(fig, "figures/pattern_star"))
-print(f"{len(markers)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
-```
-
-Running it prints every line the sections above print, in the order they appear
-there.
-
-### Reusing the scripts
-
-The next sample needs no new code. Three things in `plot_pattern.py` change and
-nothing else does. The scan file names, `data/raw/10s.xrdml` and
-`data/raw/12s.xrdml`, become the names of the new scans. The labels, which are
-the title `Sample 10, as measured` and the stack labels `x = 0.10` and
-`x = 0.12`, become the ones that go with them. The figure and results stems,
-`figures/pattern_10` and the rest, are changed as well, so that the new run
-does not write over the figures and the CSV files of the last one. All three
-sit in quoted text near the top of the block they belong to. Change them, save
-the file, and run the script again.
+Edit those lines by hand, and only those lines. Do not use Replace All. The
+numbers in the settings are also numbers in the analysis: `10` is the stem of
+this sample, and it is also the start of the two theta range in
+`two_theta_range=(10.0, 80.0)` and `ax.set_xlim(10.0, 80.0)`, the threshold in
+`min_relative_intensity=10.0`, and part of `1.02`, `1.05` and `1.35`. Replacing
+every `10` in the file with `12` changes the range the peaks are found over,
+the intensity a label has to reach before it is written, and the height the
+labels sit at, so the figure that comes out is not the figure that was asked
+for and nothing says so. Change the two or three lines at the top, save the
+file, and run the script again.
 
 ## 5. Workflow 2: lattice parameters and theoretical density
 
@@ -676,7 +779,254 @@ compute a density from. Take Route A when the answer is a trend; take Route B
 when the answer is a number that goes in a table, and always when a density
 follows from it.
 
-### 5.2 One time setup for Route B
+### 5.2 Start here: the complete scripts
+
+Workflow 2 is two scripts. `make_instprm.py` measures the diffractometer
+against a standard and writes the instrument parameter file, and is run once
+for the instrument rather than once for each sample; it needs GSAS-II, and
+Section 5.3 says how to install it and point the kit at it.
+`lattice_density.py` is the work for one sample, and reads the instrument
+parameter file the first script wrote. Run them in that order the first time,
+and only the second one thereafter.
+
+Save this as `make_instprm.py` in the project folder, edit the settings lines
+at the top, and run it with `py make_instprm.py` on Windows, or
+`python3 make_instprm.py` on macOS. It takes a few seconds.
+
+The whole of `make_instprm.py`:
+
+```python
+import shutil
+from pathlib import Path
+
+import numpy as np
+
+from xrdkit import (
+    build_refine_job,
+    exclude_kalpha2,
+    find_gsas2,
+    find_peaks,
+    fit_caglioti,
+    fit_profile,
+    read_xrdml,
+    run_job,
+    standard_stages,
+    write_instprm,
+)
+
+# Edit these lines for each new instrument. Nothing below needs changing.
+STANDARD_FILE = "data/standards/lab6.xrdml"
+STANDARD_CIF = "cifs/lab6.cif"
+PHASE = "LaB6"
+STANDARD_A = 4.156826
+STEM = "aeris"
+
+install = find_gsas2()
+print(f"GSAS-II Python: {install.python}")
+print(f"GSAS-II home:   {install.home}")
+
+standard = read_xrdml(STANDARD_FILE)
+peaks = exclude_kalpha2(find_peaks(standard, two_theta_range=(10.0, 98.0)))
+
+angles, widths, weights = [], [], []
+for peak in peaks:
+    profile = fit_profile(
+        standard.two_theta, standard.intensity, peak.two_theta, peak.fwhm
+    )
+    if profile.converged:
+        angles.append(profile.two_theta)
+        widths.append(profile.fwhm)
+        weights.append(1.0 / profile.esd_fwhm**2)
+
+caglioti = fit_caglioti(np.array(angles), np.array(widths), np.array(weights))
+write_instprm(f"data/standards/{STEM}_start.instprm", caglioti)
+print(f"{caglioti.n_peaks} reflections fitted")
+print(
+    f"U = {caglioti.u:.4f}, V = {caglioti.v:.4f}, W = {caglioti.w:.4f} degrees squared"
+)
+print(f"rms of the width fit {caglioti.rms:.5f} degrees")
+
+stages = [stage for stage in standard_stages() if stage["name"] != "cell"]
+print([stage["name"] for stage in stages])
+
+job = build_refine_job(
+    Path(f"results/instrument/{STEM}.gpx").resolve(),
+    stages,
+    data_file=Path(STANDARD_FILE).resolve(),
+    instprm=Path(f"data/standards/{STEM}_start.instprm").resolve(),
+    phases=[
+        {
+            "cif": Path(STANDARD_CIF).resolve(),
+            "name": PHASE,
+            "cell": [STANDARD_A] * 3 + [90.0] * 3,
+        }
+    ],
+    limits=(10.0, 98.0),
+    cycles=10,
+    broadening={PHASE: {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
+    export_prefix=Path(f"results/instrument/{STEM}").resolve(),
+)
+result = run_job(job, f"results/instrument/gsas2_work/{STEM}")
+
+last = result["stages"][-1]
+print(f"Rwp {last['rwp']:.3f} per cent, GOF {last['gof']:.3f}")
+for key in ("Zero", "U", "V", "W", "X", "Y", "SH/L"):
+    entry = result["final"]["instrument"][key]
+    print(f"  {key:5s} {entry['value']:11.6g}  esd {entry['esd']:.3g}")
+shutil.copyfile(result["exports"]["instprm"], f"data/standards/{STEM}.instprm")
+```
+
+Save this as `lattice_density.py` in the project folder, edit the settings
+lines at the top, and run it with `py lattice_density.py` on Windows, or
+`python3 lattice_density.py` on macOS. It takes about two minutes, nearly all
+of it in the Le Bail refinement.
+
+The whole of `lattice_density.py`:
+
+```python
+import math
+from pathlib import Path
+
+from xrdkit import (
+    TTB_CELL,
+    TetragonalCell,
+    apply_style,
+    build_refine_job,
+    cell_volume,
+    exclude_kalpha2,
+    find_peaks,
+    formula_mass,
+    index_and_refine,
+    plot_rietveld,
+    read_xrdml,
+    refine_lattice,
+    run_job,
+    save_figure,
+    theoretical_density,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/sample.xrdml"
+STEM = "x10"
+COMPOSITION = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
+FORMULA_UNITS = 5
+ARCHIMEDES, ESD_ARCHIMEDES = 5.15, 0.02
+INSTPRM = "data/standards/aeris.instprm"
+PHASE_CIF = "cifs/ttb.cif"
+PHASE = "TTB"
+
+scan = read_xrdml(SCAN_FILE)
+clean = exclude_kalpha2(find_peaks(scan, two_theta_range=(10.0, 80.0)))
+indexed, cell_fit = index_and_refine(
+    clean, start_cell=TTB_CELL, wavelength=scan.wavelength
+)
+
+held = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=False)
+refined = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=True)
+
+for name, fit in (("zero held at zero", held), ("zero refined", refined)):
+    print(f"{name}:")
+    print(f"  a = {fit.a:.4f} +/- {fit.esd_a:.4f} angstrom")
+    print(f"  c = {fit.c:.4f} +/- {fit.esd_c:.4f} angstrom")
+    print(f"  rms {fit.rms_two_theta:.4f} degrees on {fit.n_peaks} peaks")
+print(
+    f"zero {refined.zero:.4f} +/- {refined.esd_zero:.4f} degrees, "
+    f"{refined.zero / refined.esd_zero:.0f} times its esd"
+)
+
+stages = [
+    {
+        "name": "background and scale",
+        "background": {"type": "chebyschev-1", "terms": 6},
+        "scale": True,
+        "le_bail": True,
+    },
+    {"name": "zero", "zero": True},
+    {"name": "cell", "cell": True},
+    {"name": "size", "size": True},
+]
+
+job = build_refine_job(
+    Path(f"results/lebail/{STEM}.gpx").resolve(),
+    stages,
+    data_file=Path(SCAN_FILE).resolve(),
+    instprm=Path(INSTPRM).resolve(),
+    phases=[
+        {
+            "cif": Path(PHASE_CIF).resolve(),
+            "name": PHASE,
+            "cell": [refined.a, refined.a, refined.c, 90.0, 90.0, 90.0],
+        }
+    ],
+    limits=(10.0, 98.0),
+    cycles=10,
+    le_bail_cycles=10,
+    max_passes=60,
+    pass_tolerance=0.1,
+    broadening={PHASE: {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
+    export_prefix=Path(f"results/lebail/{STEM}").resolve(),
+)
+result = run_job(job, f"results/lebail/gsas2_work/{STEM}")
+print("completed:", result["completed"], " model from:", result["final_from"])
+
+for stage in result["stages"]:
+    print(
+        f"{stage['name']:22s} Rwp {stage['rwp']:6.3f}  GOF {stage['gof']:5.3f}  "
+        f"variables {stage['n_variables']:2d}  passes {len(stage['passes']):2d}  "
+        f"{stage['status']}"
+    )
+
+phase = result["final"]["phases"][0]
+a, c = phase["cell"]["length_a"], phase["cell"]["length_c"]
+esd_a, esd_c = phase["cell_esd"]["length_a"], phase["cell_esd"]["length_c"]
+size = phase["size"]
+print(f"a = {a:.4f} +/- {esd_a:.4f} angstrom")
+print(f"c = {c:.4f} +/- {esd_c:.4f} angstrom")
+print(
+    f"V = {phase['cell']['volume']:.3f} +/- {phase['cell_esd']['volume']:.3f} cubic angstrom"
+)
+print(f"crystallite size {size['value'] * 1000:.0f} +/- {size['esd'] * 1000:.0f} nm")
+
+apply_style()
+fig, ax = plot_rietveld(
+    result["exports"]["histogram"],
+    result["exports"]["reflections"],
+    sqrt_scale=True,
+    result=result,
+)
+print(save_figure(fig, f"figures/lebail_fit_{STEM}"))
+
+cell = TetragonalCell(a=a, c=c)
+volume, esd_volume = cell_volume(cell, esd_a, esd_c)
+mass = formula_mass(COMPOSITION)
+density, esd_density = theoretical_density(
+    COMPOSITION, FORMULA_UNITS, volume, esd_volume
+)
+print(f"M = {mass:.3f} g/mol per formula unit")
+print(f"V = {volume:.3f} +/- {esd_volume:.3f} cubic angstrom")
+print(f"theoretical density {density:.4f} +/- {esd_density:.4f} g/cm3")
+
+relative = 100.0 * ARCHIMEDES / density
+uncertainty = relative * math.sqrt(
+    (2.0 * esd_a / a) ** 2 + (esd_c / c) ** 2 + (ESD_ARCHIMEDES / ARCHIMEDES) ** 2
+)
+print(f"relative density {relative:.2f} +/- {uncertainty:.2f} per cent")
+print(f"  2 esd_a / a      {2.0 * esd_a / a:.2e}")
+print(f"  esd_c / c        {esd_c / c:.2e}")
+print(f"  esd_rho / rho    {ESD_ARCHIMEDES / ARCHIMEDES:.2e}")
+```
+
+Route A alone, which is the lattice parameters without GSAS-II and without a
+density, is the top of `lattice_density.py`: the settings, and everything down
+to the line that prints the zero point and its esd. Cut the script there and
+neither GSAS-II nor `make_instprm.py` is needed at all.
+
+The rest of the section takes both scripts in pieces and says what each piece
+is for and how to read what it prints. None of the pieces needs to be typed
+again: they are the lines of the two blocks above, in the order they appear
+there.
+
+### 5.3 One time setup for Route B
 
 Route B needs GSAS-II installed and an instrument parameter file for the
 diffractometer. Both are done once, not once per sample.
@@ -688,10 +1038,22 @@ it with the environment variables `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME`,
 or install it at `~/gsas2main`, which is where the kit looks by default. Check
 that it is found before anything else.
 
-New script, save as `make_instprm.py`:
+The settings of this script name the standard rather than a sample: the scan of
+the standard, its CIF, the phase name to give it, its certified lattice
+parameter, and a stem for the instrument, which is what the instrument
+parameter file will be called.
+
+Start a new file named `make_instprm.py`.
 
 ```python
 from xrdkit import find_gsas2
+
+# Edit these lines for each new instrument. Nothing below needs changing.
+STANDARD_FILE = "data/standards/lab6.xrdml"
+STANDARD_CIF = "cifs/lab6.cif"
+PHASE = "LaB6"
+STANDARD_A = 4.156826
+STEM = "aeris"
 
 install = find_gsas2()
 print(f"GSAS-II Python: {install.python}")
@@ -710,7 +1072,7 @@ is written from a Caglioti fit to the measured widths of the standard, which
 the LaB6 scan as a K alpha doublet with `fit_profile`, weight the widths by
 their esds, and fit U, V and W with `fit_caglioti`.
 
-Continues `make_instprm.py`:
+Continues `make_instprm.py`. Add these lines at the end of the file.
 
 ```python
 import numpy as np
@@ -724,7 +1086,7 @@ from xrdkit import (
     write_instprm,
 )
 
-standard = read_xrdml("data/standards/lab6.xrdml")
+standard = read_xrdml(STANDARD_FILE)
 peaks = exclude_kalpha2(find_peaks(standard, two_theta_range=(10.0, 98.0)))
 
 angles, widths, weights = [], [], []
@@ -738,7 +1100,7 @@ for peak in peaks:
         weights.append(1.0 / profile.esd_fwhm**2)
 
 caglioti = fit_caglioti(np.array(angles), np.array(widths), np.array(weights))
-write_instprm("data/standards/start.instprm", caglioti)
+write_instprm(f"data/standards/{STEM}_start.instprm", caglioti)
 print(f"{caglioti.n_peaks} reflections fitted")
 print(
     f"U = {caglioti.u:.4f}, V = {caglioti.v:.4f}, W = {caglioti.w:.4f} degrees squared"
@@ -755,13 +1117,14 @@ rms of the width fit 0.00254 degrees
 Second, that starting file is refined against the standard's own structure, so
 that the Lorentzian terms X and Y and the asymmetry SH/L are measured rather
 than guessed. `standard_stages` gives the usual sequence, and the cell stage is
-dropped because the certified lattice parameter of the standard is held: NIST
-SRM 660c LaB6 is a = 4.156826 angstrom. The standard is taken to contribute no
-broadening of its own, which is what the size of 10 micrometres and the
-microstrain of zero say; left at the GSAS-II defaults of 1 micrometre and 1000
-microstrain, the instrument terms would absorb the difference.
+dropped because the certified lattice parameter of the standard is held, which
+is `STANDARD_A` in the settings: NIST SRM 660c LaB6 is a = 4.156826 angstrom.
+The standard is taken to contribute no broadening of its own, which is what the
+size of 10 micrometres and the microstrain of zero say; left at the GSAS-II
+defaults of 1 micrometre and 1000 microstrain, the instrument terms would
+absorb the difference.
 
-Continues `make_instprm.py`:
+Continues `make_instprm.py`. Add these lines at the end of the file.
 
 ```python
 import shutil
@@ -773,30 +1136,30 @@ stages = [stage for stage in standard_stages() if stage["name"] != "cell"]
 print([stage["name"] for stage in stages])
 
 job = build_refine_job(
-    Path("results/instrument/lab6.gpx").resolve(),
+    Path(f"results/instrument/{STEM}.gpx").resolve(),
     stages,
-    data_file=Path("data/standards/lab6.xrdml").resolve(),
-    instprm=Path("data/standards/start.instprm").resolve(),
+    data_file=Path(STANDARD_FILE).resolve(),
+    instprm=Path(f"data/standards/{STEM}_start.instprm").resolve(),
     phases=[
         {
-            "cif": Path("cifs/lab6.cif").resolve(),
-            "name": "LaB6",
-            "cell": [4.156826] * 3 + [90.0] * 3,
+            "cif": Path(STANDARD_CIF).resolve(),
+            "name": PHASE,
+            "cell": [STANDARD_A] * 3 + [90.0] * 3,
         }
     ],
     limits=(10.0, 98.0),
     cycles=10,
-    broadening={"LaB6": {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
-    export_prefix=Path("results/instrument/lab6").resolve(),
+    broadening={PHASE: {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
+    export_prefix=Path(f"results/instrument/{STEM}").resolve(),
 )
-result = run_job(job, "results/instrument/gsas2_work")
+result = run_job(job, f"results/instrument/gsas2_work/{STEM}")
 
 last = result["stages"][-1]
 print(f"Rwp {last['rwp']:.3f} per cent, GOF {last['gof']:.3f}")
 for key in ("Zero", "U", "V", "W", "X", "Y", "SH/L"):
     entry = result["final"]["instrument"][key]
     print(f"  {key:5s} {entry['value']:11.6g}  esd {entry['esd']:.3g}")
-shutil.copyfile(result["exports"]["instprm"], "data/standards/aeris.instprm")
+shutil.copyfile(result["exports"]["instprm"], f"data/standards/{STEM}.instprm")
 ```
 
 ```
@@ -812,11 +1175,13 @@ Rwp 7.160 per cent, GOF 1.909
 ```
 
 That run takes a few seconds. The refined file is the one the run exports,
-`result["exports"]["instprm"]`, not the starting file, so copy it to where the
-sample refinements will read it from. Note every path handed to
-`build_refine_job` above is made absolute with `resolve`. `run_job` runs the
-driver inside the working directory it is given, so a relative path in the job
-would be looked for under that directory and not found.
+`result["exports"]["instprm"]`, not the starting file, so the last line copies
+it to `data/standards/aeris.instprm`, which is where the sample refinements
+read it from. The starting file keeps the same stem with `_start` on the end,
+so the two are never confused. Note every path handed to `build_refine_job`
+above is made absolute with `resolve`. `run_job` runs the driver inside the
+working directory it is given, so a relative path in the job would be looked
+for under that directory and not found.
 
 A negative Y, as here, means the Lorentzian width the data want is smaller than
 the terms can describe together. It is not fatal, and the file is usable, but it
@@ -836,7 +1201,7 @@ up whatever the other leaves. Measuring the instrument once on a standard that
 is known to be sharp fixes the instrument half, and whatever width is left over
 in a sample pattern is then the sample's.
 
-### 5.3 Route A step by step
+### 5.4 Route A step by step
 
 Route A starts from the indexed peaks of Workflow 1. The function is
 `refine_lattice` in `xrdkit.lattice`, which refines a and c together with the
@@ -845,10 +1210,16 @@ It is not `refine_cell`, which belongs to `xrdkit.indexing`: that one fits a
 cell to indexed peaks by linear least squares and reports no esds, and is what
 the indexing cycles use internally.
 
+The settings of this script cover the whole of it, Route A and Route B and the
+density together: the scan, the stem the projects and the figure are named
+from, the composition and the formula units the density needs, the Archimedes
+measurement to compare it with, and the three files that describe the
+instrument and the phase.
+
 Refine twice, once with the zero point held at zero and once with it free, and
 compare.
 
-New script, save as `lattice_density.py`:
+Start a new file named `lattice_density.py`.
 
 ```python
 from xrdkit import (
@@ -860,7 +1231,17 @@ from xrdkit import (
     refine_lattice,
 )
 
-scan = read_xrdml("data/raw/sample.xrdml")
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/sample.xrdml"
+STEM = "x10"
+COMPOSITION = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
+FORMULA_UNITS = 5
+ARCHIMEDES, ESD_ARCHIMEDES = 5.15, 0.02
+INSTPRM = "data/standards/aeris.instprm"
+PHASE_CIF = "cifs/ttb.cif"
+PHASE = "TTB"
+
+scan = read_xrdml(SCAN_FILE)
 clean = exclude_kalpha2(find_peaks(scan, two_theta_range=(10.0, 80.0)))
 indexed, cell_fit = index_and_refine(
     clean, start_cell=TTB_CELL, wavelength=scan.wavelength
@@ -912,7 +1293,10 @@ displacement and a zero point together on one scan unless the peaks span a wide
 range of two theta: a zero point is a constant and a displacement follows
 cos(theta), and over a short range the two cannot be told apart.
 
-### 5.4 Route B step by step
+Route A ends here. Everything below needs GSAS-II, so a run that stops at this
+point is a complete piece of work on its own.
+
+### 5.5 Route B step by step
 
 A Le Bail refinement is described as a list of stages, each adding flags to the
 ones before it. The stage that switches `le_bail` on extracts an intensity for
@@ -927,7 +1311,7 @@ True}` at the end when the data are good enough to want it.
 The instrument parameters are not in the list, so they stay as the instrument
 parameter file has them.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 from pathlib import Path
@@ -947,14 +1331,14 @@ stages = [
 ]
 
 job = build_refine_job(
-    Path("results/lebail/sample.gpx").resolve(),
+    Path(f"results/lebail/{STEM}.gpx").resolve(),
     stages,
-    data_file=Path("data/raw/sample.xrdml").resolve(),
-    instprm=Path("data/standards/aeris.instprm").resolve(),
+    data_file=Path(SCAN_FILE).resolve(),
+    instprm=Path(INSTPRM).resolve(),
     phases=[
         {
-            "cif": Path("cifs/ttb.cif").resolve(),
-            "name": "TTB",
+            "cif": Path(PHASE_CIF).resolve(),
+            "name": PHASE,
             "cell": [refined.a, refined.a, refined.c, 90.0, 90.0, 90.0],
         }
     ],
@@ -963,10 +1347,10 @@ job = build_refine_job(
     le_bail_cycles=10,
     max_passes=60,
     pass_tolerance=0.1,
-    broadening={"TTB": {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
-    export_prefix=Path("results/lebail/sample").resolve(),
+    broadening={PHASE: {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
+    export_prefix=Path(f"results/lebail/{STEM}").resolve(),
 )
-result = run_job(job, "results/lebail/gsas2_work")
+result = run_job(job, f"results/lebail/gsas2_work/{STEM}")
 print("completed:", result["completed"], " model from:", result["final_from"])
 ```
 
@@ -988,7 +1372,7 @@ minutes.
 
 Read the stages back to see where the fit improved and whether each one settled.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 for stage in result["stages"]:
@@ -1017,7 +1401,7 @@ determine.
 
 The cell and the crystallite size come from the final model.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 phase = result["final"]["phases"][0]
@@ -1051,7 +1435,7 @@ the observed points, the calculated curve, the background, the reflection ticks
 and the difference. Passing the result as well writes Rwp, the goodness of fit
 and the refined cell into the figure.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import apply_style, plot_rietveld, save_figure
@@ -1063,11 +1447,11 @@ fig, ax = plot_rietveld(
     sqrt_scale=True,
     result=result,
 )
-print(save_figure(fig, "figures/lebail_fit"))
+print(save_figure(fig, f"figures/lebail_fit_{STEM}"))
 ```
 
 ```
-[WindowsPath('figures/lebail_fit.png'), WindowsPath('figures/lebail_fit.pdf')]
+[WindowsPath('figures/lebail_fit_x10.png'), WindowsPath('figures/lebail_fit_x10.pdf')]
 ```
 
 What to look for is the shape of the difference curve rather than its size. In
@@ -1081,7 +1465,7 @@ something else entirely: a second phase. The two are easy to tell apart in the
 figure and impossible to tell apart from Rwp alone, which is why the figure is
 drawn before the numbers are quoted, not after.
 
-### 5.5 Theoretical density
+### 5.6 Theoretical density
 
 The density module takes the refined cell, a composition and the number of
 formula units per cell, and gives the cell volume, the mass of one formula unit
@@ -1093,19 +1477,22 @@ need not be integers. A composition that is empty, that names an element the kit
 has no atomic mass for, or that has a negative coefficient raises a `ValueError`
 naming the problem.
 
-For the tetragonal tungsten bronze Sr0.40Ba0.50La0.10Nb1.90Ti0.10O6 there are
-five formula units per cell.
+That dictionary is `COMPOSITION` in the settings at the top of the script, and
+the formula units per cell is `FORMULA_UNITS` beside it. For the tetragonal
+tungsten bronze Sr0.40Ba0.50La0.10Nb1.90Ti0.10O6 there are five formula units
+per cell.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import TetragonalCell, cell_volume, formula_mass, theoretical_density
 
-composition = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
 cell = TetragonalCell(a=a, c=c)
 volume, esd_volume = cell_volume(cell, esd_a, esd_c)
-mass = formula_mass(composition)
-density, esd_density = theoretical_density(composition, 5, volume, esd_volume)
+mass = formula_mass(COMPOSITION)
+density, esd_density = theoretical_density(
+    COMPOSITION, FORMULA_UNITS, volume, esd_volume
+)
 print(f"M = {mass:.3f} g/mol per formula unit")
 print(f"V = {volume:.3f} +/- {esd_volume:.3f} cubic angstrom")
 print(f"theoretical density {density:.4f} +/- {esd_density:.4f} g/cm3")
@@ -1124,8 +1511,9 @@ uncorrelated, which the fits here give no covariance to do better with. Use
 GSAS-II's own volume esd where one is available and the difference matters.
 
 A relative density compares the measured density of a pellet with the
-theoretical one. Suppose the Archimedes measurement gave 5.15 plus or minus 0.02
-g/cm3. The relative uncertainty of the ratio is the quadrature sum of three
+theoretical one. The Archimedes measurement is `ARCHIMEDES` and
+`ESD_ARCHIMEDES` in the settings, 5.15 plus or minus 0.02 g/cm3 here. The
+relative uncertainty of the ratio is the quadrature sum of three
 terms: twice the relative error in a, once the relative error in c, and the
 relative error in the Archimedes measurement. The density goes as the reciprocal
 of the volume and the volume is a squared times c, so a relative error in a
@@ -1133,20 +1521,19 @@ enters twice over and one in c once. Where a and c carry the same relative
 error, those two terms come to about three times it, which is the rule of thumb
 quoted in Section 2.
 
-Continues `lattice_density.py`:
+Continues `lattice_density.py`. Add these lines at the end of the file.
 
 ```python
 import math
 
-archimedes, esd_archimedes = 5.15, 0.02
-relative = 100.0 * archimedes / density
+relative = 100.0 * ARCHIMEDES / density
 uncertainty = relative * math.sqrt(
-    (2.0 * esd_a / a) ** 2 + (esd_c / c) ** 2 + (esd_archimedes / archimedes) ** 2
+    (2.0 * esd_a / a) ** 2 + (esd_c / c) ** 2 + (ESD_ARCHIMEDES / ARCHIMEDES) ** 2
 )
 print(f"relative density {relative:.2f} +/- {uncertainty:.2f} per cent")
 print(f"  2 esd_a / a      {2.0 * esd_a / a:.2e}")
 print(f"  esd_c / c        {esd_c / c:.2e}")
-print(f"  esd_rho / rho    {esd_archimedes / archimedes:.2e}")
+print(f"  esd_rho / rho    {ESD_ARCHIMEDES / ARCHIMEDES:.2e}")
 ```
 
 ```
@@ -1164,7 +1551,7 @@ essentially its uncertainty alone. Once the cell is refined to this precision, m
 time buys nothing; a better balance, or more repeats of the weighing, is what
 improves the relative density.
 
-### 5.6 Judging the result
+### 5.7 Judging the result
 
 Take the following in order before quoting a cell or a density.
 
@@ -1214,219 +1601,6 @@ mounted proud of the holder, with no internal standard and no displacement term,
 gives a cell that is precise and wrong, and remounting it flush takes less time
 than arguing with the numbers.
 
-### 5.7 The complete scripts
-
-Workflow 2 is two scripts. `make_instprm.py` is Section 5.2, the setup that is
-done once for the diffractometer rather than once for each sample.
-`lattice_density.py` is Sections 5.3 to 5.5, which is the work for one sample,
-and it reads the instrument parameter file the first script wrote. Both are
-given below with the imports of their blocks gathered at the top.
-
-The whole of `make_instprm.py`:
-
-```python
-import shutil
-from pathlib import Path
-
-import numpy as np
-
-from xrdkit import (
-    build_refine_job,
-    exclude_kalpha2,
-    find_gsas2,
-    find_peaks,
-    fit_caglioti,
-    fit_profile,
-    read_xrdml,
-    run_job,
-    standard_stages,
-    write_instprm,
-)
-
-install = find_gsas2()
-print(f"GSAS-II Python: {install.python}")
-print(f"GSAS-II home:   {install.home}")
-
-standard = read_xrdml("data/standards/lab6.xrdml")
-peaks = exclude_kalpha2(find_peaks(standard, two_theta_range=(10.0, 98.0)))
-
-angles, widths, weights = [], [], []
-for peak in peaks:
-    profile = fit_profile(
-        standard.two_theta, standard.intensity, peak.two_theta, peak.fwhm
-    )
-    if profile.converged:
-        angles.append(profile.two_theta)
-        widths.append(profile.fwhm)
-        weights.append(1.0 / profile.esd_fwhm**2)
-
-caglioti = fit_caglioti(np.array(angles), np.array(widths), np.array(weights))
-write_instprm("data/standards/start.instprm", caglioti)
-print(f"{caglioti.n_peaks} reflections fitted")
-print(
-    f"U = {caglioti.u:.4f}, V = {caglioti.v:.4f}, W = {caglioti.w:.4f} degrees squared"
-)
-print(f"rms of the width fit {caglioti.rms:.5f} degrees")
-
-stages = [stage for stage in standard_stages() if stage["name"] != "cell"]
-print([stage["name"] for stage in stages])
-
-job = build_refine_job(
-    Path("results/instrument/lab6.gpx").resolve(),
-    stages,
-    data_file=Path("data/standards/lab6.xrdml").resolve(),
-    instprm=Path("data/standards/start.instprm").resolve(),
-    phases=[
-        {
-            "cif": Path("cifs/lab6.cif").resolve(),
-            "name": "LaB6",
-            "cell": [4.156826] * 3 + [90.0] * 3,
-        }
-    ],
-    limits=(10.0, 98.0),
-    cycles=10,
-    broadening={"LaB6": {"size": 10.0, "mustrain": 0.0, "lgmix": 0.0}},
-    export_prefix=Path("results/instrument/lab6").resolve(),
-)
-result = run_job(job, "results/instrument/gsas2_work")
-
-last = result["stages"][-1]
-print(f"Rwp {last['rwp']:.3f} per cent, GOF {last['gof']:.3f}")
-for key in ("Zero", "U", "V", "W", "X", "Y", "SH/L"):
-    entry = result["final"]["instrument"][key]
-    print(f"  {key:5s} {entry['value']:11.6g}  esd {entry['esd']:.3g}")
-shutil.copyfile(result["exports"]["instprm"], "data/standards/aeris.instprm")
-```
-
-The whole of `lattice_density.py`:
-
-```python
-import math
-from pathlib import Path
-
-from xrdkit import (
-    TTB_CELL,
-    TetragonalCell,
-    apply_style,
-    build_refine_job,
-    cell_volume,
-    exclude_kalpha2,
-    find_peaks,
-    formula_mass,
-    index_and_refine,
-    plot_rietveld,
-    read_xrdml,
-    refine_lattice,
-    run_job,
-    save_figure,
-    theoretical_density,
-)
-
-scan = read_xrdml("data/raw/sample.xrdml")
-clean = exclude_kalpha2(find_peaks(scan, two_theta_range=(10.0, 80.0)))
-indexed, cell_fit = index_and_refine(
-    clean, start_cell=TTB_CELL, wavelength=scan.wavelength
-)
-
-held = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=False)
-refined = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=True)
-
-for name, fit in (("zero held at zero", held), ("zero refined", refined)):
-    print(f"{name}:")
-    print(f"  a = {fit.a:.4f} +/- {fit.esd_a:.4f} angstrom")
-    print(f"  c = {fit.c:.4f} +/- {fit.esd_c:.4f} angstrom")
-    print(f"  rms {fit.rms_two_theta:.4f} degrees on {fit.n_peaks} peaks")
-print(
-    f"zero {refined.zero:.4f} +/- {refined.esd_zero:.4f} degrees, "
-    f"{refined.zero / refined.esd_zero:.0f} times its esd"
-)
-
-stages = [
-    {
-        "name": "background and scale",
-        "background": {"type": "chebyschev-1", "terms": 6},
-        "scale": True,
-        "le_bail": True,
-    },
-    {"name": "zero", "zero": True},
-    {"name": "cell", "cell": True},
-    {"name": "size", "size": True},
-]
-
-job = build_refine_job(
-    Path("results/lebail/sample.gpx").resolve(),
-    stages,
-    data_file=Path("data/raw/sample.xrdml").resolve(),
-    instprm=Path("data/standards/aeris.instprm").resolve(),
-    phases=[
-        {
-            "cif": Path("cifs/ttb.cif").resolve(),
-            "name": "TTB",
-            "cell": [refined.a, refined.a, refined.c, 90.0, 90.0, 90.0],
-        }
-    ],
-    limits=(10.0, 98.0),
-    cycles=10,
-    le_bail_cycles=10,
-    max_passes=60,
-    pass_tolerance=0.1,
-    broadening={"TTB": {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
-    export_prefix=Path("results/lebail/sample").resolve(),
-)
-result = run_job(job, "results/lebail/gsas2_work")
-print("completed:", result["completed"], " model from:", result["final_from"])
-
-for stage in result["stages"]:
-    print(
-        f"{stage['name']:22s} Rwp {stage['rwp']:6.3f}  GOF {stage['gof']:5.3f}  "
-        f"variables {stage['n_variables']:2d}  passes {len(stage['passes']):2d}  "
-        f"{stage['status']}"
-    )
-
-phase = result["final"]["phases"][0]
-a, c = phase["cell"]["length_a"], phase["cell"]["length_c"]
-esd_a, esd_c = phase["cell_esd"]["length_a"], phase["cell_esd"]["length_c"]
-size = phase["size"]
-print(f"a = {a:.4f} +/- {esd_a:.4f} angstrom")
-print(f"c = {c:.4f} +/- {esd_c:.4f} angstrom")
-print(
-    f"V = {phase['cell']['volume']:.3f} +/- {phase['cell_esd']['volume']:.3f} cubic angstrom"
-)
-print(f"crystallite size {size['value'] * 1000:.0f} +/- {size['esd'] * 1000:.0f} nm")
-
-apply_style()
-fig, ax = plot_rietveld(
-    result["exports"]["histogram"],
-    result["exports"]["reflections"],
-    sqrt_scale=True,
-    result=result,
-)
-print(save_figure(fig, "figures/lebail_fit"))
-
-composition = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
-cell = TetragonalCell(a=a, c=c)
-volume, esd_volume = cell_volume(cell, esd_a, esd_c)
-mass = formula_mass(composition)
-density, esd_density = theoretical_density(composition, 5, volume, esd_volume)
-print(f"M = {mass:.3f} g/mol per formula unit")
-print(f"V = {volume:.3f} +/- {esd_volume:.3f} cubic angstrom")
-print(f"theoretical density {density:.4f} +/- {esd_density:.4f} g/cm3")
-
-archimedes, esd_archimedes = 5.15, 0.02
-relative = 100.0 * archimedes / density
-uncertainty = relative * math.sqrt(
-    (2.0 * esd_a / a) ** 2 + (esd_c / c) ** 2 + (esd_archimedes / archimedes) ** 2
-)
-print(f"relative density {relative:.2f} +/- {uncertainty:.2f} per cent")
-print(f"  2 esd_a / a      {2.0 * esd_a / a:.2e}")
-print(f"  esd_c / c        {esd_c / c:.2e}")
-print(f"  esd_rho / rho    {esd_archimedes / archimedes:.2e}")
-```
-
-Run the two in that order and they print every line the sections above print,
-in the order they appear there. The second one takes about two minutes, nearly
-all of it in the Le Bail refinement.
-
 ## 6. Workflow 3: Rietveld refinement
 
 ### 6.1 What Rietveld adds, and when to do it
@@ -1449,53 +1623,19 @@ out in the Rietveld column of Section 2. Refine one or two samples per series
 this way, chosen because the question needs a structure, and use Workflow 2 for
 everything else.
 
-### 6.2 What you need
+### 6.2 Start here: the complete script
 
-Four things, beyond the raw scan.
+Workflow 3 is one settings file and one script. The settings file describes the
+sample and the structure, which is the part that cannot be automated because it
+is the chemistry, and Section 6.3 goes through it table by table. The script
+reads it and refines.
 
-The Le Bail result of Workflow 2 supplies the starting cell and confirms that
-the instrument parameter file describes the peak shapes. Start a Rietveld
-refinement from a cell that has already been refined against the whole pattern,
-not from the cell in the CIF, which came from somebody else's composition.
-
-A CIF of the reference structure supplies the sites, their Wyckoff positions and
-the starting coordinates. It does not have to be the same composition as the
-sample; it has to be the same structure type in the same space group.
-
-The nominal composition, as atoms per formula unit, says what the sample is
-meant to be. The kit puts it on the sites for you rather than making you edit
-occupancies by hand.
-
-A decision about which sites share what. This is the part that cannot be
-automated, because it is the chemistry. Four decisions are needed, and the kit
-takes them as a structure description.
-
-Site kinds group the sites into the families that are refined together. For the
-tetragonal tungsten bronze here there are three: A for the two cation channel
-sites, B for the two niobium sites, and O for the five oxygens. Coordinates are
-freed one kind at a time.
-
-Uiso groups say which sites share one thermal displacement parameter. A powder
-pattern cannot support an independent Uiso on nine sites, so the A site cations
-share one, the two niobium sites share another, and the five oxygens share a
-third. Three parameters instead of nine.
-
-The origin site says which coordinate is held to stop the structure sliding.
-P4bm is polar along c, so nothing in the symmetry fixes where the origin sits on
-that axis; every atom can move together along c without changing the pattern at
-all. Holding the z of one site fixes it. Here that is Nb1, on the special 2b
-position.
-
-The composition rule says how the nominal composition is distributed. Elements
-the CIF already holds keep the CIF's distribution over their sites and are
-scaled by one factor each. Elements the CIF lacks are added onto a host element's
-sites in proportion to the host's occupancy: lanthanum goes where strontium is,
-and titanium where niobium is.
-
-The kit reads all of this from a TOML file with `load_config`, which checks it as
-it reads and raises `ConfigError` naming the table and the key on the first
-thing that is wrong, including a composition that will not fit on the sites. A
-minimal `config/samples.toml` for this sample and structure is below.
+Save this as `config/samples.toml` in the project folder. For a new sample,
+edit the `[samples.x10]` table: the name of the table, the `id` the script
+looks the sample up by, the scan, the composition, the cell Workflow 2 refined
+and the range to refine over. The `[structures.ttb]` table below it describes
+the structure rather than the sample, and is written once for a structure type
+rather than once for a sample.
 
 Settings rather than Python, save as `config/samples.toml`:
 
@@ -1541,18 +1681,296 @@ exchange = { elements = ["Sr", "Ba"], sites = ["Ba2", "Sr1"] }
 added = { La = "Sr", Ti = "Nb" }
 ```
 
+Save this as `refine_rietveld.py` in the project folder, edit the settings
+lines at the top, and run it with `py refine_rietveld.py` on Windows, or
+`python3 refine_rietveld.py` on macOS. It takes three to four minutes on a
+laptop, and it needs GSAS-II, which Section 5.3 installs.
+
+The whole of `refine_rietveld.py`:
+
+```python
+from pathlib import Path
+
+from xrdkit import (
+    Gsas2Error,
+    apply_style,
+    build_refine_job,
+    cell_contents,
+    composition_edits,
+    failure_markdown,
+    load_config,
+    log_tail,
+    plot_rietveld,
+    run_job,
+    sample_settings,
+    save_figure,
+    site_setup,
+    stage_statuses,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+CONFIG_FILE = "config/samples.toml"
+SAMPLE_ID = "10"
+STEM = "x10"
+INSTPRM = "data/standards/aeris.instprm"
+
+config = load_config(CONFIG_FILE)
+sample, structure = sample_settings(config, SAMPLE_ID)
+print(f"sample {sample['name']}, scan {sample['scan']}")
+print(
+    f"phase {structure['phase_name']} in {structure['space_group']}, "
+    f"Z = {structure['formula_units']}"
+)
+print(
+    "sites:",
+    ", ".join(f"{s['name']} ({s['wyckoff']}, {s['kind']})" for s in structure["sites"]),
+)
+print("Uiso groups:", ", ".join(g["name"] for g in structure["uiso_groups"]))
+print(f"origin held: {structure['origin']['site']} {structure['origin']['axis']}")
+
+phase_name = structure["phase_name"]
+
+
+def create_phase(atoms=None):
+    """The phase as GSAS-II reads it from the CIF, with ``atoms`` edits applied."""
+    phase = {"cif": Path(structure["cif"]).resolve(), "name": phase_name}
+    if atoms:
+        phase["atoms"] = atoms
+    job = build_refine_job(
+        Path(f"results/rietveld/{STEM}_structure.gpx").resolve(),
+        [{"scale": True}],
+        data_file=Path(sample["scan"]).resolve(),
+        instprm=Path(INSTPRM).resolve(),
+        phases=[phase],
+    )
+    job["action"] = "create"
+    work = f"results/rietveld/gsas2_work/{STEM}/create"
+    (created,) = run_job(job, work)["phases"]
+    return created
+
+
+from_cif = create_phase()
+edits = composition_edits(from_cif["atoms"], sample["composition"], structure)
+phase = create_phase(edits)
+plan = site_setup(structure, phase["atoms"])
+
+print("per cell, from the CIF:", cell_contents(from_cif["atoms"]))
+print("per cell, as set up:   ", cell_contents(phase["atoms"]))
+print("sites by kind:", {k: [s["name"] for s in v] for k, v in plan["kinds"].items()})
+print("coordinates freed:", plan["coordinates"])
+
+origin = {phase_name: {"site": plan["origin"]["name"], "axis": plan["origin_axis"]}}
+
+stages = [
+    {
+        "name": "profile",
+        "background": {
+            "type": sample["background"]["function"],
+            "terms": sample["background"]["terms"],
+        },
+        "scale": True,
+        "zero": True,
+        "cell": True,
+        "size": True,
+    },
+    {"name": "overall Uiso", "overall_uiso": True},
+    {
+        "name": "Uiso groups",
+        "overall_uiso": False,
+        "uiso_groups": {phase_name: plan["uiso_groups"]},
+    },
+]
+for kind in ("B", "A", "O"):
+    stage = {"name": f"{kind} site coordinates"}
+    if plan["coordinates"].get(kind):
+        stage["coordinates"] = {phase_name: plan["coordinates"][kind]}
+    if kind == plan["origin"]["kind"]:
+        stage["origin"] = origin
+    stages.append(stage)
+
+print([stage["name"] for stage in stages])
+
+start = sample["start_cell"]
+
+job = build_refine_job(
+    Path(f"results/rietveld/{STEM}.gpx").resolve(),
+    stages,
+    data_file=Path(sample["scan"]).resolve(),
+    instprm=Path(INSTPRM).resolve(),
+    phases=[
+        {
+            "cif": Path(structure["cif"]).resolve(),
+            "name": phase_name,
+            "cell": [start["a"], start["a"], start["c"], 90.0, 90.0, 90.0],
+            "atoms": edits,
+        }
+    ],
+    limits=tuple(sample["two_theta"]),
+    cycles=10,
+    max_passes=30,
+    pass_tolerance=0.1,
+    overall_uiso_start={phase_name: 0.01},
+    broadening={phase_name: {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
+    export_prefix=Path(f"results/rietveld/{STEM}").resolve(),
+    bonds=True,
+)
+result = run_job(job, f"results/rietveld/gsas2_work/{STEM}/refine")
+print("completed:", result["completed"])
+print("final model from:", result["final_from"])
+print("rolled back:", result["rejected"])
+
+for stage in result["stages"]:
+    print(
+        f"{stage['name']:20s} Rwp {stage['rwp']:5.3f}  Rp {stage['rp']:5.3f}  "
+        f"GOF {stage['gof']:5.3f}  RF2 {stage['residuals']['0:0:Rf^2']:5.2f}  "
+        f"variables {stage['n_variables']:2d}  passes {len(stage['passes']):2d}  "
+        f"{stage['status']}"
+    )
+
+for row in stage_statuses(result):
+    if row["reason"]:
+        print(f"{row['name']}: {row['reason']}")
+for entry in result["undetermined"]:
+    print(f"undetermined: {entry['message']}")
+
+final = result["final"]["phases"][0]
+print(
+    f"a = {final['cell']['length_a']:.4f} +/- {final['cell_esd']['length_a']:.4f} angstrom"
+)
+print(
+    f"c = {final['cell']['length_c']:.4f} +/- {final['cell_esd']['length_c']:.4f} angstrom"
+)
+for atom in final["atoms"]:
+    esds = atom["xyz_esd"] or [None, None, None]
+    coordinates = ", ".join(
+        f"{value:.5f}" if esd is None else f"{value:.5f}({esd * 1e5:.0f})"
+        for value, esd in zip(atom["xyz"], esds)
+    )
+    print(
+        f"  {atom['label']:4s} {atom['type']:3s} occ {atom['occupancy']:.4f}  "
+        f"Uiso {atom['uiso']:.4f}({atom['uiso_esd'] * 1e4:.0f})  {coordinates}"
+    )
+
+for bond in result["bonds"][phase_name]:
+    if not bond["centre"].startswith("Nb"):
+        continue
+    esd = "held" if bond["esd"] is None else f"+/- {bond['esd']:.4f}"
+    print(
+        f"{bond['centre_site']:12s} to {bond['target_site']:4s}  "
+        f"{bond['distance']:.4f} {esd:16s} angstrom  x{bond['count']}"
+    )
+
+apply_style()
+fig, ax = plot_rietveld(
+    result["exports"]["histogram"],
+    result["exports"]["reflections"],
+    sqrt_scale=True,
+    result=result,
+)
+print(save_figure(fig, f"figures/rietveld_{STEM}"))
+
+broken = build_refine_job(
+    Path(f"results/broken/{STEM}.gpx").resolve(),
+    [{"name": "profile", "scale": True}],
+    data_file=Path(sample["scan"]).resolve(),
+    instprm=Path("data/standards/missing.instprm").resolve(),
+    phases=[{"cif": Path(structure["cif"]).resolve(), "name": phase_name}],
+)
+work = Path(f"results/broken/gsas2_work/{STEM}")
+try:
+    run_job(broken, work)
+except Gsas2Error as error:
+    report = failure_markdown(
+        f"{STEM}, coordinates", None, str(error), log_tail(work / "refine.log")
+    )
+    Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
+    headings = [line for line in report.splitlines() if line.startswith("## ")]
+    print(f"{len(report.splitlines())} lines written, sections {headings}")
+    print(next(line for line in report.splitlines() if "failed with exit code" in line))
+```
+
+The last block of that script asks on purpose for an instrument parameter file
+that does not exist, so that a failure can be shown and written up. It is the
+one part of the script that is there to be read rather than used, and it can be
+deleted once its point has been taken.
+
+The rest of the section says what the settings file has to hold and why, why
+the stages come in the order they do, and then takes the script in pieces. None
+of the pieces needs to be typed again: they are the lines of the block above,
+in the order they appear there.
+
+### 6.3 What you need
+
+Four things, beyond the raw scan.
+
+The Le Bail result of Workflow 2 supplies the starting cell and confirms that
+the instrument parameter file describes the peak shapes. Start a Rietveld
+refinement from a cell that has already been refined against the whole pattern,
+not from the cell in the CIF, which came from somebody else's composition.
+
+A CIF of the reference structure supplies the sites, their Wyckoff positions and
+the starting coordinates. It does not have to be the same composition as the
+sample; it has to be the same structure type in the same space group.
+
+The nominal composition, as atoms per formula unit, says what the sample is
+meant to be. The kit puts it on the sites for you rather than making you edit
+occupancies by hand.
+
+A decision about which sites share what. This is the part that cannot be
+automated, because it is the chemistry. Four decisions are needed, and the kit
+takes them as a structure description.
+
+Site kinds group the sites into the families that are refined together. For the
+tetragonal tungsten bronze here there are three: A for the two cation channel
+sites, B for the two niobium sites, and O for the five oxygens. Coordinates are
+freed one kind at a time.
+
+Uiso groups say which sites share one thermal displacement parameter. A powder
+pattern cannot support an independent Uiso on nine sites, so the A site cations
+share one, the two niobium sites share another, and the five oxygens share a
+third. Three parameters instead of nine.
+
+The origin site says which coordinate is held to stop the structure sliding.
+P4bm is polar along c, so nothing in the symmetry fixes where the origin sits on
+that axis; every atom can move together along c without changing the pattern at
+all. Holding the z of one site fixes it. Here that is Nb1, on the special 2b
+position.
+
+The composition rule says how the nominal composition is distributed. Elements
+the CIF already holds keep the CIF's distribution over their sites and are
+scaled by one factor each. Elements the CIF lacks are added onto a host element's
+sites in proportion to the host's occupancy: lanthanum goes where strontium is,
+and titanium where niobium is.
+
+The kit reads all of this from a TOML file with `load_config`, which checks it as
+it reads and raises `ConfigError` naming the table and the key on the first
+thing that is wrong, including a composition that will not fit on the sites. The
+`config/samples.toml` of Section 6.2 is a minimal one for this sample and this
+structure.
+
 `free_coordinates` says what each Wyckoff position of this space group leaves
 free, so that the kit never refines a coordinate that symmetry fixes.
 `exchange` names the elements the occupancy stage trades and the sites it trades
 them between. `start_cell` here is the cell Workflow 2 refined.
 
-New script, save as `refine_rietveld.py`:
+The script's own settings are shorter, because the sample is described in the
+TOML rather than in the script: the settings file to read, the `id` of the
+sample to take out of it, the stem the project files and the figure are named
+from, and the instrument parameter file.
+
+Start a new file named `refine_rietveld.py`.
 
 ```python
 from xrdkit import load_config, sample_settings
 
-config = load_config("config/samples.toml")
-sample, structure = sample_settings(config, "10")
+# Edit these lines for each new sample. Nothing below needs changing.
+CONFIG_FILE = "config/samples.toml"
+SAMPLE_ID = "10"
+STEM = "x10"
+INSTPRM = "data/standards/aeris.instprm"
+
+config = load_config(CONFIG_FILE)
+sample, structure = sample_settings(config, SAMPLE_ID)
 print(f"sample {sample['name']}, scan {sample['scan']}")
 print(
     f"phase {structure['phase_name']} in {structure['space_group']}, "
@@ -1574,7 +1992,12 @@ Uiso groups: A site cations, Nb/Ti, O
 origin held: Nb1 z
 ```
 
-### 6.3 The stage sequence, and why it is ordered this way
+`SAMPLE_ID` is the `id` of the sample in the TOML and not the name of its
+table, which is why it is `10` here and the table is `[samples.x10]`. `STEM` is
+what the GSAS-II project, the exports and the figure are named from, and it is
+the only thing that keeps one sample's output apart from another's.
+
+### 6.4 The stage sequence, and why it is ordered this way
 
 A refinement is a list of stages, and each stage adds flags to the ones before
 it, so by the last stage everything named along the way is refining together.
@@ -1665,7 +2088,7 @@ the stage's status, and a clean stage can still leave undetermined parameters.
 An undetermined value is not a result and should not go in a table of refined
 parameters. Report it as held, or report the refinement without it.
 
-### 6.4 Step by step
+### 6.5 Step by step
 
 The structure has to be set up before it can be refined, and setting it up needs
 the atoms as GSAS-II reads them from the CIF, which means creating the project
@@ -1674,7 +2097,7 @@ project and reports the phase without refining anything. It is called twice:
 once to see the CIF as it stands, and again with the occupancy edits that put the
 nominal composition on the sites.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 from pathlib import Path
@@ -1696,14 +2119,15 @@ def create_phase(atoms=None):
     if atoms:
         phase["atoms"] = atoms
     job = build_refine_job(
-        Path("results/rietveld/structure.gpx").resolve(),
+        Path(f"results/rietveld/{STEM}_structure.gpx").resolve(),
         [{"scale": True}],
         data_file=Path(sample["scan"]).resolve(),
-        instprm=Path("data/standards/aeris.instprm").resolve(),
+        instprm=Path(INSTPRM).resolve(),
         phases=[phase],
     )
     job["action"] = "create"
-    (created,) = run_job(job, "results/rietveld/gsas2_work/create")["phases"]
+    work = f"results/rietveld/gsas2_work/{STEM}/create"
+    (created,) = run_job(job, work)["phases"]
     return created
 
 
@@ -1734,7 +2158,7 @@ entry for Nb1: it is the origin site, so its z is held rather than refined, and
 
 The stages are assembled from the plan.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 origin = {phase_name: {"site": plan["origin"]["name"], "axis": plan["origin_axis"]}}
@@ -1780,20 +2204,20 @@ This refinement takes about three to four minutes on a laptop.
 
 The scan refined here is a longer powder scan of the same composition as the one
 Section 5 used, over the narrower range 17 to 98 degrees rather than 10 to 98, so
-the residuals below are not comparable with the Le Bail ones in Section 5.4.
+the residuals below are not comparable with the Le Bail ones in Section 5.5.
 Compare a Rietveld refinement with a Le Bail fit only when both were run on the
 same scan over the same range.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 start = sample["start_cell"]
 
 job = build_refine_job(
-    Path("results/rietveld/x10.gpx").resolve(),
+    Path(f"results/rietveld/{STEM}.gpx").resolve(),
     stages,
     data_file=Path(sample["scan"]).resolve(),
-    instprm=Path("data/standards/aeris.instprm").resolve(),
+    instprm=Path(INSTPRM).resolve(),
     phases=[
         {
             "cif": Path(structure["cif"]).resolve(),
@@ -1808,10 +2232,10 @@ job = build_refine_job(
     pass_tolerance=0.1,
     overall_uiso_start={phase_name: 0.01},
     broadening={phase_name: {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
-    export_prefix=Path("results/rietveld/x10").resolve(),
+    export_prefix=Path(f"results/rietveld/{STEM}").resolve(),
     bonds=True,
 )
-result = run_job(job, "results/rietveld/gsas2_work/refine")
+result = run_job(job, f"results/rietveld/gsas2_work/{STEM}/refine")
 print("completed:", result["completed"])
 print("final model from:", result["final_from"])
 print("rolled back:", result["rejected"])
@@ -1826,7 +2250,7 @@ rolled back: ['O site coordinates']
 The run finished, but the last stage was rolled back, so the model it leaves is
 the one the A site stage produced. Read the stages to see what happened.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 for stage in result["stages"]:
@@ -1851,7 +2275,7 @@ O site coordinates   Rwp 4.127  Rp 3.248  GOF 1.431  RF2  7.75  variables 32  pa
 is not clean, and `stage_status_table` gives them as markdown ready for a write
 up. The reasons and the undetermined parameters are what matter.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import stage_statuses
@@ -1877,7 +2301,7 @@ undetermined: La2 y 0.67207, esd 0.00019 more than its shift 0.00004
 The final model carries every atom as the last kept stage left it, with an esd on
 each parameter that was refined and none on the ones that were not.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 final = result["final"]["phases"][0]
@@ -1928,7 +2352,7 @@ to oxygen distance in a tungsten bronze should lie between about 1.8 and 2.2
 angstrom; anything well outside that means the model has gone somewhere it
 should not be, whatever the residuals say.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 for bond in result["bonds"][phase_name]:
@@ -1959,7 +2383,7 @@ were refined in the kept stages, so the numbers are those of the CIF.
 
 Plot the fit, as always before quoting anything.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import apply_style, plot_rietveld, save_figure
@@ -1971,7 +2395,7 @@ fig, ax = plot_rietveld(
     sqrt_scale=True,
     result=result,
 )
-print(save_figure(fig, "figures/rietveld_x10"))
+print(save_figure(fig, f"figures/rietveld_{STEM}"))
 ```
 
 ```
@@ -1989,29 +2413,30 @@ not empty.
 When a stage fails outright rather than being rejected, `run_job` raises
 `Gsas2Error` and there is no result to read. `failure_markdown` turns what there
 is into a write up: the error, the stages that did run, and the tail of the
-GSAS-II log. The snippet below asks for an instrument file that does not exist,
-so that the failure is real.
+GSAS-II log. The block below asks for an instrument file that does not exist, so
+that the failure is real. It is there to be read rather than used, and can be
+left out of the script once its point has been taken.
 
-Continues `refine_rietveld.py`:
+Continues `refine_rietveld.py`. Add these lines at the end of the file.
 
 ```python
 from xrdkit import Gsas2Error, failure_markdown, log_tail
 
 broken = build_refine_job(
-    Path("results/broken/x10.gpx").resolve(),
+    Path(f"results/broken/{STEM}.gpx").resolve(),
     [{"name": "profile", "scale": True}],
     data_file=Path(sample["scan"]).resolve(),
     instprm=Path("data/standards/missing.instprm").resolve(),
     phases=[{"cif": Path(structure["cif"]).resolve(), "name": phase_name}],
 )
-work = Path("results/broken/gsas2_work")
+work = Path(f"results/broken/gsas2_work/{STEM}")
 try:
     run_job(broken, work)
 except Gsas2Error as error:
     report = failure_markdown(
-        "x = 0.10, coordinates", None, str(error), log_tail(work / "refine.log")
+        f"{STEM}, coordinates", None, str(error), log_tail(work / "refine.log")
     )
-    Path("results/broken/failure.md").write_text(report, encoding="utf-8")
+    Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
     headings = [line for line in report.splitlines() if line.startswith("## ")]
     print(f"{len(report.splitlines())} lines written, sections {headings}")
     print(next(line for line in report.splitlines() if "failed with exit code" in line))
@@ -2022,7 +2447,7 @@ except Gsas2Error as error:
 GSAS-II job 'refine' failed with exit code 1:
 ```
 
-### 6.5 Reading the outcome
+### 6.6 Reading the outcome
 
 Take the run above as it stands. Four stages came out clean: the profile, the
 overall Uiso, the Uiso groups and the niobium coordinates. Rwp fell from 4.594 to
@@ -2073,7 +2498,7 @@ strongest peak near 10000 counts, which is a good Le Bail scan and a marginal
 Rietveld one. That, and not the refinement strategy, is why the A site
 coordinates would not settle.
 
-### 6.6 Troubleshooting
+### 6.7 Troubleshooting
 
 | Symptom | Cause | What to do |
 | --- | --- | --- |
@@ -2084,43 +2509,48 @@ coordinates would not settle.
 | A negative Uiso on the first structural stage | Intensity missing at high angle, not cold atoms | Check the instrument file against a fresh standard scan, check the sample sat flush in the holder, and check the composition: too much heavy scattering in the model shows up this way |
 | Rwp at fixed atoms far above the Le Bail value | Expected, but only by so much. A Le Bail fit has a free intensity per reflection, so it always fits better | A gap of one to two percentage points is normal. A gap of five or more means the structure is wrong, not merely imperfect: check the space group, the composition on the sites, and whether a second phase is present |
 
-### 6.7 The complete script
-
-There is nothing to assemble. The blocks of Sections 6.2 and 6.4 are already
-one script, `refine_rietveld.py`, each of them continuing the one before it, so
-the whole of that script is those blocks in the order they are given and it is
-not repeated here. `config/samples.toml` of Section 6.2 is saved beside it and
-is read by its first line.
-
 ## 7. Known limitations of version 0.1.0
 
 Six things the kit does not do yet, all of them met somewhere in this guide.
-Each is on the list for the next release.
+Each is on the list for the next release. Only the first of them needs code to
+work round, and that code is the script below.
 
-The reader accepts `.xrdml` and nothing else. There is no reader for two or
-three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
-`.fxye`. A scan in another format can still be used, because `XRDScan` is an
-ordinary dataclass and every routine downstream of the reader takes one of those
-rather than a file path. Load the columns yourself and fill the fields in.
+### 7.1 Start here: the complete script
 
-New script, save as `read_xy.py`:
+The reader accepts `.xrdml` and nothing else, so a scan in any other format has
+to be loaded by hand. `XRDScan` is an ordinary dataclass and every routine
+downstream of the reader takes one of those rather than a file path, so filling
+its fields in from two columns of text is the whole of the work.
+`read_xy.py` does that and then finds the peaks, to show that the scan it built
+goes on into the rest of the kit unchanged.
+
+Save this as `read_xy.py` in the project folder, edit the settings lines at the
+top, and run it with `py read_xy.py` on Windows, or `python3 read_xy.py` on
+macOS.
+
+Start a new file named `read_xy.py`.
 
 ```python
 import numpy as np
 
 from xrdkit import XRDScan, find_peaks
 
-two_theta, intensity = np.loadtxt("data/raw/sample.xy", unpack=True)
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/sample.xy"
+SAMPLE = "x10"
+WAVELENGTH = 1.540598
+
+two_theta, intensity = np.loadtxt(SCAN_FILE, unpack=True)
 scan = XRDScan(
     two_theta=two_theta,
     intensity=intensity,
-    wavelength=1.540598,
+    wavelength=WAVELENGTH,
     start_angle=float(two_theta[0]),
     end_angle=float(two_theta[-1]),
     step_size=float(two_theta[1] - two_theta[0]),
     time_per_step=0.0,
-    sample_id="x10",
-    source_path="data/raw/sample.xy",
+    sample_id=SAMPLE,
+    source_path=SCAN_FILE,
 )
 print(
     f"{scan.sample_id}: {scan.start_angle:.2f} to {scan.end_angle:.2f} degrees, "
@@ -2132,6 +2562,18 @@ print(
 x10: 10.01 to 99.98 degrees, 49 peaks
 ```
 
+That one block is the whole of `read_xy.py`. There is nothing further to copy:
+the rest of the section is the six limitations themselves, this one included.
+
+### 7.2 The six limitations
+
+The reader accepts `.xrdml` and nothing else. There is no reader for two or
+three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
+`.fxye`. A scan in another format can still be used, because `XRDScan` is an
+ordinary dataclass and every routine downstream of the reader takes one of those
+rather than a file path. Load the columns yourself and fill the fields in, as
+`read_xy.py` above does.
+
 Indexing is tetragonal only, and `P4bm` is the only space group whose reflection
 conditions `xrdkit.indexing` knows. Pass `space_group=None` to apply none, which
 works for any tetragonal cell but labels reflections the conditions would have
@@ -2140,14 +2582,14 @@ forbidden. Nothing in the module handles a lower symmetry cell.
 `standard_stages` is the instrument calibration sequence, background and scale,
 zero, cell, U V W, X Y, SH/L, and not a sample refinement sequence. There is no
 helper that builds a Le Bail or a Rietveld stage list, so those are written out
-in full, as in Sections 5.4 and 6.4.
+in full, as in Sections 5.5 and 6.5.
 
 The caption `plot_rietveld` writes takes its Rwp and goodness of fit from the
 last stage that has no error entry, and a stage that was rejected has none: it
 was rolled back, not failed. The cell in the same caption comes from the final
 model. So when a run has rejected a stage, the two halves of that caption come
 from different stages, and the residuals should be read from the stage table
-instead, as Section 6.4 says.
+instead, as Section 6.5 says.
 
 `formula_mass`, and through it `theoretical_density`, takes a dictionary of
 element symbol to atoms per formula unit. It does not parse a formula string:
