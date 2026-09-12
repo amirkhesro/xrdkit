@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Bail, and Rietveld refinement. Every snippet in it was executed against real
   scans before it was written down.
 
+### Documentation
+
+- `docs/USER_GUIDE.md` and `docs/GETTING_STARTED.md` follow a hand trial of both
+  by a new user with no Python experience. Every code block in the user guide
+  now says which script file it belongs to and whether it starts that file or
+  continues it, Section 2 and each workflow end with the complete script in one
+  piece, and every `save_figure` call prints the paths it wrote. The setup guide
+  says that pip installs into Python rather than into a folder, adds VESTA as an
+  optional viewer, and says what has to be done before the user guide is opened
+  and what to change when a script is reused on the next dataset.
+
 ### Fixed
 
 - Nothing yet.

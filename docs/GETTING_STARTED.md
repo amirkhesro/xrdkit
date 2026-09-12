@@ -122,7 +122,10 @@ py -m pip install xrdkit
 
 This downloads xrdkit and the three libraries it needs, which are numpy, scipy
 and matplotlib, and takes a minute or two. The last line printed should begin
-with the word Successfully.
+with the word Successfully. pip installs xrdkit into Python itself and not into
+the folder the terminal happens to be in, so it does not matter which folder
+this is run from, and it is done once for the whole computer rather than once
+for each project.
 
 Phase matching against the Crystallography Open Database needs one further
 library, pymatgen, which comes with the optional extra named phases. It is a
@@ -260,7 +263,10 @@ python3 -m pip install xrdkit
 
 This downloads xrdkit and the three libraries it needs, which are numpy, scipy
 and matplotlib, and takes a minute or two. The last line printed should begin
-with the word Successfully.
+with the word Successfully. pip installs xrdkit into Python itself and not into
+the folder the terminal happens to be in, so it does not matter which folder
+this is run from, and it is done once for the whole computer rather than once
+for each project.
 
 Phase matching against the Crystallography Open Database needs one further
 library, pymatgen, which comes with the optional extra named phases. It is a
@@ -500,7 +506,26 @@ means the terminal is not in the project folder, or the scan is not in
 file is not an `.xrdml`; Section 3 of the user guide gives what the reader
 accepts and Section 7 gives what to do with a scan in another format.
 
+### Step 10. VESTA, if structures are to be looked at
+
+VESTA draws crystal structures. Nothing in the kit calls it and no workflow
+needs it, but it is the quickest way to see what a file actually holds. A CIF
+downloaded from the Crystallography Open Database opens in it in a second,
+which is how to tell at a glance that the entry is the phase it was taken for
+rather than something else with a similar name. It also opens the structure a
+GSAS-II refinement exports, so a refined model can be looked at beside the one
+it started from, and it draws the structure figures that go in a paper.
+
+VESTA is free for academic use and there is a version for Windows and a version
+for macOS. The download page is
+<https://jp-minerals.org/vesta/en/download.html>.
+
 ### Where to go next
+
+Steps 8 and 9 come first, and neither can be skipped. Section 2 of the user
+guide reads a scan of your own and prints what it is, so the scan has to be in
+`data/raw` under a name you know, which is Step 8, and the check in Step 9 has
+to have run, before Section 2 can be followed at all.
 
 Read Section 2 of [USER_GUIDE.md](USER_GUIDE.md) first, which says in numbers
 what a scan has to be for each of the three workflows, and how to check a scan
@@ -509,3 +534,13 @@ labels its reflections and needs nothing beyond what was installed above.
 Workflow 2, in Section 5, refines the lattice parameters and calculates a
 theoretical density. Workflow 3, in Section 6, is the full Rietveld refinement,
 and needs GSAS-II from Step 7.
+
+#### Reusing the scripts
+
+None of it has to be written twice. Once a workflow has been saved as a script
+and has run on one scan, the next dataset needs no new code at all: open the
+script, change the name of the scan file and the sample labels at the top of
+it, change the figure and results names as well if the first set is worth
+keeping, and run the script again. That is the whole of the work for each
+further sample, and it is why the guide is written as scripts rather than as
+commands typed one at a time.
