@@ -6,6 +6,9 @@ A reusable X-ray diffraction analysis toolkit for electroceramics research.
 analysing XRD patterns, so that the same analysis code can be reused across
 projects instead of being copied between one-off scripts.
 
+New here? [docs/USER_GUIDE.md](docs/USER_GUIDE.md) says what data you need, in
+what form, and how to get from a raw scan to each result.
+
 ## Installation
 
 ```bash

@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `docs/USER_GUIDE.md` — a user guide covering the data each workflow needs in
+  numbers, the files and formats to supply, and the three workflows end to end:
+  plotting with hkl indices, lattice parameters and theoretical density by Le
+  Bail, and Rietveld refinement. Every snippet in it was executed against real
+  scans before it was written down.
+
+### Fixed
+
+- Nothing yet.
+
+### Planned
+
+- A reader for plain text column formats (`.xy`, `.xye`) and for Bruker `.raw`
+  and `.brml`; only `.xrdml` is read today.
+- Indexing beyond tetragonal `P4bm`, which is the only space group whose
+  reflection conditions `xrdkit.indexing` applies.
+- Stage list helpers for Le Bail and Rietveld sequences; `standard_stages` is
+  the instrument calibration sequence only, so the others are written out by
+  hand.
+- `plot_rietveld` to take its Rwp and GOF from the stage the final model came
+  from, rather than from the last stage without an error entry, which is the
+  wrong one whenever a stage was rejected.
+- `formula_mass` to accept a formula string as well as a dictionary of element
+  to atoms per formula unit.
+- `build_refine_job` to accept relative paths, resolving them against the
+  caller's working directory rather than the driver's.
+
 ## [0.1.0] - 2026-09-12
 
 ### Added
