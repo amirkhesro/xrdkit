@@ -8,6 +8,11 @@
 6. [Workflow 3: Rietveld refinement](#6-workflow-3-rietveld-refinement)
 7. [Known limitations of version 0.1.0](#7-known-limitations-of-version-010)
 
+If Python is not yet installed on your machine, start with
+[GETTING_STARTED.md](GETTING_STARTED.md), which installs Python and xrdkit
+on Windows or macOS, sets up the folder layout used below, and shows how to
+run the code blocks in this guide.
+
 ## 1. Introduction
 
 xrdkit is a library for the analysis of laboratory powder X-ray diffraction

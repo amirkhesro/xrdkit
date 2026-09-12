@@ -9,6 +9,10 @@ projects instead of being copied between one-off scripts.
 New here? [docs/USER_GUIDE.md](docs/USER_GUIDE.md) says what data you need, in
 what form, and how to get from a raw scan to each result.
 
+Starting from a machine with nothing installed?
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) sets up Python, xrdkit and
+the folder layout on Windows and macOS.
+
 ## Installation
 
 ```bash
