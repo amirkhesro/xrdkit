@@ -884,7 +884,7 @@ def plot_rietveld(
     sqrt_scale: bool = False,
     difference_offset: float | None = None,
     result: Mapping | str | Path | None = None,
-) -> Figure:
+) -> tuple[Figure, Axes]:
     """Plot a Rietveld fit: observed, calculated, background and difference.
 
     The observed points are small open grey circles, the calculated pattern a
@@ -929,8 +929,10 @@ def plot_rietveld(
 
     Returns
     -------
-    Figure
-        The figure drawn on.
+    tuple[Figure, Axes]
+        The figure and the axes drawn on. The whole fit shares one Axes: the
+        curves, the tick rows and the difference are all drawn on it, so there
+        is no further panel to return.
 
     Raises
     ------
@@ -1041,7 +1043,7 @@ def plot_rietveld(
         if text:
             artists.append(_below_legend(ax, legend, text))
     _clear_of(ax, artists, two_theta, [observed, calculated])
-    return fig
+    return fig, ax
 
 
 def save_figure(

@@ -954,13 +954,24 @@ def tick_rows(ax: Axes) -> list:
     return [line for line in ax.lines if line.get_marker() == "|"]
 
 
+def test_plot_rietveld_returns_the_figure_and_the_axes() -> None:
+    drawn = plot_rietveld(make_rietveld_pattern(), make_reflections())
+
+    assert isinstance(drawn, tuple)
+    fig, ax = drawn
+    assert isinstance(fig, Figure)
+    assert isinstance(ax, Axes)
+    # One Axes carries the whole fit, so there is nothing else to return.
+    assert fig.axes == [ax]
+
+
 def test_plot_rietveld_draws_the_curves_and_a_tick_row_per_phase() -> None:
     pattern = make_rietveld_pattern()
 
-    fig = plot_rietveld(pattern, make_reflections())
+    fig, ax = plot_rietveld(pattern, make_reflections())
 
     assert isinstance(fig, Figure)
-    (ax,) = fig.axes
+    assert (ax,) == tuple(fig.axes)
     # Four curves and one row of ticks for each of the two phases.
     assert len(ax.lines) == 6
     assert len(tick_rows(ax)) == 2
@@ -978,8 +989,7 @@ def test_plot_rietveld_draws_the_curves_and_a_tick_row_per_phase() -> None:
 
 def test_plot_rietveld_stacks_pattern_ticks_and_difference() -> None:
     pattern = make_rietveld_pattern()
-    fig = plot_rietveld(pattern, make_reflections())
-    ax = fig.axes[0]
+    _, ax = plot_rietveld(pattern, make_reflections())
     first, second = tick_rows(ax)
     difference = ax.lines[3]
 
@@ -1009,7 +1019,7 @@ def test_plot_rietveld_reads_the_driver_csv_files(tmp_path) -> None:
         for name, table in make_reflections().items()
     }
 
-    ax = plot_rietveld(path, reflections).axes[0]
+    _, ax = plot_rietveld(path, reflections)
 
     assert list(RIETVELD_COLUMNS) == list(pattern)
     assert len(tick_rows(ax)) == 2
@@ -1018,7 +1028,7 @@ def test_plot_rietveld_reads_the_driver_csv_files(tmp_path) -> None:
 
 
 def test_plot_rietveld_without_reflections() -> None:
-    ax = plot_rietveld(make_rietveld_pattern()).axes[0]
+    _, ax = plot_rietveld(make_rietveld_pattern())
 
     assert len(ax.lines) == 4
     assert tick_rows(ax) == []
@@ -1029,10 +1039,10 @@ def test_plot_rietveld_without_reflections() -> None:
 def test_plot_rietveld_phase_labels_and_a_sequence_of_lists() -> None:
     reflections = list(make_reflections().values())
 
-    unnamed = plot_rietveld(make_rietveld_pattern(), reflections).axes[0]
-    named = plot_rietveld(
+    _, unnamed = plot_rietveld(make_rietveld_pattern(), reflections)
+    _, named = plot_rietveld(
         make_rietveld_pattern(), reflections, phase_labels=["A", "B"]
-    ).axes[0]
+    )
 
     assert legend_labels(unnamed)[-2:] == ["Phase 1", "Phase 2"]
     assert legend_labels(named)[-2:] == ["A", "B"]
@@ -1053,7 +1063,7 @@ def test_plot_rietveld_needs_every_column() -> None:
 def test_plot_rietveld_square_root_scale() -> None:
     pattern = make_rietveld_pattern()
 
-    ax = plot_rietveld(pattern, make_reflections(), sqrt_scale=True).axes[0]
+    _, ax = plot_rietveld(pattern, make_reflections(), sqrt_scale=True)
 
     observed, _, calculated, difference = ax.lines[:4]
     np.testing.assert_allclose(observed.get_ydata(), np.sqrt(pattern["observed"]))
@@ -1069,11 +1079,12 @@ def test_plot_rietveld_explicit_difference_offset_title_and_axes() -> None:
     fig = Figure()
     ax = fig.add_subplot()
 
-    drawn = plot_rietveld(
+    drawn_fig, drawn_ax = plot_rietveld(
         pattern, make_reflections(), title="LaB6", ax=ax, difference_offset=-500.0
     )
 
-    assert drawn is fig
+    assert drawn_fig is fig
+    assert drawn_ax is ax
     assert ax.get_title() == "LaB6"
     np.testing.assert_allclose(ax.lines[3].get_ydata(), pattern["difference"] - 500.0)
 
@@ -1081,9 +1092,7 @@ def test_plot_rietveld_explicit_difference_offset_title_and_axes() -> None:
 def test_plot_rietveld_writes_the_fit_statistics(tmp_path) -> None:
     result = make_result()
 
-    ax = plot_rietveld(make_rietveld_pattern(), make_reflections(), result=result).axes[
-        0
-    ]
+    _, ax = plot_rietveld(make_rietveld_pattern(), make_reflections(), result=result)
 
     (text,) = ax.texts
     lines = text.get_text().splitlines()
@@ -1099,7 +1108,7 @@ def test_plot_rietveld_writes_the_fit_statistics(tmp_path) -> None:
 
     path = tmp_path / "result.json"
     path.write_text(json.dumps(result), encoding="utf-8")
-    from_file = plot_rietveld(make_rietveld_pattern(), result=path).axes[0]
+    _, from_file = plot_rietveld(make_rietveld_pattern(), result=path)
     assert from_file.texts[0].get_text() == text.get_text()
 
 
@@ -1110,8 +1119,7 @@ def test_plot_rietveld_keeps_the_pattern_under_the_legend() -> None:
         -0.5 * ((pattern["two_theta"] - 48.0) / 0.04) ** 2
     )
     pattern["difference"] = pattern["observed"] - pattern["calculated"]
-    fig = plot_rietveld(pattern, make_reflections(), result=make_result())
-    ax = fig.axes[0]
+    fig, ax = plot_rietveld(pattern, make_reflections(), result=make_result())
 
     renderer = FigureCanvasAgg(fig).get_renderer()
     fig.canvas.draw()
@@ -1121,7 +1129,7 @@ def test_plot_rietveld_keeps_the_pattern_under_the_legend() -> None:
 
 
 def test_plot_rietveld_saves(tmp_path) -> None:
-    fig = plot_rietveld(
+    fig, _ = plot_rietveld(
         make_rietveld_pattern(), make_reflections(), result=make_result()
     )
 
