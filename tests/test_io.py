@@ -1,5 +1,6 @@
 """Tests for xrdkit.io."""
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -7,15 +8,21 @@ import pytest
 
 from xrdkit import XRDScan, read_xrdml
 
-RAW_DIR = Path(r"C:\Users\amirk\Source\repos\XRD-Analysis\data\raw")
+# A folder of measured .xrdml scans to read. No data lives in this repository,
+# so the tests that need a real scan skip unless this names one.
+RAW_DIR_VARIABLE = "XRDKIT_TEST_RAW_DIR"
 
 
 def _first_xrdml() -> Path:
-    if not RAW_DIR.is_dir():
-        pytest.skip(f"raw data folder not present: {RAW_DIR}")
-    files = sorted(RAW_DIR.glob("*.xrdml"))
+    setting = os.environ.get(RAW_DIR_VARIABLE)
+    if not setting:
+        pytest.skip(f"{RAW_DIR_VARIABLE} is not set to a folder of .xrdml scans")
+    raw_dir = Path(setting)
+    if not raw_dir.is_dir():
+        pytest.skip(f"raw data folder not present: {raw_dir}")
+    files = sorted(raw_dir.glob("*.xrdml"))
     if not files:
-        pytest.skip(f"no .xrdml files in {RAW_DIR}")
+        pytest.skip(f"no .xrdml files in {raw_dir}")
     return files[0]
 
 

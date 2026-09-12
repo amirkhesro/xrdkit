@@ -37,3 +37,16 @@ Thumbs.db
 
 # Raw diffraction data must never live in this repository
 *.xrdml
+
+# Diffraction data and refinement projects, in any of the forms xrdkit reads
+# or GSAS-II writes
+*.gpx
+*.xy
+*.xye
+*.cif
+
+# Analysis output: figures, tables and working folders
+results/
+output/
+figures/
+data/

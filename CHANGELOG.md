@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Bail, and Rietveld refinement. Every snippet in it was executed against real
   scans before it was written down.
 
+### Changed
+
+- The tests that read a measured scan take the folder from the
+  `XRDKIT_TEST_RAW_DIR` environment variable, and skip with a message naming
+  it when it is unset or the folder holds no `.xrdml` files. No path into a
+  private data folder is written down in the suite any more.
+- `.gitignore` also covers `*.gpx`, `*.xy`, `*.xye` and `*.cif`, and the
+  `results/`, `output/`, `figures/` and `data/` folders, so a refinement run
+  in a working copy cannot leave data or output staged by accident.
+
 ### Documentation
 
 - `docs/USER_GUIDE.md` and `docs/GETTING_STARTED.md` follow a hand trial of both
