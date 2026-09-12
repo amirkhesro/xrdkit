@@ -32,6 +32,17 @@ GSAS-II is optional and is needed only for the Rietveld driver in
 point `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME` at it, or leave it at
 `~/gsas2main`. Every other module works without it.
 
+## Feedback and bug reports
+
+Bug reports and feature requests go through GitHub Issues, at
+<https://github.com/amirkhesro/xrdkit/issues>. A useful bug report gives the
+xrdkit version (`python -c "import xrdkit; print(xrdkit.__version__)"`), the
+operating system, the smallest script that shows the problem and the full
+error message. Questions about method are welcome in the same place.
+
+Please do not attach measured data from unpublished work to a public issue:
+describe the pattern instead, or use a public standard such as LaB6.
+
 ## Data
 
 This repository contains **code only**. Raw and processed diffraction data
