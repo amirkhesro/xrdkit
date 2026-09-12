@@ -1,5 +1,7 @@
 """Reusable X-ray diffraction analysis toolkit for electroceramics research."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from xrdkit.broadening import (
     BreadthModelFit,
     BreadthModels,
@@ -116,6 +118,11 @@ from xrdkit.structure import (
     site_setup,
 )
 
+try:
+    __version__ = version("xrdkit")
+except PackageNotFoundError:  # running from a source tree, not installed
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
     "ATOMIC_MASSES",
     "TTB_CELL",
@@ -143,6 +150,7 @@ __all__ = [
     "WilliamsonHall",
     "XRDScan",
     "ZeroSearch",
+    "__version__",
     "accepted_stages",
     "annotate_hkl",
     "apply_style",

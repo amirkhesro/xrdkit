@@ -7,13 +7,41 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Amir Khesro", email = "174715580+amirkhesro@users.noreply.github.com" }
+    { name = "Amir Khesro", email = "am.khesro@gmail.com" }
+]
+keywords = [
+    "x-ray diffraction",
+    "XRD",
+    "powder diffraction",
+    "Rietveld",
+    "Le Bail",
+    "GSAS-II",
+    "materials science",
+    "ceramics",
+    "crystallography",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Typing :: Typed",
 ]
 dependencies = [
     "matplotlib>=3.11.1",
     "numpy>=2.0.0",
     "scipy>=1.13.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/amirkhesro/xrdkit"
+Repository = "https://github.com/amirkhesro/xrdkit"
+Issues = "https://github.com/amirkhesro/xrdkit/issues"
+Changelog = "https://github.com/amirkhesro/xrdkit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 phases = [

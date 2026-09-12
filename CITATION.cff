@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: xrdkit
+abstract: >-
+  A reusable X-ray diffraction analysis toolkit for electroceramics research,
+  covering pattern reading, peak finding, indexing, lattice refinement, size
+  and strain analysis, phase matching and unattended GSAS-II Rietveld
+  refinement.
+authors:
+  - given-names: Amir
+    family-names: Khesro
+    orcid: "https://orcid.org/0000-0002-0015-9332"
+version: 0.1.0
+date-released: "2026-09-12"
+license: MIT
+repository-code: "https://github.com/amirkhesro/xrdkit"

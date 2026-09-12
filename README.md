@@ -6,6 +6,24 @@ A reusable X-ray diffraction analysis toolkit for electroceramics research.
 analysing XRD patterns, so that the same analysis code can be reused across
 projects instead of being copied between one-off scripts.
 
+## Installation
+
+```bash
+pip install xrdkit
+```
+
+Phase matching against the COD needs pymatgen, which comes with the `phases`
+extra:
+
+```bash
+pip install "xrdkit[phases]"
+```
+
+GSAS-II is optional and is needed only for the Rietveld driver in
+`xrdkit.gsas2`. It is not a Python dependency: install it separately and
+point `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME` at it, or leave it at
+`~/gsas2main`. Every other module works without it.
+
 ## Data
 
 This repository contains **code only**. Raw and processed diffraction data
@@ -169,6 +187,12 @@ ups with `summary_markdown` at the end of every run.
 
 Under active development. The API is not yet stable and may change without
 notice.
+
+## Citing
+
+If xrdkit contributes to work you publish, please cite it. The metadata is in
+[CITATION.cff](CITATION.cff), which GitHub renders as a ready-made citation
+under **Cite this repository**.
 
 ## License
 
