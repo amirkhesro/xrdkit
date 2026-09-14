@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says that pip installs into Python rather than into a folder, adds VESTA as an
   optional viewer, and says what has to be done before the user guide is opened
   and what to change when a script is reused on the next dataset.
+- `docs/USER_GUIDE.md` Section 5.1 notes a licensed search and match as the
+  authoritative phase identification route, alongside the COD route.
 
 ### Fixed
 
