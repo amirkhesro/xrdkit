@@ -35,8 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says that pip installs into Python rather than into a folder, adds VESTA as an
   optional viewer, and says what has to be done before the user guide is opened
   and what to change when a script is reused on the next dataset.
-- `docs/USER_GUIDE.md` Section 5.1 notes a licensed search and match as the
-  authoritative phase identification route, alongside the COD route.
+- `docs/USER_GUIDE.md` Section 5.2, Route A, is expanded to say that a licensed
+  search and match is the authoritative phase identification and the citable
+  record, that Route B serves routine screening, and that a CIF exported from
+  the licensed database can seed Workflows 3 and 4.
 
 ### Fixed
 

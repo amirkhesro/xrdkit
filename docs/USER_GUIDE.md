@@ -17,7 +17,7 @@ run the scripts in this guide.
 Section 2, each of the four workflows, and Section 8 begin with the complete
 script they need, ready to be copied, saved and run: `check_scan.py` in
 Section 2.1, `plot_pattern.py` and `stack_patterns.py` in Section 4.1,
-`identify_phases.py` in Section 5.4, `make_instprm.py` and
+`identify_phases.py` in Section 5.3, `make_instprm.py` and
 `lattice_density.py` in Section 6.2, `config/samples.toml` and
 `refine_rietveld.py` in Section 7.2, and `read_xy.py` in Section 8.1. What
 follows each of those parts is the same script explained in pieces, and does
@@ -750,7 +750,7 @@ becomes a short tag for the new sample. Every figure and every CSV file below
 them is named from `STEM` with an f string, so the new run writes a fresh set
 of files and leaves the last sample's alone. In `stack_patterns.py` the same is
 true of `SCAN_FILES`, `LABELS` and `STEM`, and of the settings of
-`identify_phases.py` in Section 5.4, where `ELEMENTS` changes as well whenever
+`identify_phases.py` in Section 5.3, where `ELEMENTS` changes as well whenever
 the sample is weighed out from a different set of them.
 
 Edit those lines by hand, and only those lines. Do not use Replace All. The
@@ -787,24 +787,7 @@ the PDF is the better index of what has been reported, and then use Route B to
 get a CIF for each phase it named, because a Rietveld refinement needs a
 structure and a PDF card is not one.
 
-### 5.1 Licensed search and match
-
-xrdkit identifies phases from CIFs obtained through the Crystallography Open
-Database, which is free and requires no licence. Where you have access to a
-licensed search and match system, typically PANalytical HighScore or the ICDD
-SIeve+ tool with the PDF database on an institutional analysis computer, that
-route is the authoritative identification. The PDF database is larger, curated
-and quality graded, and a card number with its quality mark and citation is the
-conventional record of phase identification in publications.
-
-The two routes are complementary. The COD route in this guide serves routine
-screening on your own computer, and the licensed route, where available, serves
-the definitive check and the citable record. When you use the licensed route,
-record the chosen card numbers alongside the CIF index and the sample metadata
-described in this guide. A CIF exported from the licensed database can seed the
-Le Bail and Rietveld workflows in Sections 6 and 7 in the same way as a COD CIF.
-
-### 5.2 When it is needed
+### 5.1 When it is needed
 
 Three occasions, and none of them is optional.
 
@@ -829,14 +812,25 @@ weight per cent of something else, which is enough to change a dielectric
 measurement and not enough to be obvious in the pattern unless it is looked
 for.
 
-### 5.3 Route A: a licensed database search and match
+### 5.2 Route A: a licensed database search and match
 
-If your facility has HighScore, DIFFRAC.EVA, Jade or another package with the
-ICDD PDF behind it, run the search and match there first. It is a better index
-than any free database: the PDF covers the inorganic literature far more
-completely than the COD does, its cards carry measured rather than calculated
-intensities for many phases, and the matching is tuned for it. Nothing in
-xrdkit replaces that, and nothing in xrdkit reads its output.
+xrdkit identifies phases from CIFs obtained through the Crystallography Open
+Database, which is free and requires no licence, and that is Route B. Where you
+have access to a licensed search and match system, typically PANalytical
+HighScore or the ICDD SIeve+ tool with the PDF database on an institutional
+analysis computer, or DIFFRAC.EVA, Jade or another package with the PDF behind
+it, run the search and match there first, because Route A is the authoritative
+identification. It is a better index than any free database: the PDF is larger
+and covers the inorganic literature far more completely than the COD does, it
+is curated and quality graded, its cards carry measured rather than calculated
+intensities for many phases, and the matching is tuned for it. A card number
+with its quality mark and citation is also the conventional record of phase
+identification in publications. Nothing in xrdkit replaces that search, and
+nothing in xrdkit reads its output.
+
+The two routes are complementary. Route B serves routine screening on your own
+computer, and Route A, where it is available, serves the definitive check and
+the citable record.
 
 Restrict the chemistry before searching. A search and match run against the
 whole database on a pattern of nine peaks will offer a list of plausible
@@ -846,19 +840,21 @@ main phase at the top. Add carbon for a carbonate precursor that may not have
 decomposed, and aluminium or platinum where the crucible could have reacted.
 
 Record what the search found, for the main phase and for every secondary phase
-it named: the card number, the formula, the space group, the cell, and the
-release of the database the card came from. That last one matters because cards
-are revised and withdrawn, and a card number alone does not say which version
-was seen. Put those in the sample metadata, and put a row for each in
-`cifs/index.csv`, which is the same index Route B writes. `write_cif_index`
-takes a plain mapping as well as a COD record, so a PDF card goes in as a row
-with `source` set to the database and `identifier` to the card number, and no
-CIF file of its own until one is found.
+it named: the card number you chose, its quality mark and citation, the
+formula, the space group, the cell, and the release of the database the card
+came from. That last one matters because cards are revised and withdrawn, and a
+card number alone does not say which version was seen. Put those in the sample
+metadata, and put a row for each in `cifs/index.csv`, which is the same index
+Route B writes. `write_cif_index` takes a plain mapping as well as a COD
+record, so a PDF card goes in as a row with `source` set to the database and
+`identifier` to the card number, and no CIF file of its own until one is found.
 
-Then come back to Route B for the CIFs. A card is a pattern; the workflows
-below need a structure.
+Then find a structure for each phase. A card is a pattern; the workflows below
+need a structure. A CIF exported from the licensed database can seed the Le
+Bail and Rietveld workflows in Sections 6 and 7 in the same way as a COD CIF,
+and where the database does not export one, come back to Route B for it.
 
-### 5.4 Start here: the complete script
+### 5.3 Start here: the complete script
 
 Route B is one script. `identify_phases.py` reads a scan, finds its peaks,
 searches the Crystallography Open Database for entries made of the elements the
@@ -973,7 +969,7 @@ The rest of the section takes that script in pieces and says how to read what
 it prints. None of the pieces needs to be typed again: they are the lines of
 the block above, in the order they appear there.
 
-### 5.5 The peaks, and the search
+### 5.4 The peaks, and the search
 
 The peaks to identify from are the ones Workflow 1 already found, and the
 script finds them again rather than reading them back, so that it can be run on
@@ -990,7 +986,7 @@ about 0.3 degrees so that an uncorrected shift does not throw the matching out.
 
 `MAIN_PHASE` is the COD id of the entry taken as the main phase, and it is the
 one setting that cannot be filled in before the script has been run: it is read
-off the table the run prints, which Section 5.7 goes through. Put any candidate
+off the table the run prints, which Section 5.6 goes through. Put any candidate
 in it for the first run, and the chosen one for the second.
 
 Start a new file named `identify_phases.py`.
@@ -1070,12 +1066,12 @@ list. Nine entries are the tetragonal tungsten bronze at Sr to Ba ratios from
 one, 2103856, in a nonstandard centring the COD writes as `X4bm`. The other
 two are a hexagonal perovskite, Sr Ba3 Nb2 O9. Deciding between those two
 structure types is the identification; deciding between nine entries of one of
-them is not, and Section 5.7 says why.
+them is not, and Section 5.6 says why.
 
 The COD grows, so a search run later may return more entries than eleven. That
 changes the list without changing how it is read.
 
-### 5.6 Fetching the CIFs and recording them
+### 5.5 Fetching the CIFs and recording them
 
 `cod_fetch` downloads one entry's CIF into a folder and returns the path it
 wrote, naming the file after the COD id. A file already there is skipped by the
@@ -1112,7 +1108,7 @@ print(f"index written to {write_cif_index(records, 'cifs/index.csv', notes=STEM)
 index written to cifs\index.csv
 ```
 
-### 5.7 Simulating and matching
+### 5.6 Simulating and matching
 
 `simulate_pattern` turns a CIF into a list of `SimulatedReflection`, each with
 a two theta, an intensity relative to the strongest line as 100, and one hkl of
@@ -1249,7 +1245,7 @@ the elements a crucible or an incompletely decomposed carbonate could
 contribute added to `ELEMENTS`. What is not the next step is deciding that one
 peak does not matter.
 
-### 5.8 Where the result goes
+### 5.7 Where the result goes
 
 Three things come out of this workflow and each has somewhere to be.
 
