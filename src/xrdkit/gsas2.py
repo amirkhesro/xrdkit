@@ -359,7 +359,8 @@ def build_refine_job(
     export_prefix
         Path the exported files are named from: ``<prefix>_histogram.csv``,
         ``<prefix>_reflections_<phase>.csv`` and ``<prefix>.instprm``. By
-        default ``gpx`` without its extension.
+        default ``gpx`` without a ``.gpx`` extension, so that a stem such as
+        ``x0.10`` keeps its dot.
     le_bail_cycles
         Le Bail-only cycles to run whenever a stage switches Le Bail
         extraction on, before its least squares; the driver's own default,
@@ -401,8 +402,14 @@ def build_refine_job(
         alone refined held from then on (see the ``gsas2_driver`` notes). By
         default a new flag rejects a stage and an unsettled one is kept.
 
+    Every path, ``gpx``, ``data_file``, ``instprm``, each phase's ``cif`` and
+    ``export_prefix``, is made absolute against the current working directory,
+    since the driver runs in a working folder of its own.
+
     Raises
     ------
+    Gsas2Error
+        If ``data_file``, ``instprm`` or a phase's ``cif`` does not exist.
     ValueError
         If only some of ``data_file``, ``instprm`` and ``phases`` are given, a
         phase lacks ``cif`` or ``name``, the limits are not increasing,
@@ -433,13 +440,18 @@ def build_refine_job(
     stages = copy.deepcopy([dict(stage) for stage in stages])
     gsas2_driver.accumulate_stages(stages)
 
-    gpx = Path(gpx)
+    gpx = Path(gpx).resolve()
+    if export_prefix is None:
+        # Only a .gpx extension is taken off: with_suffix("") would also take
+        # the ".10" off a stem such as x0.10.
+        name = gpx.name[: -len(".gpx")] if gpx.suffix.lower() == ".gpx" else gpx.name
+        export_prefix = gpx.parent / name
     job = {
         "action": "refine",
         "gpx": str(gpx),
         "stages": stages,
         "cycles": cycles,
-        "export_prefix": str(export_prefix or gpx.with_suffix("")),
+        "export_prefix": str(Path(export_prefix).resolve()),
     }
     if limits is not None:
         lower, upper = (float(value) for value in limits)
@@ -488,9 +500,22 @@ def build_refine_job(
                 entry["atoms"] = gsas2_driver.check_atom_edits(
                     [dict(edit) for edit in phase["atoms"]], entry["name"]
                 )
+            entry["cif"] = str(_existing_input(phase["cif"], f"CIF of {entry['name']}"))
             entries.append(entry)
-        job.update(data_file=str(data_file), instprm=str(instprm), phases=entries)
+        job.update(
+            data_file=str(_existing_input(data_file, "data file")),
+            instprm=str(_existing_input(instprm, "instrument parameter file")),
+            phases=entries,
+        )
     return job
+
+
+def _existing_input(path: str | Path, what: str) -> Path:
+    """Return ``path`` made absolute, or raise Gsas2Error if it is not a file."""
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise Gsas2Error(f"{what} not found: {resolved}")
+    return resolved
 
 
 def _check_bonds(bonds: bool | Mapping) -> dict:

@@ -28,14 +28,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it also indexes the peaks from that tetragonal start cell, writes
   `results/indexed_{stem}.csv` and an hkl labelled `figures/pattern_hkl_{stem}`,
   and prints the refined cell and zero. `--space-group`, `--zero`, `--label` and
-  `--no-satellites` tune it.
+  `--no-satellites` tune it. The hkl figure's y axis runs 20 per cent of its
+  span above the tallest point of the trace, so the label on the strongest peak
+  stays inside the axes.
 - `xrdkit stack SCAN [SCAN ...] --labels TEXT [TEXT ...]`, which writes the
   scans stacked to `figures/stack_{stem}`, with `--offset` and
   `--no-normalise`.
-- Both figure commands take `--stem`, `--out DIR` (under which `results/` and
-  `figures/` are created), `--scale {linear,sqrt,log}` and `--json`. Each
-  prints the files it wrote, and exits with status 1 when an input file is
-  missing.
+- Both figure commands take `--stem`, `--out DIR` (the output root, under which
+  `results/` and `figures/` are created as needed), `--scale
+  {linear,sqrt,log}` and `--json`. Each prints the files it wrote, and exits
+  with status 1 when an input file is missing.
+- `xrdkit density --formula TEXT --z N`, with either `--cell A C [--esd-cell
+  EA EC]` for a tetragonal cell or `--volume V [--esd-volume EV]` for any
+  symmetry, and optionally `--archimedes RHO [ESD]`. It prints the formula
+  mass, the cell volume, the theoretical density and, given a measured one, the
+  relative density, each with its esd where one exists, and writes one row
+  holding every input, every result, the method and the date to
+  `results/density_{stem}.csv`. `--json` prints the same fields.
+- `xrdkit.density.parse_formula`, which reads a formula such as
+  `"Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"` or `"Ca(OH)2"` into element counts, and
+  `relative_density`, a measured density as a percentage of the theoretical one
+  with the relative errors of the two added in quadrature.
+- `ATOMIC_MASSES` covers every element from H to U: IUPAC 2021 conventional
+  standard atomic weights, and for the elements with no stable isotope the
+  mass number of the longest lived one.
 
 ### Changed
 
@@ -67,7 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Nothing yet.
+- `formula_mass` and `theoretical_density` accept a formula string as well as a
+  mapping of element to atoms per formula unit.
+- `build_refine_job` makes every path it is given absolute, against the
+  caller's working directory rather than the driver's, so relative paths work,
+  and raises `Gsas2Error` naming the file when the data file, the instrument
+  parameter file or a phase's CIF does not exist.
+- A `.gpx` stem containing a dot, such as `x0.10`, keeps it in the default
+  export prefix; only a `.gpx` extension is taken off.
 
 ### Planned
 
@@ -81,10 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_rietveld` to take its Rwp and GOF from the stage the final model came
   from, rather than from the last stage without an error entry, which is the
   wrong one whenever a stage was rejected.
-- `formula_mass` to accept a formula string as well as a dictionary of element
-  to atoms per formula unit.
-- `build_refine_job` to accept relative paths, resolving them against the
-  caller's working directory rather than the driver's.
 
 ## [0.1.0] - 2026-09-12
 

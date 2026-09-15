@@ -1,5 +1,8 @@
 """Tests for xrdkit.density."""
 
+import itertools
+import re
+
 import numpy as np
 import pytest
 
@@ -8,6 +11,8 @@ from xrdkit import (
     TetragonalCell,
     cell_volume,
     formula_mass,
+    parse_formula,
+    relative_density,
     theoretical_density,
 )
 
@@ -135,3 +140,155 @@ def test_density_esd_has_the_relative_esd_of_the_volume() -> None:
 def test_density_rejects_non_positive_inputs(z: float, volume: float) -> None:
     with pytest.raises(ValueError):
         theoretical_density(SRTIO3, z, volume)
+
+
+# parse_formula
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [
+        ("LaB6", {"La": 1.0, "B": 6.0}),
+        (
+            "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6",
+            {"Sr": 0.4, "Ba": 0.5, "La": 0.1, "Nb": 1.9, "Ti": 0.1, "O": 6.0},
+        ),
+        ("Ca(OH)2", {"Ca": 1.0, "O": 2.0, "H": 2.0}),
+        ("Mg3(PO4)2", {"Mg": 3.0, "P": 2.0, "O": 8.0}),
+        ("K4(Fe(CN)6)", {"K": 4.0, "Fe": 1.0, "C": 6.0, "N": 6.0}),
+        ("CH3COOH", {"C": 2.0, "H": 4.0, "O": 2.0}),
+        ("CO", {"C": 1.0, "O": 1.0}),
+        (" SrTiO3 ", {"Sr": 1.0, "Ti": 1.0, "O": 3.0}),
+    ],
+    ids=[
+        "LaB6",
+        "TTB",
+        "parentheses",
+        "group of groups",
+        "nested",
+        "repeat",
+        "CO",
+        "spaces",
+    ],
+)
+def test_parse_formula(formula: str, expected: dict) -> None:
+    parsed = parse_formula(formula)
+
+    assert parsed == pytest.approx(expected)
+    assert list(parsed) == list(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "offending"),
+    [
+        ("", "formula is empty"),
+        ("Sr0.4 Ba0.5", "' Ba0.5'"),
+        ("srTiO3", "'srTiO3'"),
+        ("Xx2O3", "'Xx'"),
+        ("Ca(OH2", "'(OH2'"),
+        ("CaOH)2", "')2'"),
+        ("Ca()2", "'()'"),
+        ("O6.", "'.'"),
+        ("Ti-O2", "'-O2'"),
+    ],
+    ids=[
+        "empty",
+        "space",
+        "lower case",
+        "unknown",
+        "open",
+        "close",
+        "empty group",
+        "stray dot",
+        "stray sign",
+    ],
+)
+def test_parse_formula_rejects_malformed_text(formula: str, offending: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(offending)):
+        parse_formula(formula)
+
+
+def test_formula_mass_takes_a_formula_string() -> None:
+    assert formula_mass("SrTiO3") == pytest.approx(SRTIO3_MASS, abs=1e-9)
+    assert formula_mass("Ca(OH)2") == pytest.approx(40.078 + 2 * (15.999 + 1.008))
+
+
+def test_theoretical_density_takes_a_formula_string() -> None:
+    volume, esd_volume = 610.0, 0.3
+    composition = {"Sr": 0.4, "Ba": 0.5, "La": 0.1, "Nb": 1.9, "Ti": 0.1, "O": 6}
+
+    from_string = theoretical_density(
+        "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6", 5, volume, esd_volume
+    )
+
+    assert from_string == pytest.approx(
+        theoretical_density(composition, 5, volume, esd_volume)
+    )
+
+
+def test_atomic_masses_run_from_hydrogen_to_uranium() -> None:
+    # fmt: off
+    symbols = [
+        "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si",
+        "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni",
+        "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb",
+        "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe",
+        "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho",
+        "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+        "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U",
+    ]
+    # fmt: on
+
+    assert len(symbols) == 92
+    assert list(ATOMIC_MASSES) == symbols
+    assert all(isinstance(mass, float) for mass in ATOMIC_MASSES.values())
+    # Masses rise with atomic number except at the known inversions.
+    inversions = {("Ar", "K"), ("Co", "Ni"), ("Te", "I"), ("Th", "Pa")}
+    for lighter, heavier in itertools.pairwise(symbols):
+        if (lighter, heavier) not in inversions:
+            assert ATOMIC_MASSES[lighter] < ATOMIC_MASSES[heavier], (lighter, heavier)
+
+
+def test_atomic_masses_keep_their_earlier_values() -> None:
+    assert ATOMIC_MASSES["Na"] == 22.98976928
+    assert ATOMIC_MASSES["Gd"] == 157.25
+    assert ATOMIC_MASSES["Zr"] == 91.224
+    assert ATOMIC_MASSES["Bi"] == 208.98040
+    assert ATOMIC_MASSES["O"] == 15.999
+
+
+# relative_density
+
+
+def test_relative_density_without_esds() -> None:
+    ratio, esd = relative_density(5.15, 5.40)
+
+    assert ratio == pytest.approx(100 * 5.15 / 5.40)
+    assert esd is None
+
+
+@pytest.mark.parametrize(
+    ("esd_measured", "esd_theoretical", "relative"),
+    [
+        (0.02, None, 0.02 / 5.15),
+        (None, 0.004, 0.004 / 5.40),
+        (0.02, 0.004, np.hypot(0.02 / 5.15, 0.004 / 5.40)),
+    ],
+    ids=["measured only", "theoretical only", "both"],
+)
+def test_relative_density_adds_relative_errors_in_quadrature(
+    esd_measured: float | None, esd_theoretical: float | None, relative: float
+) -> None:
+    ratio, esd = relative_density(5.15, 5.40, esd_measured, esd_theoretical)
+
+    assert esd == pytest.approx(ratio * relative)
+
+
+@pytest.mark.parametrize(
+    ("measured", "theoretical"), [(0.0, 5.4), (5.1, 0.0), (-1, 5.4)]
+)
+def test_relative_density_rejects_non_positive_densities(
+    measured: float, theoretical: float
+) -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        relative_density(measured, theoretical)

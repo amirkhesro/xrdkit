@@ -7,6 +7,7 @@ skipped where it is not installed.
 
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -370,6 +371,8 @@ def test_standard_stages() -> None:
 
 
 def test_build_refine_job_creating_the_project(tmp_path) -> None:
+    tmp_path = tmp_path.resolve()
+    _touch(tmp_path, "scan.xrdml", "cu.instprm", "lab6.cif")
     stages = [stage for stage in standard_stages() if stage["name"] != "cell"]
     job = build_refine_job(
         tmp_path / "lab6.gpx",
@@ -444,6 +447,8 @@ def test_build_refine_job_le_bail_cycles() -> None:
 
 
 def test_build_refine_job_structure_background_and_uiso(tmp_path) -> None:
+    tmp_path = tmp_path.resolve()
+    _touch(tmp_path, "scan.xrdml", "cu.instprm", "ttb.cif")
     job = build_refine_job(
         tmp_path / "ttb.gpx",
         [{"scale": True}, {"overall_uiso": True}],
@@ -588,6 +593,62 @@ def test_build_refine_job_rejects(arguments, message) -> None:
     arguments = {"gpx": "lab6.gpx", "stages": [{"zero": True}], **arguments}
     with pytest.raises(ValueError, match=message):
         build_refine_job(**arguments)
+
+
+def _touch(folder: Path, *names: str) -> list[Path]:
+    """Create empty files ``names`` in ``folder``, returning their paths."""
+    paths = [folder / name for name in names]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    return paths
+
+
+def test_build_refine_job_resolves_relative_paths(tmp_path, monkeypatch) -> None:
+    _touch(tmp_path, "data/scan.xrdml", "data/cu.instprm", "cifs/ttb.cif")
+    monkeypatch.chdir(tmp_path)
+
+    job = build_refine_job(
+        "results/ttb.gpx",
+        [{"scale": True}],
+        data_file="data/scan.xrdml",
+        instprm="data/cu.instprm",
+        phases=[{"cif": "cifs/ttb.cif", "name": "TTB"}],
+        export_prefix="results/run1",
+    )
+
+    root = tmp_path.resolve()
+    assert job["gpx"] == str(root / "results" / "ttb.gpx")
+    assert job["data_file"] == str(root / "data" / "scan.xrdml")
+    assert job["instprm"] == str(root / "data" / "cu.instprm")
+    assert job["phases"][0]["cif"] == str(root / "cifs" / "ttb.cif")
+    assert job["export_prefix"] == str(root / "results" / "run1")
+    for key in ("gpx", "data_file", "instprm", "export_prefix"):
+        assert Path(job[key]).is_absolute(), key
+
+
+@pytest.mark.parametrize("missing", ["cu.instprm", "scan.xrdml", "ttb.cif"])
+def test_build_refine_job_names_a_missing_input(tmp_path, missing) -> None:
+    names = ["scan.xrdml", "cu.instprm", "ttb.cif"]
+    _touch(tmp_path, *(name for name in names if name != missing))
+
+    with pytest.raises(Gsas2Error, match=re.escape(missing)):
+        build_refine_job(
+            tmp_path / "ttb.gpx",
+            [{"scale": True}],
+            data_file=tmp_path / "scan.xrdml",
+            instprm=tmp_path / "cu.instprm",
+            phases=[{"cif": tmp_path / "ttb.cif", "name": "TTB"}],
+        )
+
+
+def test_build_refine_job_keeps_a_dot_in_the_stem(tmp_path) -> None:
+    root = tmp_path.resolve()
+    bare = build_refine_job(tmp_path / "x0.10", [{"zero": True}])
+    assert bare["export_prefix"] == str(root / "x0.10")
+    named = build_refine_job(tmp_path / "x0.10.gpx", [{"zero": True}])
+    assert named["gpx"] == str(root / "x0.10.gpx")
+    assert named["export_prefix"] == str(root / "x0.10")
 
 
 # gsas2_fwhm

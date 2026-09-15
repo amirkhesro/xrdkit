@@ -1,5 +1,7 @@
 """Tests for xrdkit.cli."""
 
+import csv
+import datetime
 import json
 from pathlib import Path
 
@@ -9,9 +11,17 @@ matplotlib.use("Agg")
 
 import numpy as np
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-from xrdkit import TetragonalCell, generate_reflections
-from xrdkit.cli import main
+from xrdkit import (
+    TetragonalCell,
+    cli,
+    find_peaks,
+    generate_reflections,
+    index_and_refine,
+    read_xrdml,
+)
+from xrdkit.cli import HKL_HEADROOM, main
 from xrdkit.quality import WORKFLOWS
 
 # A minimal PANalytical XRDMeasurement 2.x scan, with the byte order mark the
@@ -248,3 +258,103 @@ def test_stack_missing_file(tmp_path, capsys) -> None:
     argv = ["stack", str(first), str(missing), "--labels", "a", "b"]
     assert main(argv) == 1
     assert capsys.readouterr().err.strip() == f"xrdkit stack: no such file: {missing}"
+
+
+def test_hkl_labels_stay_inside_the_axes(tmp_path, monkeypatch) -> None:
+    path, _ = _write_indexable_xrdml(tmp_path / "ttb.xrdml")
+    scan = read_xrdml(path)
+    peaks = find_peaks(scan)
+    indexed, _ = index_and_refine(
+        peaks, TetragonalCell(a=12.45, c=3.94), scan.wavelength
+    )
+
+    def label_tops(headroom: float) -> tuple[float, float]:
+        monkeypatch.setattr(cli, "HKL_HEADROOM", headroom)
+        fig, ax = cli._hkl_figure(scan, indexed, "linear", "TTB")
+        renderer = FigureCanvasAgg(fig).get_renderer()
+        highest = max(text.get_window_extent(renderer).y1 for text in ax.texts)
+        return highest, ax.get_window_extent(renderer).y1
+
+    assert len(indexed) > 0
+    # Without headroom the label on the tallest peak runs past the top.
+    highest, top = label_tops(0.0)
+    assert highest > top
+    highest, top = label_tops(HKL_HEADROOM)
+    assert highest <= top
+
+
+DENSITY = ["density", "--formula", "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6", "--z", "5"]
+
+
+def test_density_from_a_cell(tmp_path, capsys) -> None:
+    argv = [*DENSITY, "--cell", "12.45", "3.94", "--esd-cell", "0.001", "0.0005"]
+    argv += ["--archimedes", "5.15", "0.02", "--out", str(tmp_path), "--stem", "x10"]
+
+    assert main(argv) == 0
+
+    path = tmp_path / "results" / "density_x10.csv"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        "M = 394.905 g/mol per formula unit",
+        "V = 610.710 +/- 0.125 cubic angstrom",
+        "theoretical density 5.3688 +/- 0.0011 g/cm3",
+        "Archimedes density 5.1500 +/- 0.0200 g/cm3",
+        "relative density 95.92 +/- 0.37 per cent",
+        str(path),
+    ]
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["formula"] == "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
+    assert float(row["z"]) == 5
+    assert float(row["a_angstrom"]) == 12.45
+    assert float(row["esd_c_angstrom"]) == 0.0005
+    assert float(row["theoretical_density_g_cm3"]) == pytest.approx(5.3688, abs=1e-4)
+    assert float(row["relative_density_percent"]) == pytest.approx(95.92, abs=0.01)
+    assert row["method"] == (
+        "theoretical density from cell volume and formula mass; "
+        "relative density = measured / theoretical"
+    )
+    today = datetime.datetime.now(datetime.UTC).astimezone().date()
+    assert row["date"] == today.isoformat()
+
+
+def test_density_from_a_volume_json(tmp_path, capsys) -> None:
+    argv = [*DENSITY, "--volume", "610.0", "--esd-volume", "0.3", "--json"]
+
+    assert main([*argv, "--out", str(tmp_path)]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["files"] == [str(tmp_path / "results" / "density_density.csv")]
+    assert Path(result["files"][0]).is_file()
+    assert result["volume_a3"] == 610.0
+    assert result["a_angstrom"] is None
+    assert result["archimedes_density_g_cm3"] is None
+    assert result["relative_density_percent"] is None
+    assert result["esd_theoretical_density_g_cm3"] == pytest.approx(
+        result["theoretical_density_g_cm3"] * 0.3 / 610.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--formula", "LaB6", "--volume", "71.8"], "--z is required"),
+        (["--z", "1", "--volume", "71.8"], "--formula is required"),
+        (DENSITY[1:] + ["--volume", "610", "--cell", "12.45", "3.94"], "one of --cell"),
+        (DENSITY[1:], "one of --cell"),
+        (DENSITY[1:] + ["--volume", "610", "--esd-cell", "0.1", "0.1"], "--esd-cell"),
+        (DENSITY[1:] + ["--volume", "610", "--archimedes", "5", "0.1", "1"], "at most"),
+        (["--formula", "La(B6", "--z", "1", "--volume", "71.8"], "unmatched '('"),
+    ],
+    ids=["no z", "no formula", "both", "neither", "stray esd", "archimedes", "formula"],
+)
+def test_density_rejects_bad_options(tmp_path, capsys, argv, message) -> None:
+    assert main(["density", *argv, "--out", str(tmp_path)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("xrdkit density: ")
+    assert message in captured.err
+    assert not (tmp_path / "results").exists()

@@ -33,6 +33,8 @@ from xrdkit.density import (
     ATOMIC_MASSES,
     cell_volume,
     formula_mass,
+    parse_formula,
+    relative_density,
     theoretical_density,
 )
 from xrdkit.gsas2 import (
@@ -195,6 +197,7 @@ __all__ = [
     "mark_peaks",
     "match_candidate",
     "metric_tensor",
+    "parse_formula",
     "peaks_to_csv",
     "plot_caglioti",
     "plot_pattern",
@@ -206,6 +209,7 @@ __all__ = [
     "read_xrdml",
     "refine_cell",
     "refine_lattice",
+    "relative_density",
     "resolution_limit",
     "run_job",
     "sample_settings",
