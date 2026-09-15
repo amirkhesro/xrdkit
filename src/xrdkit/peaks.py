@@ -29,6 +29,13 @@ DEFAULT_MIN_DISTANCE = 0.15
 # so 0.5 gives the full width at half maximum.
 HALF_PROMINENCE = 0.5
 
+# The background under a peak is the lowest intensity within this many degrees
+# either side of it. That is wide enough to reach past the peak and a resolved
+# K alpha 2 satellite to the floor between reflections, and narrow enough to
+# follow a sloping background; a satellite and its parent, a fraction of a
+# degree apart, share nearly the same window and so the same background.
+BACKGROUND_HALF_WIDTH = 1.0
+
 # Copper K alpha 1 and K alpha 2 wavelengths, in angstroms. A satellite
 # diffracts at the same d spacing as its parent, so Bragg's law puts it at
 # 2theta_2 = 2 arcsin(KALPHA2_RATIO sin(theta_1)), always to high angle.
@@ -79,6 +86,9 @@ class Peak:
     # Index in the peak list of the K alpha 1 parent this peak is a satellite
     # of, or None if it is not judged to be one.
     kalpha2_of: int | None = None
+    # Background counts under the peak, estimated by find_peaks as the lowest
+    # intensity within BACKGROUND_HALF_WIDTH of it; 0 when not estimated.
+    background: float = 0.0
 
 
 def _step_size(scan: XRDScan) -> float:
@@ -121,6 +131,17 @@ def _refine_position(
     if not -1.0 < shift < 1.0:
         return grid_position
     return grid_position + shift * step
+
+
+def _local_background(
+    two_theta: np.ndarray, intensity: np.ndarray, indices: np.ndarray
+) -> list[float]:
+    """The lowest intensity within BACKGROUND_HALF_WIDTH of each peak index,
+    on a rising 2theta axis."""
+    centres = two_theta[indices]
+    starts = np.searchsorted(two_theta, centres - BACKGROUND_HALF_WIDTH, "left")
+    ends = np.searchsorted(two_theta, centres + BACKGROUND_HALF_WIDTH, "right")
+    return [float(np.min(intensity[s:e])) for s, e in zip(starts, ends)]
 
 
 def find_peaks(
@@ -192,10 +213,11 @@ def find_peaks(
 
     heights = intensity[indices]
     strongest = float(np.max(heights))
+    backgrounds = _local_background(two_theta, intensity, indices)
 
     peaks = []
-    for index, height, peak_prominence, width in zip(
-        indices, heights, properties["prominences"], widths
+    for index, height, peak_prominence, width, background in zip(
+        indices, heights, properties["prominences"], widths, backgrounds
     ):
         position = _refine_position(two_theta, intensity, int(index), step)
         peaks.append(
@@ -206,6 +228,7 @@ def find_peaks(
                 fwhm=float(width) * step,
                 d_spacing=_d_spacing(position, scan.wavelength),
                 relative_intensity=100.0 * float(height) / strongest,
+                background=background,
             )
         )
     peaks.sort(key=lambda peak: peak.two_theta)
@@ -245,7 +268,11 @@ def flag_kalpha2(
     reflection can sit at the K alpha 2 spacing above a neighbour, and is told
     apart by being of comparable height.
 
-    Intensities are the peak heights in counts, ``Peak.intensity``.
+    Intensities are the heights above the background, ``Peak.intensity -
+    Peak.background``, for both peaks. Raw heights on a high background give a
+    ratio pulled towards one. Prominences are no substitute: a satellite on its
+    parent's tail has its prominence measured down to the saddle between the
+    two, which pulls the ratio the other way.
 
     Only resolved satellites can be caught this way. Below about 50 degrees the
     pair is not separated enough for the peak finder to report two peaks, so
@@ -259,7 +286,8 @@ def flag_kalpha2(
         Largest allowed gap between a peak and its parent's predicted
         satellite position, as a fraction of the parent's FWHM.
     intensity_ratio
-        Allowed ``(low, high)`` range of the peak's intensity over its parent's.
+        Allowed ``(low, high)`` range of the peak's height above the background
+        over its parent's.
     wavelength_ratio
         K alpha 2 over K alpha 1, 1.002486 for copper, or None for radiation
         without K alpha 2, which flags nothing.
@@ -306,10 +334,9 @@ def flag_kalpha2(
         peak.kalpha2_of = None
         if parent_index is not None:
             parent = peaks[parent_index]
-            if (
-                parent.intensity > 0.0
-                and low <= peak.intensity / parent.intensity <= high
-            ):
+            parent_net = parent.intensity - parent.background
+            net = peak.intensity - peak.background
+            if parent_net > 0.0 and low <= net / parent_net <= high:
                 peak.kalpha2_of = parent_index
 
     return peaks

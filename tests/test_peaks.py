@@ -330,11 +330,14 @@ PAIR_STEP = 0.002
 PAIR_BACKGROUND = 50.0
 
 
-def make_pair_scan(fraction: float, offset: float = 0.0) -> XRDScan:
+def make_pair_scan(
+    fraction: float, offset: float = 0.0, background: float = PAIR_BACKGROUND
+) -> XRDScan:
     """A peak at 70 degrees and a second peak ``offset`` degrees above its
-    calculated K alpha 2 position, ``fraction`` of its height."""
+    calculated K alpha 2 position, ``fraction`` of its height, on a flat
+    ``background``."""
     two_theta = np.arange(69.0, 71.0 + PAIR_STEP / 2, PAIR_STEP)
-    intensity = np.full(two_theta.size, PAIR_BACKGROUND)
+    intensity = np.full(two_theta.size, background)
     sigma = PAIR_FWHM * FWHM_TO_SIGMA
     second = satellite_position(PAIR_PARENT) + offset
     for position, height in (
@@ -371,6 +374,21 @@ def test_a_true_doublet_at_half_intensity_is_flagged() -> None:
     assert abs(gap) <= 0.002
     assert abs(gap) <= KALPHA2_POSITION_TOLERANCE * peaks[0].fwhm
     assert [peak.kalpha2_of for peak in peaks] == [None, 0]
+
+
+def test_a_doublet_on_a_high_background_is_flagged_on_net_heights() -> None:
+    # 6000 and 3000 counts on 20000: the raw heights give 23000 / 26000.
+    peaks = find_peaks(make_pair_scan(0.5, background=20000.0))
+
+    assert len(peaks) == 2
+    assert [peak.kalpha2_of for peak in peaks] == [None, 0]
+    assert peaks[1].intensity / peaks[0].intensity == pytest.approx(0.885, abs=0.005)
+    assert peaks[0].background == pytest.approx(20000.0, abs=20.0)
+    assert peaks[1].background == pytest.approx(20000.0, abs=20.0)
+    net = (peaks[1].intensity - peaks[1].background) / (
+        peaks[0].intensity - peaks[0].background
+    )
+    assert net == pytest.approx(0.50, abs=0.01)
 
 
 def test_two_reflections_of_comparable_intensity_are_not_flagged() -> None:
