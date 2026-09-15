@@ -42,7 +42,6 @@ from xrdkit.density import (
     theoretical_density,
 )
 from xrdkit.indexing import (
-    DEFAULT_SPACE_GROUP,
     DEFAULT_ZERO_OFFSET,
     SUPPORTED_SPACE_GROUPS,
     IndexedPeak,
@@ -51,7 +50,7 @@ from xrdkit.indexing import (
     indexing_summary,
 )
 from xrdkit.io import XRDScan, read_xrdml
-from xrdkit.library import load_entry
+from xrdkit.library import CELL_PARAMETERS, CRYSTAL_SYSTEMS, load_entry
 from xrdkit.peaks import exclude_kalpha2, find_peaks, flag_kalpha2, peaks_to_csv
 from xrdkit.plotting import (
     annotate_hkl,
@@ -84,6 +83,16 @@ SCALES = ("linear", "sqrt", "log")
 # Room above the tallest point of a trace, as a fraction of the y axis span,
 # for the hkl label that stands on it.
 HKL_HEADROOM = 0.20
+
+# The crystal systems a --cell of each count can be, the one it is taken as
+# without --system first; None where --system has to say.
+CELL_COUNTS = {
+    1: ("cubic",),
+    2: ("tetragonal", "hexagonal", "trigonal"),
+    3: ("orthorhombic",),
+    4: (None, "monoclinic"),
+    6: ("triclinic",),
+}
 
 
 class CommandError(Exception):
@@ -299,6 +308,109 @@ def _add_output_options(parser: argparse.ArgumentParser, stem_default: str) -> N
     )
 
 
+def _add_cell_options(
+    parser: argparse.ArgumentParser, purpose: str, esds: bool = False
+) -> None:
+    """Add --cell and --system, and with ``esds`` --esd-cell."""
+    parser.add_argument(
+        "--cell",
+        nargs="+",
+        type=float,
+        metavar="X",
+        help=(
+            f"{purpose}, as the free parameters of its crystal system in "
+            "angstroms and degrees: a (cubic); a c (tetragonal, or hexagonal or "
+            "trigonal with --system); a b c (orthorhombic); a b c beta "
+            "(monoclinic, with --system monoclinic); or a b c alpha beta gamma "
+            "(triclinic)"
+        ),
+    )
+    parser.add_argument(
+        "--system",
+        choices=CRYSTAL_SYSTEMS,
+        help="crystal system of --cell, where its count of numbers leaves a choice",
+    )
+    if esds:
+        parser.add_argument(
+            "--esd-cell",
+            nargs="+",
+            type=float,
+            metavar="E",
+            help="esds of the --cell numbers, as many and in the same order",
+        )
+
+
+def _cell_option(args: argparse.Namespace) -> Cell | None:
+    """The cell ``--cell`` and ``--system`` give, or ``None`` without --cell.
+
+    Raises
+    ------
+    CommandError
+        If --system is given without --cell, the count of numbers fits no
+        crystal system or not the one --system names, --system is needed and
+        missing, or a value is not greater than 0 or makes no cell.
+    """
+    if args.cell is None:
+        if args.system is not None:
+            raise CommandError("--system needs --cell")
+        return None
+    count = len(args.cell)
+    if count not in CELL_COUNTS:
+        raise CommandError(f"--cell takes 1, 2, 3, 4 or 6 numbers, not {count}")
+    system = args.system or CELL_COUNTS[count][0]
+    if system is None:
+        raise CommandError(
+            f"--cell with {count} numbers needs --system monoclinic (a b c beta)"
+        )
+    if system not in CELL_COUNTS[count]:
+        names = CELL_PARAMETERS[system]
+        raise CommandError(
+            f"--system {system} takes {len(names)} "
+            f"number{'s' if len(names) > 1 else ''} in --cell "
+            f"({' '.join(names)}), not {count}"
+        )
+    for value in args.cell:
+        if not value > 0:
+            raise CommandError(f"--cell values must be greater than 0, not {value:g}")
+    try:
+        return Cell.from_parameters(
+            system, dict(zip(CELL_PARAMETERS[system], args.cell))
+        )
+    except ValueError as error:
+        raise CommandError(f"--cell: {error}") from None
+
+
+def _cell_esds(args: argparse.Namespace, cell: Cell) -> dict[str, float] | None:
+    """The esds ``--esd-cell`` gives each free parameter of ``cell``, or
+    ``None`` without it."""
+    if args.esd_cell is None:
+        return None
+    if len(args.esd_cell) != len(args.cell):
+        raise CommandError(
+            f"--esd-cell takes as many numbers as --cell, {len(args.cell)}, "
+            f"not {len(args.esd_cell)}"
+        )
+    return dict(zip(cell.parameter_names, args.esd_cell))
+
+
+def _cell_text(parameters: dict[str, float], esds: dict | None = None) -> str:
+    """The free parameters of a cell on one line, lengths then angles, each
+    with its esd where there is one."""
+    esds = esds or {}
+    lengths = [name for name in parameters if name in ("a", "b", "c")]
+    angles = [name for name in parameters if name not in lengths]
+    parts = [
+        ", ".join(
+            f"{name} = {_plus_minus(parameters[name], esds.get(name), digits)}"
+            for name in names
+        )
+        + f" {unit}"
+        for names, digits, unit in ((lengths, 4, "angstrom"), (angles, 3, "degrees"))
+        if names
+    ]
+    return ", ".join(parts)
+
+
 def _add_figure_options(parser: argparse.ArgumentParser, stem_default: str) -> None:
     """Add the options every figure command shares."""
     _add_output_options(parser, stem_default)
@@ -356,46 +468,31 @@ def _crystal_system_of(cell: dict[str, float]) -> str:
     return "monoclinic" if angles[0] == angles[2] == 90.0 else "triclinic"
 
 
-def _structure_cell(
-    item: _Input, space_group: str | None
-) -> tuple[list[float] | None, str | None, str | None]:
+def _structure_cell(item: _Input) -> tuple[Cell | None, str | None, str | None]:
     """The start cell and space group to index a sample from, taken from its
-    first structure, with ``space_group`` given on the command line winning;
-    or no cell, and the note saying why, when that structure's cell cannot be
-    indexed in this version."""
+    first structure, and a note to print, if any.
+
+    A library structure gives its entry's crystal system and space group. A
+    CIF structure's crystal system is the highest its six parameters fit, and
+    its space group is not known here. Without a cell that can be built there
+    is no cell, and the note says why.
+    """
     spec = item.structure
     try:
-        cell = resolved_cell(spec)
+        parameters = resolved_cell(spec)
+        if spec.library is not None:
+            entry = load_entry(spec.library)
+            system, space_group = entry.crystal_system, entry.space_group
+        else:
+            system, space_group = _crystal_system_of(parameters), None
+        cell = Cell.from_parameters(system, parameters)
     except ValueError as error:
         return None, None, f"{error}, so the peaks are not labelled with hkl"
-    if spec.library is not None:
-        entry = load_entry(spec.library)
-        system, structure_group = entry.crystal_system, entry.space_group
-    else:
-        system, structure_group = _crystal_system_of(cell), None
-    if system != "tetragonal":
-        return (
-            None,
-            None,
-            (
-                f"hkl labelling for a {system} cell arrives in the next release; "
-                "plotted without hkl labels"
-            ),
-        )
-    chosen = space_group or structure_group
-    if chosen not in SUPPORTED_SPACE_GROUPS:
-        return (
-            None,
-            None,
-            (
-                f"hkl labelling in {chosen or 'the space group of a CIF structure'} "
-                "arrives in the next release; plotted without hkl labels"
-            ),
-        )
-    return [cell["a"], cell["c"]], chosen, None
+    return cell, space_group, None
 
 
 def _run_plot(args: argparse.Namespace) -> int:
+    cell = _cell_option(args)
     item = _resolve(args.scan, {})
     (scan,) = _read_inputs([item], args.wavelength)
     stem = args.stem or item.name
@@ -419,23 +516,46 @@ def _run_plot(args: argparse.Namespace) -> int:
     ax.legend(frameon=False)
     written += save_figure(fig, figures / f"pattern_{stem}")
 
-    cell, space_group = args.cell, args.space_group or DEFAULT_SPACE_GROUP
+    # A cell given on the command line asks for labels, so failing to index
+    # from it is an error; one taken from a sample's structure is only tried.
+    space_group, automatic = args.space_group, False
     if cell is None and item.sample is not None:
-        cell, space_group, note = _structure_cell(item, args.space_group)
+        cell, structure_group, note = _structure_cell(item)
         if note is not None:
             print(f"xrdkit plot: {note}", file=sys.stderr)
+        space_group, automatic = space_group or structure_group, True
+        if cell is not None and space_group is None:
+            print(
+                "xrdkit plot: the space group of a CIF structure is not known "
+                "here, so the peaks are indexed without reflection conditions and "
+                "some labels may name absent reflections",
+                file=sys.stderr,
+            )
     if cell is not None:
-        a, c = cell
+        if space_group is not None and space_group not in SUPPORTED_SPACE_GROUPS:
+            print(
+                f"xrdkit plot: the reflection conditions of {space_group} are not "
+                "known, so the peaks are indexed without them and some labels may "
+                "name absent reflections",
+                file=sys.stderr,
+            )
+            space_group = None
         try:
             indexed, fit = index_and_refine(
                 peaks,
-                start_cell=Cell.tetragonal(a, c),
+                start_cell=cell,
                 wavelength=scan.wavelength,
                 zero_offset=args.zero,
                 space_group=space_group,
             )
         except ValueError as error:
-            raise CommandError(f"indexing failed: {error}") from error
+            if not automatic:
+                raise CommandError(f"indexing failed: {error}") from error
+            print(
+                f"xrdkit plot: indexing failed: {error}; plotted without hkl labels",
+                file=sys.stderr,
+            )
+            return _finish(args, written)
         written.append(indexed_to_csv(indexed, results / f"indexed_{stem}.csv"))
 
         fig, _ = _hkl_figure(scan, indexed, args.scale, label)
@@ -443,14 +563,14 @@ def _run_plot(args: argparse.Namespace) -> int:
 
         summary = indexing_summary(indexed)
         values = {
-            "a": fit.cell.a,
-            "c": fit.cell.c,
+            "crystal_system": fit.cell.crystal_system,
+            **fit.cell.parameters,
             "zero": fit.zero_offset,
             "n_indexed": summary["n_indexed"],
         }
         if not args.json:
             print(
-                f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom, "
+                f"{_cell_text(fit.cell.parameters)}, "
                 f"zero {fit.zero_offset:.3f} degrees, "
                 f"{summary['n_indexed']} of {summary['n_peaks']} peaks indexed, "
                 f"rms {summary['rms_difference']:.4f} degrees"
@@ -465,14 +585,16 @@ def _add_plot(subparsers) -> None:
         help="plot one scan, list its peaks, and label them with hkl given a cell",
         description=(
             "Plot one .xrdml scan and write its peak list. With --cell the peaks "
-            "are indexed from that start cell, the indexing is written out, and "
-            "a second figure is labelled with hkl. Without --cell no indexing "
-            "is done: hkl labels need a start cell; tetragonal only in this "
-            "version. A sample of the project file is read at its instrument's "
-            "wavelength and labelled with its key and composition, and without "
-            "--cell is indexed from the cell and space group of its first "
-            "structure; a structure that is not tetragonal P4bm is plotted "
-            "without hkl labels, with a note, until the next release."
+            "are indexed from that start cell, of any crystal system, the "
+            "indexing is written out, and a second figure is labelled with hkl; "
+            "if they cannot be indexed the command fails. Without --cell no "
+            "indexing is done. A sample of the project file is read at its "
+            "instrument's wavelength and labelled with its key and composition, "
+            "and without --cell is indexed from the cell, crystal system and "
+            "space group of its first structure; if that fails the pattern is "
+            "plotted without hkl labels, with a note. A space group whose "
+            "reflection conditions are not known is indexed without them, with a "
+            "note."
         ),
     )
     parser.add_argument(
@@ -495,22 +617,13 @@ def _add_plot(subparsers) -> None:
             "the scan's own, or a sample's instrument's)"
         ),
     )
-    parser.add_argument(
-        "--cell",
-        nargs=2,
-        type=float,
-        metavar=("A", "C"),
-        help=(
-            "tetragonal start cell in angstroms, to index from; hkl labels need "
-            "a start cell; tetragonal only in this version"
-        ),
-    )
+    _add_cell_options(parser, "start cell to index from; hkl labels need one")
     parser.add_argument(
         "--space-group",
         metavar="SG",
         help=(
-            "space group whose reflection conditions apply (default: "
-            f"{DEFAULT_SPACE_GROUP}, or a sample's structure's)"
+            "space group whose reflection conditions apply (default: none, or a "
+            "sample's structure's)"
         ),
     )
     parser.add_argument(
@@ -609,19 +722,10 @@ def _plus_minus(value: float, esd: float | None, digits: int) -> str:
     return f"{value:.{digits}f} +/- {esd:.{digits}f}"
 
 
-def _volume(cell: dict[str, float]) -> float:
-    """The volume of a cell of any symmetry from its six parameters."""
-    ca, cb, cg = (
-        math.cos(math.radians(cell[angle])) for angle in ("alpha", "beta", "gamma")
-    )
-    root = math.sqrt(1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg)
-    return cell["a"] * cell["b"] * cell["c"] * root
-
-
-def _density_from_project(args: argparse.Namespace) -> _Input:
+def _density_from_project(args: argparse.Namespace) -> tuple[_Input, Cell | None]:
     """Fill the options not given from the sample ``args.sample`` and its
-    first structure: the formula, z, the cell (as ``--cell`` for a tetragonal
-    a and c, as ``--volume`` for any other) and the Archimedes density."""
+    first structure: the formula, z and the Archimedes density; and return the
+    structure's cell when neither --cell nor --volume is given, else None."""
     item = _sample({}, args.sample)
     spec = item.structure
     try:
@@ -629,26 +733,35 @@ def _density_from_project(args: argparse.Namespace) -> _Input:
             args.formula = spec.composition
         if args.z is None:
             args.z = resolved_z(spec)
+        cell = None
         if args.cell is None and args.volume is None:
-            cell = resolved_cell(spec)
-            angles = (cell["alpha"], cell["beta"], cell["gamma"])
-            if (
-                cell["a"] == cell["b"]
-                and angles == (90.0, 90.0, 90.0)
-                and (spec.cell is not None and set(spec.cell) == {"a", "c"})
-            ):
-                args.cell = [cell["a"], cell["c"]]
+            parameters = resolved_cell(spec)
+            if spec.library is not None:
+                system = load_entry(spec.library).crystal_system
             else:
-                args.volume = _volume(cell)
+                system = _crystal_system_of(parameters)
+            cell = Cell.from_parameters(system, parameters)
     except ValueError as error:
         raise CommandError(f"{error}; or give it on the command line") from None
     if args.archimedes is None and item.sample.archimedes is not None:
         args.archimedes = [item.sample.archimedes]
-    return item
+    return item, cell
+
+
+def _cell_columns(cell: Cell | None, esds: dict | None) -> dict:
+    """The six cell parameters of ``cell`` and their esds as density columns,
+    each ``None`` without a cell, and an esd ``None`` where none was given."""
+    esds = esds or {}
+    columns = {}
+    for name in CELL_PARAMETERS["triclinic"]:
+        unit = "angstrom" if name in ("a", "b", "c") else "deg"
+        columns[f"{name}_{unit}"] = getattr(cell, name) if cell else None
+        columns[f"esd_{name}_{unit}"] = esds.get(name)
+    return columns
 
 
 def _run_density(args: argparse.Namespace) -> int:
-    item = None if args.sample is None else _density_from_project(args)
+    item, cell = (None, None) if args.sample is None else _density_from_project(args)
 
     # Checked here rather than by argparse, so that a missing or conflicting
     # option returns 1 with one line, as every other failure of a command does.
@@ -656,7 +769,7 @@ def _run_density(args: argparse.Namespace) -> int:
         raise CommandError("--formula is required")
     if args.z is None:
         raise CommandError("--z is required")
-    if (args.cell is None) == (args.volume is None):
+    if cell is None and (args.cell is None) == (args.volume is None):
         raise CommandError("give one of --cell and --volume, not both or neither")
     if args.esd_cell is not None and args.cell is None:
         raise CommandError("--esd-cell needs --cell")
@@ -665,18 +778,18 @@ def _run_density(args: argparse.Namespace) -> int:
     if args.archimedes is not None and len(args.archimedes) > 2:
         raise CommandError("--archimedes takes a density and at most one esd")
 
-    a = c = esd_a = esd_c = None
+    esds = None
+    if args.cell is not None:
+        cell = _cell_option(args)
+        esds = _cell_esds(args, cell)
+    elif args.system is not None:
+        raise CommandError("--system needs --cell")
+
     measured = esd_measured = relative = esd_relative = None
     try:
         mass = formula_mass(args.formula)
-        if args.cell is not None:
-            a, c = args.cell
-            if args.esd_cell is not None:
-                esd_a, esd_c = args.esd_cell
-            volume, esd_volume = cell_volume(
-                Cell.tetragonal(a, c),
-                None if args.esd_cell is None else {"a": esd_a, "c": esd_c},
-            )
+        if cell is not None:
+            volume, esd_volume = cell_volume(cell, esds)
         else:
             volume, esd_volume = args.volume, args.esd_volume
         density, esd_density = theoretical_density(
@@ -695,10 +808,8 @@ def _run_density(args: argparse.Namespace) -> int:
         **({"sample": item.name, "structure": item.structure.key} if item else {}),
         "formula": args.formula,
         "z": args.z,
-        "a_angstrom": a,
-        "esd_a_angstrom": esd_a,
-        "c_angstrom": c,
-        "esd_c_angstrom": esd_c,
+        "crystal_system": cell.crystal_system if cell else None,
+        **_cell_columns(cell, esds),
         "volume_a3": volume,
         "esd_volume_a3": esd_volume,
         "formula_mass_g_mol": mass,
@@ -729,6 +840,8 @@ def _run_density(args: argparse.Namespace) -> int:
 
     if not args.json:
         print(f"M = {mass:.3f} g/mol per formula unit")
+        if cell is not None:
+            print(f"{cell.crystal_system} cell {_cell_text(cell.parameters, esds)}")
         print(f"V = {_plus_minus(volume, esd_volume, 3)} cubic angstrom")
         print(f"theoretical density {_plus_minus(density, esd_density, 4)} g/cm3")
         if measured is not None:
@@ -744,9 +857,10 @@ def _add_density(subparsers) -> None:
         description=(
             "Work out the formula mass, the cell volume and the theoretical "
             "density, Z M / (N_A V), each with its esd where one can be given, "
-            "and with --archimedes the relative density. Give the cell as a and "
-            "c of a tetragonal cell with --cell, or as a volume of any symmetry "
-            "with --volume. One row with every input and result, the method and "
+            "and with --archimedes the relative density. Give the cell of any "
+            "crystal system with --cell, or its volume with --volume. One row "
+            "with every input and result, the crystal system and cell used, the "
+            "method and "
             "the date is written to results/density.csv, or to "
             "results/density_STEM.csv with --stem. Given a sample key of the "
             "project file, the formula, z, cell and Archimedes density not given "
@@ -769,20 +883,7 @@ def _add_density(subparsers) -> None:
     parser.add_argument(
         "--z", type=float, metavar="N", help="formula units per cell (required)"
     )
-    parser.add_argument(
-        "--cell",
-        nargs=2,
-        type=float,
-        metavar=("A", "C"),
-        help="tetragonal cell in angstroms; tetragonal only in this version",
-    )
-    parser.add_argument(
-        "--esd-cell",
-        nargs=2,
-        type=float,
-        metavar=("EA", "EC"),
-        help="esds of a and c, in angstroms",
-    )
+    _add_cell_options(parser, "cell", esds=True)
     parser.add_argument(
         "--volume",
         type=float,

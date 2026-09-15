@@ -51,10 +51,6 @@ DEFAULT_TOLERANCE = 0.05
 # Zero point correction subtracted from every observed position, in degrees.
 DEFAULT_ZERO_OFFSET = 0.0
 
-# The space group the command line assumes for a tetragonal start cell given
-# without one. The functions here default to no space group.
-DEFAULT_SPACE_GROUP = "P4bm"
-
 # Range and step of the automatic zero offset search, in degrees. Wide enough
 # for a pellet standing proud of its holder, fine enough to land inside the
 # fine tolerance.

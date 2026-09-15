@@ -14,6 +14,7 @@ import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from xrdkit import (
+    Cell,
     TetragonalCell,
     cli,
     find_peaks,
@@ -68,9 +69,12 @@ APPLIED_ZERO_OFFSET = 0.17
 ISOLATION = 0.30
 
 
-def _write_indexable_xrdml(path: Path) -> tuple[Path, int]:
-    """Write the shifted pattern as a scan, returning it and its peak count."""
-    reflections = generate_reflections(REFINED_CELL, 1.540598, 80.0, space_group="P4bm")
+def _write_indexable_xrdml(
+    path: Path, cell: Cell = REFINED_CELL, space_group: str | None = "P4bm"
+) -> tuple[Path, int]:
+    """Write the shifted pattern of ``cell`` as a scan, returning it and its
+    peak count."""
+    reflections = generate_reflections(cell, 1.540598, 80.0, space_group=space_group)
     positions = [reflection.two_theta for reflection in reflections]
     isolated = [
         position
@@ -297,6 +301,7 @@ def test_density_from_a_cell(tmp_path, capsys) -> None:
     lines = capsys.readouterr().out.splitlines()
     assert lines == [
         "M = 394.905 g/mol per formula unit",
+        "tetragonal cell a = 12.4500 +/- 0.0010, c = 3.9400 +/- 0.0005 angstrom",
         "V = 610.710 +/- 0.125 cubic angstrom",
         "theoretical density 5.3688 +/- 0.0011 g/cm3",
         "Archimedes density 5.1500 +/- 0.0200 g/cm3",
@@ -311,6 +316,10 @@ def test_density_from_a_cell(tmp_path, capsys) -> None:
     assert float(row["z"]) == 5
     assert float(row["a_angstrom"]) == 12.45
     assert float(row["esd_c_angstrom"]) == 0.0005
+    assert row["crystal_system"] == "tetragonal"
+    assert float(row["b_angstrom"]) == 12.45
+    assert row["esd_b_angstrom"] == ""
+    assert float(row["gamma_deg"]) == 90.0
     assert float(row["theoretical_density_g_cm3"]) == pytest.approx(5.3688, abs=1e-4)
     assert float(row["relative_density_percent"]) == pytest.approx(95.92, abs=0.01)
     assert row["method"] == (
@@ -567,15 +576,11 @@ def test_plot_by_key_indexes_from_the_structure_cell(project, capsys) -> None:
     assert (out / "figures" / "pattern_hkl_x.png").is_file()
 
 
-@pytest.mark.parametrize(
-    ("structure", "note"),
-    [
-        ("bfo", "hkl labelling for a trigonal cell arrives in the next release"),
-    ],
-)
-def test_plot_by_key_notes_a_cell_it_cannot_label_yet(
-    project, capsys, structure, note
+@pytest.mark.parametrize("structure", ["bfo", "bto"])
+def test_plot_by_key_that_cannot_be_indexed_is_plotted_with_a_note(
+    project, capsys, structure
 ) -> None:
+    # The scan has one peak, which no structure's cell can be refined from.
     with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
         handle.write(BFO_STRUCTURE)
     argv = ["add-sample", "data/raw/10c.xrdml", "--structure", structure]
@@ -585,7 +590,9 @@ def test_plot_by_key_notes_a_cell_it_cannot_label_yet(
     assert main(["plot", "10c"]) == 0
 
     captured = capsys.readouterr()
-    assert captured.err == (f"xrdkit plot: {note}; plotted without hkl labels\n")
+    assert len(captured.err.splitlines()) == 1
+    assert captured.err.startswith("xrdkit plot: indexing failed: ")
+    assert captured.err.endswith("; plotted without hkl labels\n")
     folder = project / "results" / "plot" / "10c"
     written = [folder / name for name in ("peaks_10c.csv", "pattern_10c.png")]
     written.append(folder / "pattern_10c.pdf")
@@ -621,6 +628,7 @@ def test_density_by_key(sample, capsys) -> None:
     path = sample / "results" / "density" / "10c" / "density_10c.csv"
     assert capsys.readouterr().out.splitlines() == [
         "M = 394.905 g/mol per formula unit",
+        "tetragonal cell a = 12.4500, c = 3.9400 angstrom",
         "V = 610.710 cubic angstrom",
         "theoretical density 5.3688 g/cm3",
         "Archimedes density 5.1500 g/cm3",
@@ -706,4 +714,247 @@ def test_a_key_outside_a_project(tmp_path, monkeypatch, capsys) -> None:
     assert capsys.readouterr().err.strip() == (
         f"xrdkit plot: no such file: 10c, and no {PROJECT_FILE} in the current "
         "folder or above it to look it up in as a sample key"
+    )
+
+
+# Cells of other crystal systems for plot --cell: the numbers given, the true
+# cell the scan is drawn from, and its space group.
+PLOT_CELLS = {
+    "cubic": (["3.905"], Cell.cubic(3.905), "Pm-3m"),
+    # Not the pseudo-cubic Pbnm perovskite: below 35 degrees its reflections
+    # lie too close together for the first, coarse cycle to find four lone
+    # peaks, which an orthorhombic cell needs.
+    "orthorhombic": (["3.8", "4.2", "5.0"], Cell.orthorhombic(3.8, 4.2, 5.0), None),
+    "hexagonal": (
+        ["5.148", "13.863", "--system", "hexagonal"],
+        Cell.hexagonal(5.148, 13.863),
+        "R3c",
+    ),
+    "triclinic": (
+        ["5.0", "6.0", "7.0", "80", "90", "100"],
+        Cell.triclinic(5.0, 6.0, 7.0, 80.0, 90.0, 100.0),
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("system", list(PLOT_CELLS))
+def test_plot_with_a_cell_of_any_system_indexes_and_labels(
+    tmp_path, capsys, system
+) -> None:
+    numbers, cell, space_group = PLOT_CELLS[system]
+    scan, n_peaks = _write_indexable_xrdml(tmp_path / "s.xrdml", cell, space_group)
+    out = tmp_path / "out"
+    argv = ["plot", str(scan), "--cell", *numbers, "--out", str(out), "--json"]
+    if space_group is not None:
+        argv += ["--space-group", space_group]
+
+    assert main(argv) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    result = json.loads(captured.out)
+    assert result["files"][3:] == [
+        str(out / "results" / "indexed_s.csv"),
+        str(out / "figures" / "pattern_hkl_s.png"),
+        str(out / "figures" / "pattern_hkl_s.pdf"),
+    ]
+    for path in result["files"]:
+        assert Path(path).is_file(), path
+    assert result["crystal_system"] == system
+    for name, value in cell.parameters.items():
+        assert result[name] == pytest.approx(value, abs=0.01), name
+    assert result["zero"] == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.03)
+    assert result["n_indexed"] > 0.8 * n_peaks
+
+
+def test_plot_names_a_space_group_whose_conditions_are_not_known(
+    tmp_path, capsys
+) -> None:
+    scan, _ = _write_indexable_xrdml(tmp_path / "s.xrdml", Cell.cubic(3.905), "Pm-3m")
+    argv = ["plot", str(scan), "--cell", "3.905", "--space-group", "Fm-3m"]
+
+    assert main([*argv, "--out", str(tmp_path / "out")]) == 0
+
+    err = capsys.readouterr().err
+    assert err == (
+        "xrdkit plot: the reflection conditions of Fm-3m are not known, so the "
+        "peaks are indexed without them and some labels may name absent "
+        "reflections\n"
+    )
+    assert (tmp_path / "out" / "results" / "indexed_s.csv").is_file()
+
+
+@pytest.mark.parametrize(
+    ("library", "cell", "true_cell", "space_group"),
+    [
+        ("perovskite/Pm-3m", "{ a = 3.905 }", Cell.cubic(3.905), "Pm-3m"),
+        (
+            "perovskite/R3c",
+            "{ a = 5.148, c = 13.863 }",
+            Cell.trigonal(5.148, 13.863),
+            "R3c",
+        ),
+    ],
+    ids=["cubic", "hexagonal axes"],
+)
+def test_plot_by_key_labels_a_cubic_or_hexagonal_structure(
+    project, capsys, library, cell, true_cell, space_group
+) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(
+            f'\n[structures.other]\nlibrary = "{library}"\n'
+            f'composition = "SrTiO3"\ncell = {cell}\n'
+        )
+    path = project / "data" / "raw" / "other.xrdml"
+    _, n_peaks = _write_indexable_xrdml(path, true_cell, space_group)
+    assert main(["add-sample", "data/raw/other.xrdml", "--structure", "other"]) == 0
+    capsys.readouterr()
+
+    assert main(["plot", "other", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    result = json.loads(captured.out)
+    folder = project / "results" / "plot" / "other"
+    assert str(folder / "indexed_other.csv") in result["files"]
+    assert str(folder / "pattern_hkl_other.png") in result["files"]
+    assert result["crystal_system"] == true_cell.crystal_system
+    assert result["a"] == pytest.approx(true_cell.a, abs=0.01)
+    assert result["n_indexed"] > 0.8 * n_peaks
+
+
+def test_plot_with_a_cell_it_cannot_index_fails(tmp_path, capsys) -> None:
+    scan = _write_xrdml(tmp_path / "one.xrdml")
+
+    argv = ["plot", str(scan), "--cell", "3.905", "--out", str(tmp_path / "out")]
+    assert main(argv) == 1
+
+    err = capsys.readouterr().err
+    assert len(err.splitlines()) == 1
+    assert err.startswith("xrdkit plot: indexing failed: ")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (
+            ["--cell", "5", "6", "7", "8", "9"],
+            "--cell takes 1, 2, 3, 4 or 6 numbers, not 5",
+        ),
+        (
+            ["--cell", "5", "6", "7", "100"],
+            "--cell with 4 numbers needs --system monoclinic (a b c beta)",
+        ),
+        (
+            ["--cell", "5", "6", "7", "--system", "cubic"],
+            "--system cubic takes 1 number in --cell (a), not 3",
+        ),
+        (
+            ["--cell", "5", "6", "--system", "monoclinic"],
+            "--system monoclinic takes 4 numbers in --cell (a b c beta), not 2",
+        ),
+        (["--cell", "3.905", "-1"], "--cell values must be greater than 0, not -1"),
+        (["--system", "cubic"], "--system needs --cell"),
+    ],
+    ids=["count", "missing system", "contradiction", "too few", "negative", "stray"],
+)
+def test_plot_rejects_bad_cell_options(tmp_path, capsys, options, message) -> None:
+    scan = _write_xrdml(tmp_path / "one.xrdml")
+    out = tmp_path / "out"
+
+    assert main(["plot", str(scan), *options, "--out", str(out)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"xrdkit plot: {message}\n"
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("options", "system", "volume", "esd_volume"),
+    [
+        (
+            ["--cell", "3.905", "--esd-cell", "0.001"],
+            "cubic",
+            3.905**3,
+            3 * 3.905**2 * 0.001,
+        ),
+        (
+            ["--cell", "5.38", "5.44", "7.64", "--esd-cell", "0.001", "0.002", "0.003"],
+            "orthorhombic",
+            5.38 * 5.44 * 7.64,
+            float(
+                np.sqrt(
+                    (5.44 * 7.64 * 0.001) ** 2
+                    + (5.38 * 7.64 * 0.002) ** 2
+                    + (5.38 * 5.44 * 0.003) ** 2
+                )
+            ),
+        ),
+        (
+            ["--cell", "5.148", "13.863", "--system", "hexagonal"]
+            + ["--esd-cell", "0.0004", "0.002"],
+            "hexagonal",
+            np.sqrt(3) / 2 * 5.148**2 * 13.863,
+            float(
+                np.hypot(
+                    np.sqrt(3) * 5.148 * 13.863 * 0.0004,
+                    np.sqrt(3) / 2 * 5.148**2 * 0.002,
+                )
+            ),
+        ),
+    ],
+    ids=["cubic", "orthorhombic", "hexagonal"],
+)
+def test_density_from_a_cell_of_any_system(
+    tmp_path, capsys, options, system, volume, esd_volume
+) -> None:
+    argv = ["density", "--formula", "SrTiO3", "--z", "1", *options]
+
+    assert main([*argv, "--out", str(tmp_path), "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["volume_a3"] == pytest.approx(volume, rel=1e-9)
+    assert result["esd_volume_a3"] == pytest.approx(esd_volume, rel=1e-6)
+    with (tmp_path / "results" / "density.csv").open(
+        newline="", encoding="utf-8"
+    ) as handle:
+        (row,) = list(csv.DictReader(handle))
+    assert row["crystal_system"] == system
+    cell = (
+        Cell.from_parameters(
+            system, dict(zip(cli.CELL_PARAMETERS[system], map(float, options[1:])))
+        )
+        if system != "hexagonal"
+        else Cell.hexagonal(5.148, 13.863)
+    )
+    for name in ("a", "b", "c"):
+        assert float(row[f"{name}_angstrom"]) == pytest.approx(getattr(cell, name))
+    for name in ("alpha", "beta", "gamma"):
+        assert float(row[f"{name}_deg"]) == pytest.approx(getattr(cell, name))
+    assert float(row["esd_a_angstrom"]) == float(
+        options[options.index("--esd-cell") + 1]
+    )
+    assert float(row["volume_a3"]) == pytest.approx(volume, rel=1e-9)
+
+
+def test_density_prints_the_cell_it_used(tmp_path, capsys) -> None:
+    argv = ["density", "--formula", "LaTiO3", "--z", "4"]
+    argv += ["--cell", "5.60", "5.62", "7.91", "--out", str(tmp_path)]
+
+    assert main(argv) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1] == "orthorhombic cell a = 5.6000, b = 5.6200, c = 7.9100 angstrom"
+
+
+def test_density_rejects_an_esd_count_that_does_not_match(tmp_path, capsys) -> None:
+    argv = ["density", "--formula", "SrTiO3", "--z", "1", "--cell", "3.905"]
+    argv += ["--esd-cell", "0.001", "0.001", "--out", str(tmp_path)]
+
+    assert main(argv) == 1
+
+    assert capsys.readouterr().err == (
+        "xrdkit density: --esd-cell takes as many numbers as --cell, 1, not 2\n"
     )

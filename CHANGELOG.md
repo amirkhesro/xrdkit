@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xrdkit check`, and `CRITERIA`, the thresholds of the user guide's Section 2
   table held in one place.
 - `xrdkit plot SCAN`, which writes the peak list to `results/peaks_{stem}.csv`
-  and the pattern to `figures/pattern_{stem}` (png and pdf). With `--cell A C`
-  it also indexes the peaks from that tetragonal start cell, writes
+  and the pattern to `figures/pattern_{stem}` (png and pdf). With `--cell`
+  it also indexes the peaks from that start cell, writes
   `results/indexed_{stem}.csv` and an hkl labelled `figures/pattern_hkl_{stem}`,
   and prints the refined cell and zero. `--space-group`, `--zero`, `--label` and
   `--no-satellites` tune it. The hkl figure's y axis runs 20 per cent of its
@@ -38,9 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `results/` and `figures/` are created as needed), `--scale
   {linear,sqrt,log}` and `--json`. Each prints the files it wrote, and exits
   with status 1 when an input file is missing.
-- `xrdkit density --formula TEXT --z N`, with either `--cell A C [--esd-cell
-  EA EC]` for a tetragonal cell or `--volume V [--esd-volume EV]` for any
-  symmetry, and optionally `--archimedes RHO [ESD]`. It prints the formula
+- `xrdkit density --formula TEXT --z N`, with either `--cell` (see below)
+  or `--volume V [--esd-volume EV]` for any symmetry, and optionally `--archimedes RHO [ESD]`. It prints the formula
   mass, the cell volume, the theoretical density and, given a measured one, the
   relative density, each with its esd where one exists, and writes one row
   holding every input, every result, the method and the date to
@@ -100,11 +99,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Archimedes density of the sample and its first structure. Options given
   on the command line win. `stack` takes keys and paths mixed. `xrdkit plot`
   gains `--wavelength`. Given a sample and no `--cell`, `plot` indexes from
-  the cell and space group of the sample's first structure; for a structure
-  that is not tetragonal P4bm it prints a one line note and plots without hkl
-  labels.
+  the cell, crystal system and space group of the sample's first structure; if
+  that indexing fails it prints a one line note and plots without hkl labels.
+- `xrdkit.cell.Cell`, a frozen unit cell of any crystal system: six
+  parameters and a crystal system, checked against each other on
+  construction. Named constructors (`Cell.cubic`, `tetragonal`,
+  `orthorhombic`, `hexagonal`, `trigonal` on hexagonal axes, `monoclinic` with
+  b unique, `triclinic`), `from_parameters` and `from_entry`; the direct and
+  reciprocal metric tensors, `volume`, `d_spacing` and the vectorised
+  `d_spacings`, `parameters` and `parameter_names` (the free ones), `replace`
+  and `to_dict`.
+- `xrdkit.symmetry`, which works out systematic absences, Laue equivalence and
+  multiplicity from the operations of a space group rather than from written
+  out conditions: `parse_xyz`, `space_group_operations` (Pm-3m, P4mm, P4bm,
+  P4/mbm, R3c and R3m on hexagonal axes, Pbnm and Amm2, each checked against
+  its order, and against GSAS-II for every hkl from -6 to 6), `is_absent`,
+  `laue_group`, `holohedry`, `laue_orbit`, `multiplicity` and
+  `representative`.
+- `generate_reflections` works for any crystal system and supported space
+  group: equivalent reflections are merged into one, labelled with a
+  conventional representative (h >= k >= 0, l >= 0 for a tetragonal cell) and
+  carrying the family's `multiplicity`, a new field of `Reflection`.
+- `refine_cell` fits the reciprocal metric of any crystal system by linear
+  least squares, holding a component no peak carries information on at the
+  start cell's value and naming the components when the peaks cannot separate
+  them. `refine_lattice` refines the free parameters of any crystal system with
+  the zero and the specimen displacement.
+- `LatticeFit` gives all six cell parameters with their esds, the volume and
+  its esd, the free parameter names and the scaled covariance matrix. The
+  volume esd is propagated through the covariance, so it now includes the
+  correlation between the cell parameters, which the earlier propagation from
+  a and c alone left out.
+- `xrdkit plot --cell` and `xrdkit density --cell` take one to six numbers,
+  the free parameters of the crystal system the count implies: a (cubic), a c
+  (tetragonal), a b c (orthorhombic), a b c alpha beta gamma (triclinic).
+  `--system` settles the counts that leave a choice: two numbers are a and c of
+  a hexagonal or trigonal cell with `--system hexagonal` or `trigonal`, and
+  four are a b c beta with `--system monoclinic`. `density --esd-cell` takes as
+  many esds, in the same order. `plot --space-group` takes any symbol; one
+  whose reflection conditions are not known is indexed without them, with a
+  one line note. `density` prints the crystal system and cell it used, and its
+  CSV gains `crystal_system` and all six cell parameters with their esds.
 
 ### Changed
+
+- Breaking: `cell_volume(cell, esd=None)` takes a `Cell` and a mapping of free
+  parameter name to esd, in place of a tetragonal cell and `esd_a` and `esd_c`.
+- Breaking: `CellFit.c_fitted` is replaced by `CellFit.held`, the names of the
+  parameters held at the start cell's value, empty when every one was fitted.
+- Breaking: the `space_group` argument of `generate_reflections`,
+  `index_peaks`, `estimate_zero_offset` and `index_and_refine` defaults to
+  `None`, no reflection conditions, instead of `"P4bm"`. Code that relied on
+  the old default must pass `space_group="P4bm"`. `xrdkit plot --space-group`
+  no longer defaults to P4bm either, and `DEFAULT_SPACE_GROUP` is gone from
+  `xrdkit.indexing`.
+- Breaking: `LatticeFit` has new fields, and `cell`, now a stored `Cell`
+  rather than a property, is its first field, so building one by position
+  changes. `a`, `c`, `esd_a` and `esd_c` remain; an esd of a parameter the
+  crystal system fixes is `None`. `lattice_fit_to_dict` writes the new fields,
+  and `c_over_a` only for tetragonal, hexagonal and trigonal cells.
+- `TetragonalCell` is deprecated in favour of `Cell.tetragonal`; it is now a
+  function that returns one, and `TTB_CELL` is a `Cell`.
+- `xrdkit plot` on a sample whose structure cannot be indexed plots the
+  pattern and returns 0 with a note, where it used to fail; with `--cell` given
+  a failure to index is still an error.
 
 - The Rietveld settings of `xrdkit.config` no longer assume a tetragonal P4bm
   bronze. A configuration that validated before gives the same result; each
@@ -176,8 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A reader for plain text column formats (`.xy`, `.xye`) and for Bruker `.raw`
   and `.brml`; only `.xrdml` is read today.
-- Indexing beyond tetragonal `P4bm`, which is the only space group whose
-  reflection conditions `xrdkit.indexing` applies.
+- Reflection conditions for space groups beyond the eight in
+  `xrdkit.symmetry`, through pymatgen as an optional dependency.
 - Stage list helpers for Le Bail and Rietveld sequences; `standard_stages` is
   the instrument calibration sequence only, so the others are written out by
   hand.
