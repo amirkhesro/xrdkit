@@ -1032,9 +1032,10 @@ def _index_and_fit(
 def _recover_satellites(
     peaks: list[Peak], cell_fit: CellFit, wavelength: float, space_group: str | None
 ) -> list[int]:
-    """The indices of the flagged peaks that a reflection needs: those within
-    the indexing's own tolerance of a reflection of ``cell_fit``'s cell, at the
-    zero offset the indexing used."""
+    """The indices of the flagged peaks that a reflection may need: those
+    within the indexing's own tolerance of a reflection of ``cell_fit``'s cell,
+    at the zero offset the indexing used. They are candidates for recovery,
+    which :func:`_refit_recovered` settles."""
     flagged = [index for index, peak in enumerate(peaks) if peak.kalpha2_of is not None]
     if not flagged:
         return []
@@ -1049,6 +1050,37 @@ def _recover_satellites(
     return [index for index, match in zip(flagged, matches) if match.is_indexed]
 
 
+def _refit_recovered(
+    scan: XRDScan,
+    found: list[Peak],
+    peaks: list[Peak],
+    records: list[dict],
+    candidates: list[int],
+    ka2: bool,
+    wavelength_ratio: float,
+) -> list[int]:
+    """Refit the flagged peaks at ``candidates`` as K alpha 1 lines, in place,
+    and return the indices of those recovered.
+
+    The doublet refit is the test of the claim that such a peak is the K alpha
+    1 line of a reflection, so a candidate whose refit is rejected is not
+    recovered: it keeps its flag and takes no part in the refinement. An
+    ordinary peak whose refit is rejected is still used at its found position.
+
+    An ordinary peak is already known to be a reflection, so a failed fit costs only precision, whereas a recovered peak has no evidence for being a reflection other than the fit itself, and admitting it at its raw position admits a satellite at a satellite's position.
+    """
+    recovered = []
+    for index in candidates:
+        cleared = replace(found[index], kalpha2_of=None)
+        (peak,), (record,) = _refit_peaks(scan, [cleared], ka2, wavelength_ratio)
+        if record["rejected"]:
+            continue
+        found[index], peaks[index] = cleared, peak
+        records[index] = {**record, "recovered": True}
+        recovered.append(index)
+    return recovered
+
+
 def _peak_counts(
     found: list[Peak],
     records: list[dict],
@@ -1057,11 +1089,11 @@ def _peak_counts(
 ) -> dict[str, int]:
     """The peak counts of a lattice run, for the results row and the report.
 
-    found = refitted + rejected + satellites; used <= indexed <= refitted + rejected; recovered <= refitted + rejected.
+    found = refitted + rejected + satellites; used <= indexed <= refitted + rejected; recovered <= refitted.
 
-    A recovered peak is no longer a satellite: it counts as refitted, or as
-    rejected if its fit is. The indexed fraction is indexed over refitted plus
-    rejected, the peaks that took part.
+    A recovered peak is no longer a satellite and always counts as refitted,
+    since a candidate whose refit is rejected is not recovered. The indexed
+    fraction is indexed over refitted plus rejected, the peaks that took part.
     """
     return {
         "n_peaks_found": len(found),
@@ -1187,8 +1219,9 @@ def _lattice_method(
     displacement = "refined" if displacement_free else "held at zero"
     satellites = (
         "peaks flagged as K alpha 2 satellites excluded, except those within the "
-        "indexing tolerance of a reflection of the refined cell, which are "
-        "refitted and the indexing and refinement run once more with them"
+        "indexing tolerance of a reflection of the refined cell whose doublet "
+        "refit is accepted, which are then used and the indexing and refinement "
+        "run once more with them"
         if recover
         else "peaks flagged as K alpha 2 satellites excluded (none recovered, "
         "--no-satellites)"
@@ -1297,18 +1330,12 @@ def _run_lattice(args: argparse.Namespace) -> int:
         )
 
     indexed, cell_fit, fit = index_and_fit()
-    recovered = (
+    candidates = (
         []
         if args.no_satellites
         else _recover_satellites(peaks, cell_fit, scan.wavelength, conditions)
     )
-    if recovered:
-        for index in recovered:
-            found[index] = replace(found[index], kalpha2_of=None)
-            (peaks[index],), (records[index],) = _refit_peaks(
-                scan, [found[index]], ka2, ratio
-            )
-            records[index]["recovered"] = True
+    if _refit_recovered(scan, found, peaks, records, candidates, ka2, ratio):
         indexed, cell_fit, fit = index_and_fit()
     counts = _peak_counts(found, records, indexed, fit)
     taking_part = counts["n_peaks_refitted"] + counts["n_fits_rejected"]
@@ -1429,8 +1456,9 @@ def _add_lattice(subparsers) -> None:
             "system, and refine the cell with the zero or the specimen "
             "displacement by least squares. Peaks flagged as K alpha 2 "
             "satellites are left out, except those the refined cell puts within "
-            "the indexing tolerance of a reflection, which are refitted and the "
-            "indexing and refinement run once more with them. A pellet refines the displacement "
+            "the indexing tolerance of a reflection and whose doublet refit is "
+            "accepted, which are used and the indexing and refinement run once "
+            "more with them. A pellet refines the displacement "
             "with the zero held (at --zero, the instrument zero from a standard, "
             "or 0); a powder, or a scan that is not a sample, refines the zero "
             "unless --zero is given, and the displacement only with "

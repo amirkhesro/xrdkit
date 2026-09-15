@@ -1316,7 +1316,7 @@ def _assert_counts_add_up(row: dict[str, str], peaks: list[dict[str, str]]) -> N
         )
     )
     assert found == refitted + rejected + satellites
-    assert recovered <= refitted + rejected
+    assert recovered <= refitted
     assert used <= indexed <= refitted + rejected
     assert found == len(peaks)
     assert refitted == sum(peak["fit_rejected"] == "False" for peak in peaks)
@@ -1341,10 +1341,11 @@ def _lattice_run(argv: list[str], out: Path) -> tuple[dict, list[dict]]:
 COINCIDENT_CELL = Cell.tetragonal(4.05, 5.65762)
 
 
-def _coincident_argv(tmp_path: Path) -> tuple[list[str], float]:
-    """A lattice run on a scan with 3 1 0 at 8000 counts and 2 2 2 at 1600 on
-    its K alpha 2 line, which together give a peak of 0.7 of 3 1 0's height at
-    the satellite position; returns the argv and the 2 2 2 position."""
+def _coincident_argv(tmp_path: Path, height: float = 1600.0) -> tuple[list[str], float]:
+    """A lattice run on a scan with 3 1 0 at 8000 counts and 2 2 2 at
+    ``height`` on its K alpha 2 line; at 1600 the two give a peak of 0.7 of
+    3 1 0's height at the satellite position, and at 0 the peak there is 3 1
+    0's satellite alone. Returns the argv and the 2 2 2 position."""
     positions = {
         reflection.hkl: reflection.two_theta
         for reflection in generate_reflections(
@@ -1352,11 +1353,11 @@ def _coincident_argv(tmp_path: Path) -> tuple[list[str], float]:
         )
     }
     coincident = positions[(2, 2, 2)]
+    lines = [(positions[(3, 1, 0)], 8000.0)]
+    if height > 0.0:
+        lines.append((coincident, height))
     scan, _ = _write_doublet_xrdml(
-        tmp_path / "coincident.xrdml",
-        COINCIDENT_CELL,
-        None,
-        extra=((positions[(3, 1, 0)], 8000.0), (coincident, 1600.0)),
+        tmp_path / "coincident.xrdml", COINCIDENT_CELL, None, extra=tuple(lines)
     )
     return ["lattice", str(scan), "--cell", "4.04", "5.67"], coincident
 
@@ -1473,3 +1474,42 @@ def test_no_satellites_excludes_a_satellite_that_matches_a_reflection(
     assert int(bare_row["n_peaks_indexed"]) == int(row["n_peaks_indexed"]) - 1
     assert int(bare_row["n_peaks_refined"]) == int(row["n_peaks_refined"]) - 1
     _assert_counts_add_up(bare_row, bare_peaks)
+
+
+def test_lattice_does_not_recover_a_satellite_whose_refit_is_rejected(
+    tmp_path, capsys
+) -> None:
+    # 3 1 0's satellite alone, lying on the 2 2 2 position: the indexing would
+    # recover it, but a doublet refit at 2 2 2 finds no K alpha 1 line there.
+    argv, coincident = _coincident_argv(tmp_path, height=0.0)
+
+    row, peaks = _lattice_run(argv, tmp_path / "default")
+    bare_row, _ = _lattice_run([*argv, "--no-satellites"], tmp_path / "bare")
+    line = capsys.readouterr().out.splitlines()[0]
+
+    (peak,) = [
+        peak
+        for peak in peaks
+        if abs(float(peak["found_two_theta"]) - coincident) < DEFAULT_TOLERANCE
+    ]
+    assert peak["kalpha2_satellite"] == "True" and peak["recovered"] == "False"
+    assert peak["fit_rejected"] == "" and peak["fitted_two_theta"] == ""
+    assert peak["h"] == "" and peak["difference"] == ""
+    assert int(row["n_peaks_recovered"]) == 0
+    assert int(row["n_fits_rejected"]) == 0
+    assert f"{row['n_satellites']} satellites excluded, 0 recovered; " in line
+    # Absent from the refinement: the run is the one that recovers nothing.
+    for name in (
+        "n_peaks_found",
+        "n_peaks_refitted",
+        "n_fits_rejected",
+        "n_satellites",
+        "n_peaks_recovered",
+        "n_peaks_indexed",
+        "n_peaks_refined",
+        "a_angstrom",
+        "c_angstrom",
+        "rms_two_theta_deg",
+    ):
+        assert row[name] == bare_row[name], name
+    _assert_counts_add_up(row, peaks)

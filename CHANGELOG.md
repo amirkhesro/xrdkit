@@ -175,8 +175,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Breaking: `xrdkit lattice` leaves peaks flagged as K alpha 2 satellites out
   of the indexing and refinement, where they used to enter both at their raw
   found positions. A flagged peak that the refined cell puts within the
-  indexing tolerance of a reflection is recovered: refitted, and the indexing
-  and refinement run once more with it. `--no-satellites` now skips that
+  indexing tolerance of a reflection is refitted, and recovered only if the
+  refit is accepted, when the indexing and refinement run once more with it; a
+  rejected refit leaves it a satellite. `--no-satellites` now skips that
   recovery, and no longer drops the flagged peaks from the peaks file and the
   found count. The report prints the satellites excluded, the peaks recovered
   and the indexed fraction; the peaks file gains `recovered` and the results
