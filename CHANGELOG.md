@@ -62,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type, in the Pbnm setting) and `perovskite/Amm2` (orthorhombic BaTiO3 type),
   and the tetragonal tungsten bronzes `ttb/P4bm` (polar, from COD 2100720) and
   `ttb/P4mbm` (centrosymmetric, P4/mbm).
+- `xrdkit.project`, the project file `xrdkit.toml`: `[project]`, and tables of
+  instruments, structures (a structure library entry or a CIF, with composition,
+  cell, z, exchange and origin) and samples (scan, instrument, structures, form,
+  stage, temperature, Archimedes density, notes), every path relative to the
+  folder holding the file. `find_project` finds the file from any folder inside
+  the project, `load_project` reads and validates it into a `Project`, naming
+  the table and key of anything wrong, and `results_dir` gives
+  `results/<command>/<sample>`. No command reads the project file yet.
+- `xrdkit init [--name TEXT]`, which writes `xrdkit.toml` in the current folder
+  with `[project]` filled in and a commented example instrument, structure and
+  sample, and makes `data/raw`, `cifs` and `results`. It refuses to overwrite
+  an existing `xrdkit.toml`.
 
 ### Changed
 

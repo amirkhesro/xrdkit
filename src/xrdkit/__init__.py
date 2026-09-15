@@ -101,6 +101,7 @@ from xrdkit.plotting import (
     plot_stacked,
     save_figure,
 )
+from xrdkit.project import Project, find_project, load_project
 from xrdkit.quality import ScanQuality, assess_scan, format_report
 from xrdkit.sizestrain import (
     ComponentSizeStrain,
@@ -147,6 +148,7 @@ __all__ = [
     "LatticeFit",
     "Peak",
     "ProfileFit",
+    "Project",
     "Reflection",
     "ResolutionLimit",
     "ScanQuality",
@@ -178,6 +180,7 @@ __all__ = [
     "failure_markdown",
     "find_gsas2",
     "find_peaks",
+    "find_project",
     "fit_breadth_models",
     "fit_caglioti",
     "fit_profile",
@@ -198,6 +201,7 @@ __all__ = [
     "list_entries",
     "load_config",
     "load_entry",
+    "load_project",
     "log_tail",
     "mark_peaks",
     "match_candidate",

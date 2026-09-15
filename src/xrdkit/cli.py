@@ -49,6 +49,7 @@ from xrdkit.plotting import (
     plot_stacked,
     save_figure,
 )
+from xrdkit.project import PROJECT_FILE, project_template
 from xrdkit.quality import assess_scan, format_report
 
 __all__ = ["CommandError", "build_parser", "main"]
@@ -497,6 +498,44 @@ def _add_density(subparsers) -> None:
     parser.set_defaults(handler=_run_density)
 
 
+# The folders xrdkit init makes beside the project file.
+INIT_FOLDERS = ("data/raw", "cifs", "results")
+
+
+def _run_init(args: argparse.Namespace) -> int:
+    root = Path.cwd()
+    path = root / PROJECT_FILE
+    if path.exists():
+        raise CommandError(f"{path} already exists; it is left as it is")
+    name = (root.name or "project") if args.name is None else args.name
+    if not name.strip():
+        raise CommandError("the project name must not be blank")
+    path.write_text(project_template(name), encoding="utf-8")
+    for folder in INIT_FOLDERS:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    print(path)
+    return 0
+
+
+def _add_init(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "init",
+        help=f"start a project: write {PROJECT_FILE} and make its folders",
+        description=(
+            f"Write {PROJECT_FILE} in the current folder, with [project] filled "
+            "in and a commented example of an instrument, a structure and a "
+            "sample, and make data/raw, cifs and results if they are missing. "
+            f"An existing {PROJECT_FILE} is never overwritten."
+        ),
+    )
+    parser.add_argument(
+        "--name",
+        metavar="TEXT",
+        help="the project name (default: the name of the current folder)",
+    )
+    parser.set_defaults(handler=_run_init)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the ``xrdkit`` command."""
     parser = argparse.ArgumentParser(
@@ -506,6 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
+    _add_init(subparsers)
     _add_check(subparsers)
     _add_plot(subparsers)
     _add_stack(subparsers)

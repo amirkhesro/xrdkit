@@ -4,7 +4,8 @@
 # The setting is Pbnm, the cab setting of Pnma (No. 62), with the long axis c
 # about 2 ap and a and b about sqrt(2) ap. It is not the standard Pnma
 # setting: the coordinates, the Wyckoff forms below and the cell parameters all
-# follow Pbnm.
+# follow Pbnm. The space group symbol names the setting, so setting is left
+# empty.
 #
 # A cell holds four ABO3: four A positions (A1 on 4c), four B positions (B1
 # on 4b) and twelve O (O1 on 4c, O2 on 8d), so Z = 4.
@@ -20,7 +21,7 @@ name = "perovskite/Pbnm"
 family = "perovskite"
 crystal_system = "orthorhombic"
 space_group = "Pbnm"
-setting = "cab"
+setting = ""
 cell_parameters = ["a", "b", "c"]
 z = 4
 reference = "LaTiO3, COD 1532652"

@@ -145,7 +145,7 @@ def test_orthorhombic_pbnm_perovskite_entry() -> None:
 
     assert entry.crystal_system == "orthorhombic"
     assert entry.space_group == "Pbnm"
-    assert entry.setting == "cab"
+    assert entry.setting == ""
     assert entry.z == 4
     assert entry.cell_parameters == ("a", "b", "c")
     assert len(entry.sites) == 4
@@ -194,6 +194,13 @@ def test_multiplicities_give_the_cell_contents(
     name: str, contents: dict[str, int]
 ) -> None:
     assert cell_contents_by_kind(load_entry(name)) == contents
+
+
+@pytest.mark.parametrize("name", list_entries())
+def test_only_r3c_carries_a_setting(name: str) -> None:
+    expected = "hexagonal" if name == "perovskite/R3c" else ""
+
+    assert load_entry(name).setting == expected
 
 
 @pytest.mark.parametrize("name", list_entries())
