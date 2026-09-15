@@ -7,8 +7,10 @@ import pytest
 
 from xrdkit import (
     TTB_CELL,
+    Cell,
     IndexedPeak,
     Peak,
+    Reflection,
     TetragonalCell,
     estimate_zero_offset,
     generate_reflections,
@@ -16,9 +18,12 @@ from xrdkit import (
     index_peaks,
     indexed_to_csv,
     indexing_summary,
+    is_absent,
+    laue_group,
+    multiplicity,
     refine_cell,
+    space_group_operations,
 )
-from xrdkit.indexing import _is_allowed
 
 WAVELENGTH = 1.5406
 
@@ -47,7 +52,9 @@ def isolated_reflections(
     separation: float = ISOLATION,
 ) -> list:
     """Reflections that are well separated from their neighbours."""
-    reflections = generate_reflections(cell, WAVELENGTH, two_theta_max)
+    reflections = generate_reflections(
+        cell, WAVELENGTH, two_theta_max, space_group="P4bm"
+    )
     positions = [reflection.two_theta for reflection in reflections]
     return [
         reflection
@@ -83,25 +90,36 @@ def test_d_spacing_of_000_is_rejected() -> None:
 
 
 def test_p4bm_conditions_forbid_odd_axial_reflections() -> None:
+    operations = space_group_operations("P4bm")
+
+    def allowed(*hkl):
+        return not is_absent(hkl, operations)
+
     # h00 needs h even and 0k0 needs k even, so both (100) and (010) are absent.
-    assert not _is_allowed(1, 0, 0, "P4bm")
-    assert not _is_allowed(0, 1, 0, "P4bm")
-    assert _is_allowed(2, 0, 0, "P4bm")
-    assert _is_allowed(0, 2, 0, "P4bm")
+    assert not allowed(1, 0, 0)
+    assert not allowed(0, 1, 0)
+    assert allowed(2, 0, 0)
+    assert allowed(0, 2, 0)
 
     # The same conditions applied to the zones they come from.
-    assert not _is_allowed(0, 1, 1, "P4bm")
-    assert _is_allowed(0, 2, 1, "P4bm")
-    assert not _is_allowed(1, 0, 1, "P4bm")
-    assert _is_allowed(2, 0, 1, "P4bm")
+    assert not allowed(0, 1, 1)
+    assert allowed(0, 2, 1)
+    assert not allowed(1, 0, 1)
+    assert allowed(2, 0, 1)
 
     # 00l carries no condition, and general reflections are untouched.
-    assert _is_allowed(0, 0, 1, "P4bm")
-    assert _is_allowed(3, 1, 0, "P4bm")
+    assert allowed(0, 0, 1)
+    assert allowed(3, 1, 0)
 
-    # Without a space group nothing is filtered.
-    for indices in ((1, 0, 0), (0, 1, 0), (0, 1, 1), (1, 0, 1)):
-        assert _is_allowed(*indices, None)
+    # Without a space group nothing is filtered: (100) and (101) are generated,
+    # and stand for (010) and (011).
+    unfiltered = {
+        reflection.hkl
+        for reflection in generate_reflections(
+            TTB_CELL, WAVELENGTH, 40.0, space_group=None
+        )
+    }
+    assert {(1, 0, 0), (1, 0, 1)} <= unfiltered
 
 
 def test_unknown_space_group_is_rejected() -> None:
@@ -110,7 +128,7 @@ def test_unknown_space_group_is_rejected() -> None:
 
 
 def test_generate_reflections_excludes_forbidden_and_000() -> None:
-    allowed = generate_reflections(TTB_CELL, WAVELENGTH, 40.0)
+    allowed = generate_reflections(TTB_CELL, WAVELENGTH, 40.0, space_group="P4bm")
     unfiltered = generate_reflections(TTB_CELL, WAVELENGTH, 40.0, space_group=None)
 
     assert (1, 0, 0) not in [reflection.hkl for reflection in allowed]
@@ -126,7 +144,9 @@ def test_generate_reflections_excludes_forbidden_and_000() -> None:
 
 def test_generate_reflections_is_sorted_and_within_range() -> None:
     low, high = 15.0, 60.0
-    reflections = generate_reflections(TTB_CELL, WAVELENGTH, high, low)
+    reflections = generate_reflections(
+        TTB_CELL, WAVELENGTH, high, low, space_group="P4bm"
+    )
 
     assert reflections
     positions = [reflection.two_theta for reflection in reflections]
@@ -149,7 +169,7 @@ def test_generate_reflections_is_sorted_and_within_range() -> None:
 
 def test_generate_reflections_rejects_an_empty_window() -> None:
     with pytest.raises(ValueError, match="two_theta_min < two_theta_max"):
-        generate_reflections(TTB_CELL, WAVELENGTH, 20.0, 30.0)
+        generate_reflections(TTB_CELL, WAVELENGTH, 20.0, 30.0, space_group="P4bm")
 
 
 def test_index_peaks_recovers_a_known_zero_offset() -> None:
@@ -163,7 +183,9 @@ def test_index_peaks_recovers_a_known_zero_offset() -> None:
         for reflection, shift in zip(reflections, shifts)
     ]
 
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, zero_offset=ZERO_OFFSET)
+    indexed = index_peaks(
+        peaks, TTB_CELL, WAVELENGTH, zero_offset=ZERO_OFFSET, space_group="P4bm"
+    )
 
     assert len(indexed) == len(peaks)
     assert all(isinstance(entry, IndexedPeak) for entry in indexed)
@@ -195,7 +217,7 @@ def test_index_peaks_without_the_offset_leaves_peaks_unindexed() -> None:
         make_peak(reflection.two_theta + ZERO_OFFSET) for reflection in reflections
     ]
 
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH)
+    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
     summary = indexing_summary(indexed)
 
     assert summary["n_unindexed"] > 0
@@ -207,10 +229,12 @@ def test_index_peaks_without_the_offset_leaves_peaks_unindexed() -> None:
 
 def test_index_peaks_records_every_candidate() -> None:
     # A deliberately wide tolerance must expose the ambiguity rather than hide it.
-    reflections = generate_reflections(TTB_CELL, WAVELENGTH, 40.0)
+    reflections = generate_reflections(TTB_CELL, WAVELENGTH, 40.0, space_group="P4bm")
     peaks = [make_peak(reflections[0].two_theta)]
 
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, tolerance=5.0)
+    indexed = index_peaks(
+        peaks, TTB_CELL, WAVELENGTH, tolerance=5.0, space_group="P4bm"
+    )
     entry = indexed[0]
 
     assert len(entry.candidates) > 1
@@ -225,7 +249,7 @@ def test_index_peaks_records_every_candidate() -> None:
 
 
 def test_index_peaks_of_nothing() -> None:
-    assert index_peaks([], TTB_CELL, WAVELENGTH) == []
+    assert index_peaks([], TTB_CELL, WAVELENGTH, space_group="P4bm") == []
     summary = indexing_summary([])
     assert summary["n_peaks"] == 0
     assert np.isnan(summary["rms_difference"])
@@ -240,7 +264,9 @@ def test_indexed_to_csv_writes_a_row_per_peak(tmp_path) -> None:
     peaks.append(make_peak(41.234))
     peaks.sort(key=lambda peak: peak.two_theta)
 
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, zero_offset=ZERO_OFFSET)
+    indexed = index_peaks(
+        peaks, TTB_CELL, WAVELENGTH, zero_offset=ZERO_OFFSET, space_group="P4bm"
+    )
     path = indexed_to_csv(indexed, tmp_path / "tables" / "indexed.csv")
 
     assert path.is_file()
@@ -307,12 +333,16 @@ def test_index_and_refine_recovers_the_cell_the_peaks_came_from() -> None:
     reflections, peaks = synthetic_peaks()
 
     indexed, fit = index_and_refine(
-        peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=BRIDGING_TOLERANCE
+        peaks,
+        TTB_CELL,
+        WAVELENGTH,
+        coarse_tolerance=BRIDGING_TOLERANCE,
+        space_group="P4bm",
     )
 
     assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
     assert fit.cell.c == pytest.approx(REFINED_CELL.c, abs=0.005)
-    assert fit.c_fitted
+    assert fit.held == ()
     assert fit.n_peaks == len(peaks)
     assert fit.rms_two_theta < 0.01
 
@@ -332,7 +362,12 @@ def test_index_and_refine_cannot_start_from_too_tight_a_coarse_tolerance() -> No
 
     with pytest.raises(ValueError, match="at least 3 indexed peaks"):
         index_and_refine(
-            peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.15, search_zero=False
+            peaks,
+            TTB_CELL,
+            WAVELENGTH,
+            coarse_tolerance=0.15,
+            search_zero=False,
+            space_group="P4bm",
         )
 
 
@@ -340,13 +375,13 @@ def test_index_and_refine_rejects_a_cycle_count_below_one() -> None:
     _, peaks = synthetic_peaks()
 
     with pytest.raises(ValueError, match="at least one cycle"):
-        index_and_refine(peaks, TTB_CELL, WAVELENGTH, n_cycles=0)
+        index_and_refine(peaks, TTB_CELL, WAVELENGTH, n_cycles=0, space_group="P4bm")
 
 
 def test_refine_cell_needs_three_indexed_peaks() -> None:
     reflections = isolated_reflections()[:2]
     peaks = [make_peak(reflection.two_theta) for reflection in reflections]
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH)
+    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
     assert all(entry.is_indexed for entry in indexed)
 
     with pytest.raises(ValueError, match="at least 3 indexed peaks"):
@@ -356,7 +391,7 @@ def test_refine_cell_needs_three_indexed_peaks() -> None:
 def test_refine_cell_needs_a_wavelength() -> None:
     reflections = isolated_reflections()[:5]
     peaks = [make_peak(reflection.two_theta) for reflection in reflections]
-    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH)
+    indexed = index_peaks(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
 
     with pytest.raises(ValueError, match="needs a wavelength"):
         refine_cell(indexed)
@@ -370,7 +405,9 @@ def hk0_indexed() -> list[IndexedPeak]:
         for reflection, peak in zip(reflections, peaks)
         if reflection.l == 0
     ]
-    indexed = index_peaks([peak for _, peak in hk0], REFINED_CELL, WAVELENGTH)
+    indexed = index_peaks(
+        [peak for _, peak in hk0], REFINED_CELL, WAVELENGTH, space_group="P4bm"
+    )
     assert all(entry.is_indexed and entry.reflection.l == 0 for entry in indexed)
     return indexed
 
@@ -380,7 +417,7 @@ def test_refine_cell_keeps_c_when_no_reflection_has_l() -> None:
 
     fit = refine_cell(indexed, WAVELENGTH, start_cell=TTB_CELL)
 
-    assert not fit.c_fitted
+    assert fit.held == ("c",)
     # hk0 fixes a on its own, and c is carried over untouched.
     assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
     assert fit.cell.c == TTB_CELL.c
@@ -413,7 +450,7 @@ def shifted_peaks(offset: float = APPLIED_ZERO_OFFSET, seed: int = 11) -> tuple:
 def test_estimate_zero_offset_finds_an_applied_shift() -> None:
     _, peaks = shifted_peaks()
 
-    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH)
+    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
 
     assert search.offset == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.02)
     # It wins on the count, not on a tie-break.
@@ -423,7 +460,7 @@ def test_estimate_zero_offset_finds_an_applied_shift() -> None:
 def test_estimate_zero_offset_returns_near_zero_for_unshifted_peaks() -> None:
     _, peaks = synthetic_peaks()
 
-    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH)
+    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
 
     assert search.offset == pytest.approx(0.0, abs=0.02)
 
@@ -431,7 +468,9 @@ def test_estimate_zero_offset_returns_near_zero_for_unshifted_peaks() -> None:
 def test_estimate_zero_offset_reports_the_profile_it_tried() -> None:
     _, peaks = shifted_peaks()
 
-    search = estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, step=0.02)
+    search = estimate_zero_offset(
+        peaks, TTB_CELL, WAVELENGTH, step=0.02, space_group="P4bm"
+    )
 
     assert search.offsets.shape == search.counts.shape
     assert search.offsets[0] == pytest.approx(-0.4)
@@ -444,17 +483,21 @@ def test_estimate_zero_offset_rejects_a_bad_search_range() -> None:
     _, peaks = shifted_peaks()
 
     with pytest.raises(ValueError, match="search low < high"):
-        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, search=(0.4, -0.4))
+        estimate_zero_offset(
+            peaks, TTB_CELL, WAVELENGTH, search=(0.4, -0.4), space_group="P4bm"
+        )
     with pytest.raises(ValueError, match="positive step"):
-        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, step=0.0)
+        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, step=0.0, space_group="P4bm")
     with pytest.raises(ValueError, match="No peak at or below"):
-        estimate_zero_offset(peaks, TTB_CELL, WAVELENGTH, two_theta_max=5.0)
+        estimate_zero_offset(
+            peaks, TTB_CELL, WAVELENGTH, two_theta_max=5.0, space_group="P4bm"
+        )
 
 
 def test_index_and_refine_indexes_a_shifted_pattern_by_default() -> None:
     reflections, peaks = shifted_peaks()
 
-    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
 
     assert fit.zero_offset == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.02)
     # Every peak indexed, and to the reflection it was made from.
@@ -471,7 +514,7 @@ def test_the_search_is_skipped_when_a_zero_offset_is_given() -> None:
     _, peaks = shifted_peaks()
 
     indexed, fit = index_and_refine(
-        peaks, TTB_CELL, WAVELENGTH, zero_offset=APPLIED_ZERO_OFFSET
+        peaks, TTB_CELL, WAVELENGTH, zero_offset=APPLIED_ZERO_OFFSET, space_group="P4bm"
     )
 
     assert fit.zero_offset == pytest.approx(APPLIED_ZERO_OFFSET)
@@ -482,7 +525,12 @@ def test_the_search_can_be_turned_off() -> None:
     _, peaks = shifted_peaks()
 
     _, fit = index_and_refine(
-        peaks, TTB_CELL, WAVELENGTH, coarse_tolerance=0.5, search_zero=False
+        peaks,
+        TTB_CELL,
+        WAVELENGTH,
+        coarse_tolerance=0.5,
+        search_zero=False,
+        space_group="P4bm",
     )
 
     # Without it the shift has to go somewhere, and the cell absorbs it.
@@ -493,10 +541,206 @@ def test_the_search_can_be_turned_off() -> None:
 def test_an_unshifted_pattern_is_unharmed_by_the_search() -> None:
     reflections, peaks = synthetic_peaks()
 
-    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH)
+    indexed, fit = index_and_refine(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")
 
     assert fit.zero_offset == pytest.approx(0.0, abs=0.02)
     assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
     assert [entry.reflection.hkl for entry in indexed] == [
         reflection.hkl for reflection in reflections
     ]
+
+
+# Cells of every crystal system, the space group to generate them in, and a
+# start cell a little way off, for the general refinement tests.
+SYSTEM_CASES = {
+    "cubic": (Cell.cubic(3.905), "Pm-3m", Cell.cubic(3.95)),
+    "tetragonal": (Cell.tetragonal(3.994, 4.034), "P4mm", Cell.tetragonal(4.0, 4.0)),
+    "orthorhombic": (
+        Cell.orthorhombic(5.38, 5.44, 7.64),
+        "Pbnm",
+        Cell.orthorhombic(5.4, 5.4, 7.6),
+    ),
+    "trigonal": (Cell.trigonal(5.148, 13.863), "R3c", Cell.trigonal(5.2, 13.9)),
+    "monoclinic": (
+        Cell.monoclinic(5.0, 6.0, 7.0, 100.0),
+        None,
+        Cell.monoclinic(5.05, 5.95, 7.1, 99.0),
+    ),
+    "triclinic": (
+        Cell.triclinic(5.0, 6.0, 7.0, 80.0, 90.0, 100.0),
+        None,
+        Cell.triclinic(5.1, 6.1, 6.9, 81.0, 91.0, 99.0),
+    ),
+}
+
+
+def exact_indexed(reflections) -> list[IndexedPeak]:
+    """Peaks sitting exactly on ``reflections``, each assigned to its own."""
+    return [
+        IndexedPeak(
+            peak=make_peak(reflection.two_theta),
+            corrected_two_theta=reflection.two_theta,
+            reflection=reflection,
+            difference=0.0,
+            candidates=[reflection],
+        )
+        for reflection in reflections
+    ]
+
+
+def test_cubic_generation_merges_equivalents_with_multiplicity() -> None:
+    reflections = generate_reflections(
+        Cell.cubic(3.905), WAVELENGTH, 90.0, space_group="Pm-3m"
+    )
+    hkl = [reflection.hkl for reflection in reflections]
+
+    assert hkl.count((1, 0, 0)) == 1
+    assert (0, 0, 1) not in hkl and (0, 1, 0) not in hkl
+    by_hkl = {reflection.hkl: reflection for reflection in reflections}
+    assert by_hkl[(1, 0, 0)].multiplicity == 6
+    assert by_hkl[(1, 1, 0)].multiplicity == 12
+    assert by_hkl[(1, 1, 1)].multiplicity == 8
+    assert len(set(hkl)) == len(hkl)
+
+
+def test_generation_without_a_space_group_still_merges_equivalents() -> None:
+    cubic = generate_reflections(Cell.cubic(3.905), WAVELENGTH, 90.0)
+    hkl = [reflection.hkl for reflection in cubic]
+    assert hkl.count((1, 0, 0)) == 1
+    assert (0, 0, 1) not in hkl
+    assert hkl == [
+        reflection.hkl
+        for reflection in generate_reflections(
+            Cell.cubic(3.905), WAVELENGTH, 90.0, space_group="Pm-3m"
+        )
+    ]
+
+    # No absences: the (100) P4bm forbids is there, merged with (010).
+    tetragonal = {
+        reflection.hkl: reflection.multiplicity
+        for reflection in generate_reflections(TTB_CELL, WAVELENGTH, 30.0)
+    }
+    assert tetragonal[(1, 0, 0)] == 4
+    assert tetragonal[(1, 1, 0)] == 4
+    assert tetragonal[(2, 1, 0)] == 8
+    assert tetragonal[(0, 0, 1)] == 2
+    assert (0, 1, 0) not in tetragonal
+
+
+def test_multiplicity_and_d_spacing_follow_the_cell_and_laue_group() -> None:
+    laue = laue_group(space_group_operations("P4bm"))
+    for reflection in generate_reflections(
+        TTB_CELL, WAVELENGTH, 60.0, space_group="P4bm"
+    ):
+        assert reflection.multiplicity == multiplicity(reflection.hkl, laue)
+        assert reflection.d_spacing == pytest.approx(
+            TTB_CELL.d_spacing(*reflection.hkl), rel=1e-12
+        )
+
+
+def test_r3c_generation_leaves_out_every_absent_reflection() -> None:
+    cell, space_group, _ = SYSTEM_CASES["trigonal"]
+    reflections = generate_reflections(cell, WAVELENGTH, 90.0, space_group=space_group)
+    operations = space_group_operations("R3c")
+
+    assert len(reflections) > 20
+    assert not any(is_absent(reflection.hkl, operations) for reflection in reflections)
+    hkl = {reflection.hkl for reflection in reflections}
+    assert {(0, 1, 2), (1, 0, 4), (1, 1, 0), (0, 0, 6)} <= hkl
+    assert not {(0, 0, 3), (1, 0, 1), (0, 1, 4)} & hkl
+
+
+def test_monoclinic_generation_keeps_101_and_10_1_apart() -> None:
+    cell, _, _ = SYSTEM_CASES["monoclinic"]
+    by_hkl = {
+        reflection.hkl: reflection
+        for reflection in generate_reflections(cell, WAVELENGTH, 60.0)
+    }
+
+    assert (1, 0, 1) in by_hkl and (1, 0, -1) in by_hkl
+    assert by_hkl[(1, 0, 1)].two_theta != pytest.approx(by_hkl[(1, 0, -1)].two_theta)
+
+
+@pytest.mark.parametrize("system", list(SYSTEM_CASES))
+def test_refine_cell_recovers_every_free_parameter(system) -> None:
+    cell, space_group, start = SYSTEM_CASES[system]
+    reflections = generate_reflections(cell, WAVELENGTH, 90.0, space_group=space_group)
+
+    fit = refine_cell(exact_indexed(reflections), WAVELENGTH, start_cell=start)
+
+    assert fit.cell.crystal_system == cell.crystal_system
+    assert fit.held == ()
+    assert fit.n_peaks == len(reflections)
+    assert fit.rms_two_theta < 1e-6
+    assert tuple(fit.cell.parameters) == cell.parameter_names
+    for name, value in cell.parameters.items():
+        assert fit.cell.parameters[name] == pytest.approx(value, abs=1e-6), name
+
+
+def test_index_and_refine_recovers_a_cubic_cell_from_a_distant_start() -> None:
+    cell = Cell.cubic(3.905)
+    reflections = generate_reflections(cell, WAVELENGTH, 90.0, space_group="Pm-3m")
+    peaks = [make_peak(reflection.two_theta) for reflection in reflections]
+
+    indexed, fit = index_and_refine(
+        peaks,
+        Cell.cubic(3.95),
+        WAVELENGTH,
+        coarse_tolerance=0.5,
+        space_group="Pm-3m",
+        search_zero=False,
+    )
+
+    assert fit.cell.crystal_system == "cubic"
+    assert fit.cell.a == pytest.approx(3.905, abs=1e-6)
+    # Every peak lands on its own reflection; (221) and (300), which share a d
+    # spacing, are one peak with two candidates.
+    assert all(entry.is_indexed for entry in indexed)
+    for entry, reflection in zip(indexed, reflections):
+        assert entry.reflection.two_theta == pytest.approx(reflection.two_theta)
+
+
+@pytest.mark.parametrize(("system", "needed"), [("cubic", 2), ("triclinic", 7)])
+def test_refine_cell_needs_one_more_peak_than_free_components(system, needed) -> None:
+    cell, space_group, start = SYSTEM_CASES[system]
+    reflections = generate_reflections(cell, WAVELENGTH, 90.0, space_group=space_group)
+
+    with pytest.raises(ValueError, match=f"at least {needed} indexed peaks"):
+        refine_cell(
+            exact_indexed(reflections[: needed - 1]), WAVELENGTH, start_cell=start
+        )
+
+
+@pytest.mark.parametrize(
+    ("system", "held"), [("trigonal", ("c",)), ("monoclinic", ("c", "beta"))]
+)
+def test_refine_cell_holds_what_no_peak_carries(system, held) -> None:
+    cell, space_group, start = SYSTEM_CASES[system]
+    reflections = [
+        reflection
+        for reflection in generate_reflections(
+            cell, WAVELENGTH, 90.0, space_group=space_group
+        )
+        if reflection.l == 0
+    ]
+
+    fit = refine_cell(exact_indexed(reflections), WAVELENGTH, start_cell=start)
+
+    assert fit.held == held
+    if system == "trigonal":
+        # On hexagonal axes the hk0 reflections fix a alone, and c is kept.
+        assert fit.cell.a == pytest.approx(cell.a, abs=1e-6)
+        assert fit.cell.c == pytest.approx(start.c, abs=1e-9)
+
+
+def test_refine_cell_rank_deficient_names_the_components() -> None:
+    cell = Cell.tetragonal(4.0, 4.0)
+    # h0h reflections move h^2 + k^2 and l^2 together, so a and c cannot part.
+    reflections = []
+    for h in (1, 2, 3):
+        d = cell.d_spacing(h, 0, h)
+        two_theta = 2.0 * float(np.degrees(np.arcsin(WAVELENGTH / (2.0 * d))))
+        reflections.append(Reflection(h, 0, h, d, two_theta))
+
+    with pytest.raises(ValueError, match=r"A \(a\), C \(c\)"):
+        refine_cell(exact_indexed(reflections), WAVELENGTH, start_cell=cell)

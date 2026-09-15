@@ -70,7 +70,7 @@ ISOLATION = 0.30
 
 def _write_indexable_xrdml(path: Path) -> tuple[Path, int]:
     """Write the shifted pattern as a scan, returning it and its peak count."""
-    reflections = generate_reflections(REFINED_CELL, 1.540598, 80.0)
+    reflections = generate_reflections(REFINED_CELL, 1.540598, 80.0, space_group="P4bm")
     positions = [reflection.two_theta for reflection in reflections]
     isolated = [
         position
@@ -266,7 +266,7 @@ def test_hkl_labels_stay_inside_the_axes(tmp_path, monkeypatch) -> None:
     scan = read_xrdml(path)
     peaks = find_peaks(scan)
     indexed, _ = index_and_refine(
-        peaks, TetragonalCell(a=12.45, c=3.94), scan.wavelength
+        peaks, TetragonalCell(a=12.45, c=3.94), scan.wavelength, space_group="P4bm"
     )
 
     def label_tops(headroom: float) -> tuple[float, float]:
@@ -570,7 +570,6 @@ def test_plot_by_key_indexes_from_the_structure_cell(project, capsys) -> None:
 @pytest.mark.parametrize(
     ("structure", "note"),
     [
-        ("bto", "hkl labelling in P4mm arrives in the next release"),
         ("bfo", "hkl labelling for a trigonal cell arrives in the next release"),
     ],
 )
@@ -596,9 +595,9 @@ def test_plot_by_key_notes_a_cell_it_cannot_label_yet(
 
 def test_plot_by_key_uses_the_instrument_wavelength(project, capsys) -> None:
     with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
-        handle.write(MO_INSTRUMENT)
-    # A P4mm structure, which is not indexed in this version.
-    argv = ["add-sample", "data/raw/10c.xrdml", "--structure", "bto"]
+        handle.write(MO_INSTRUMENT + BFO_STRUCTURE)
+    # A trigonal structure, which the plot command does not index in this version.
+    argv = ["add-sample", "data/raw/10c.xrdml", "--structure", "bfo"]
     assert main([*argv, "--instrument", "mo"]) == 0
 
     def d_spacing(*options: str) -> tuple[float, float]:

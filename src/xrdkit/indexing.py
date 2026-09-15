@@ -1,14 +1,33 @@
-"""Indexing of diffraction peaks against a tetragonal cell."""
+"""Indexing of diffraction peaks against a unit cell of any crystal system.
+
+Reflections come from :class:`~xrdkit.cell.Cell` and :mod:`xrdkit.symmetry`:
+each family of reflections equivalent under the Laue group appears once,
+labelled by :func:`~xrdkit.symmetry.representative` and carrying its
+multiplicity, and a space group, when given, removes the systematic absences.
+"""
 
 from __future__ import annotations
 
 import csv
+import itertools
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
+from xrdkit.cell import Cell
+from xrdkit.library import CELL_PARAMETERS
 from xrdkit.peaks import Peak
+from xrdkit.symmetry import (
+    SUPPORTED_SPACE_GROUPS,
+    holohedry,
+    is_absent,
+    laue_group,
+    laue_orbit,
+    representative,
+    space_group_operations,
+)
 
 __all__ = [
     "TTB_CELL",
@@ -32,6 +51,8 @@ DEFAULT_TOLERANCE = 0.05
 # Zero point correction subtracted from every observed position, in degrees.
 DEFAULT_ZERO_OFFSET = 0.0
 
+# The space group the command line assumes for a tetragonal start cell given
+# without one. The functions here default to no space group.
 DEFAULT_SPACE_GROUP = "P4bm"
 
 # Range and step of the automatic zero offset search, in degrees. Wide enough
@@ -47,9 +68,6 @@ DEFAULT_ZERO_SEARCH_STEP = 0.01
 # papers over the cell error rather than the one that is right.
 ZERO_SEED_TOLERANCE = 0.4
 ZERO_SEED_TWO_THETA_MAX = 35.0
-
-# Space groups whose reflection conditions this module knows about.
-SUPPORTED_SPACE_GROUPS = ("P4bm",)
 
 CSV_COLUMNS = (
     "two_theta",
@@ -75,30 +93,50 @@ CSV_DECIMALS = {
 }
 
 
-@dataclass
-class TetragonalCell:
-    """A tetragonal unit cell, in angstroms."""
+# Each component of the reciprocal metric G* a crystal system leaves free:
+# its name, the cell parameter it stands for, and the symmetric matrix M it adds
+# to G* per unit value, so that its column in 1/d^2 = h . G* h is h . M h. The
+# names follow 1/d^2 = h^2 A + k^2 B + l^2 C + 2kl D + 2hl E + 2hk F.
+_A = ((1, 0, 0), (0, 0, 0), (0, 0, 0))
+_B = ((0, 0, 0), (0, 1, 0), (0, 0, 0))
+_C = ((0, 0, 0), (0, 0, 0), (0, 0, 1))
+_D = ((0, 0, 0), (0, 0, 1), (0, 1, 0))
+_E = ((0, 0, 1), (0, 0, 0), (1, 0, 0))
+_F = ((0, 1, 0), (1, 0, 0), (0, 0, 0))
+_HEXAGONAL_A = ((1, 0.5, 0), (0.5, 1, 0), (0, 0, 0))
+RECIPROCAL_COMPONENTS = {
+    "cubic": (("A", "a", ((1, 0, 0), (0, 1, 0), (0, 0, 1))),),
+    "tetragonal": (("A", "a", ((1, 0, 0), (0, 1, 0), (0, 0, 0))), ("C", "c", _C)),
+    "orthorhombic": (("A", "a", _A), ("B", "b", _B), ("C", "c", _C)),
+    "hexagonal": (("A", "a", _HEXAGONAL_A), ("C", "c", _C)),
+    "trigonal": (("A", "a", _HEXAGONAL_A), ("C", "c", _C)),
+    "monoclinic": (("A", "a", _A), ("B", "b", _B), ("C", "c", _C), ("E", "beta", _E)),
+    "triclinic": (
+        ("A", "a", _A),
+        ("B", "b", _B),
+        ("C", "c", _C),
+        ("D", "alpha", _D),
+        ("E", "beta", _E),
+        ("F", "gamma", _F),
+    ),
+}
 
-    a: float
-    c: float
+# The crystal system refine_cell assumes when it is given no start cell.
+DEFAULT_CRYSTAL_SYSTEM = "tetragonal"
 
-    def d_spacing(self, h: int, k: int, l: int) -> float:
-        """Return the d spacing of ``(h k l)`` from 1/d^2 = (h^2+k^2)/a^2 + l^2/c^2.
 
-        Raises
-        ------
-        ValueError
-            If ``(h k l)`` is ``(0 0 0)``, which has no d spacing.
-        """
-        if h == 0 and k == 0 and l == 0:
-            raise ValueError("(000) has no d spacing")
-        inverse_squared = (h**2 + k**2) / self.a**2 + l**2 / self.c**2
-        return float(1.0 / np.sqrt(inverse_squared))
+def TetragonalCell(a: float, c: float) -> Cell:
+    """A tetragonal :class:`~xrdkit.cell.Cell`, in angstroms.
+
+    Deprecated: kept so that existing code keeps working. Use
+    :meth:`Cell.tetragonal <xrdkit.cell.Cell.tetragonal>` instead.
+    """
+    return Cell.tetragonal(a, c)
 
 
 # Provisional starting cell for the tungsten bronze phase; a later refinement
 # stage is expected to replace these values.
-TTB_CELL = TetragonalCell(a=12.45, c=3.94)
+TTB_CELL = Cell.tetragonal(12.45, 3.94)
 
 
 @dataclass
@@ -110,6 +148,8 @@ class Reflection:
     l: int
     d_spacing: float
     two_theta: float
+    # Reflections in the family under the Laue group; 1 for one built by hand.
+    multiplicity: int = 1
 
     @property
     def hkl(self) -> tuple[int, int, int]:
@@ -133,46 +173,59 @@ class IndexedPeak:
         return self.reflection is not None
 
 
-def _is_allowed(h: int, k: int, l: int, space_group: str | None) -> bool:
-    """Whether ``(h k l)`` survives the reflection conditions of ``space_group``.
+@lru_cache(maxsize=64)
+def _families(
+    limits: tuple[int, int, int], space_group: str | None, crystal_system: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """The representative and multiplicity of every family of reflections with
+    a member in the signed box ``limits``, absences removed.
 
-    ``None`` applies no conditions. For P4bm the zonal conditions 0kl with k even
-    and h0l with h even also cover the axial 0k0 and h00 cases, which are just
-    those zones with the third index zero.
-
-    Raises
-    ------
-    ValueError
-        If ``space_group`` is not one this module knows.
+    It depends on the box and the symmetry but not on the cell, so it is
+    cached: a zero offset search asks for the same box many times over.
     """
     if space_group is None:
-        return True
-    if space_group not in SUPPORTED_SPACE_GROUPS:
-        raise ValueError(
-            f"Unknown space group {space_group!r}; "
-            f"expected None or one of {SUPPORTED_SPACE_GROUPS}"
-        )
+        operations = None
+        laue = holohedry(crystal_system)
+    else:
+        operations = space_group_operations(space_group)
+        laue = laue_group(operations)
 
-    # P4bm: 0kl present only for k even, h0l only for h even. 00l satisfies both
-    # trivially, and general reflections meet neither.
-    if h == 0:
-        return k % 2 == 0
-    if k == 0:
-        return h % 2 == 0
-    return True
+    seen = set()
+    representatives = []
+    multiplicities = []
+    for hkl in itertools.product(*(range(-limit, limit + 1) for limit in limits)):
+        if hkl in seen or not any(hkl):
+            continue
+        orbit = laue_orbit(hkl, laue)
+        seen.update(orbit)
+        # Equivalent reflections share their absence, so one member decides.
+        if operations is not None and is_absent(hkl, operations):
+            continue
+        representatives.append(representative(hkl, laue))
+        multiplicities.append(len(orbit))
+
+    hkl_array = np.array(representatives, dtype=int).reshape(-1, 3)
+    multiplicity_array = np.array(multiplicities, dtype=int)
+    hkl_array.flags.writeable = False
+    multiplicity_array.flags.writeable = False
+    return hkl_array, multiplicity_array
 
 
 def generate_reflections(
-    cell: TetragonalCell,
+    cell: Cell,
     wavelength: float,
     two_theta_max: float,
     two_theta_min: float = 0.0,
-    space_group: str | None = DEFAULT_SPACE_GROUP,
+    space_group: str | None = None,
 ) -> list[Reflection]:
     """Enumerate the allowed reflections of ``cell`` in a 2theta window.
 
-    Only ``h >= k >= 0`` and ``l >= 0`` are enumerated, so each family that is
-    equivalent under 4/mmm Laue symmetry appears exactly once.
+    Every h, k and l in the signed box that can reach the window is tried.
+    Reflections equivalent under the Laue group of ``space_group``, or of the
+    holohedry of ``cell.crystal_system`` without one, are merged into one
+    :class:`Reflection`, labelled by :func:`~xrdkit.symmetry.representative`
+    (h >= k >= 0 and l >= 0 for a tetragonal cell) and carrying the family's
+    multiplicity.
 
     Parameters
     ----------
@@ -186,12 +239,13 @@ def generate_reflections(
     two_theta_min
         Lower limit of the window, in degrees.
     space_group
-        Space group whose reflection conditions to apply, or ``None`` for none.
+        Space group whose systematic absences to remove, one of
+        :data:`~xrdkit.symmetry.SUPPORTED_SPACE_GROUPS`, or ``None`` for none.
 
     Returns
     -------
     list[Reflection]
-        Reflections inside the window, sorted by 2theta.
+        Reflections inside the window, sorted by 2theta and then hkl.
 
     Raises
     ------
@@ -204,47 +258,56 @@ def generate_reflections(
             f"Need 0 <= two_theta_min < two_theta_max < 180, got "
             f"{two_theta_min} and {two_theta_max}"
         )
+    if space_group is not None and space_group not in SUPPORTED_SPACE_GROUPS:
+        raise ValueError(
+            f"Unknown space group {space_group!r}; "
+            f"expected None or one of {SUPPORTED_SPACE_GROUPS}"
+        )
 
     # The smallest d spacing that can diffract within the window fixes how far
     # the indices need to run, so the limits follow from the cell rather than
-    # from an arbitrary cut-off.
+    # from an arbitrary cut-off. |h| = |d* . a| <= a / d, so h can reach
+    # a / d_min before falling below d_min, and likewise k with b and l with c.
     d_min = wavelength / (2.0 * np.sin(np.radians(two_theta_max / 2.0)))
-    # Along a*, 1/d = h/a, so h can reach a/d_min before falling below d_min.
-    h_max = int(np.floor(cell.a / d_min))
-    l_max = int(np.floor(cell.c / d_min))
+    limits = tuple(int(np.floor(length / d_min)) for length in (cell.a, cell.b, cell.c))
+    hkl, multiplicities = _families(limits, space_group, cell.crystal_system)
+    if not len(hkl):
+        return []
 
-    reflections = []
-    for h in range(h_max + 1):
-        for k in range(h + 1):
-            for l in range(l_max + 1):
-                if h == 0 and k == 0 and l == 0:
-                    continue
-                if not _is_allowed(h, k, l, space_group):
-                    continue
+    d_spacings = cell.d_spacings(hkl)
+    sin_theta = wavelength / (2.0 * d_spacings)
+    reachable = sin_theta <= 1.0
+    two_theta = np.full(len(hkl), np.nan)
+    two_theta[reachable] = 2.0 * np.degrees(np.arcsin(sin_theta[reachable]))
+    inside = reachable & (two_theta >= two_theta_min) & (two_theta <= two_theta_max)
 
-                d = cell.d_spacing(h, k, l)
-                sin_theta = wavelength / (2.0 * d)
-                if sin_theta > 1.0:
-                    continue
-
-                two_theta = 2.0 * float(np.degrees(np.arcsin(sin_theta)))
-                if two_theta_min <= two_theta <= two_theta_max:
-                    reflections.append(
-                        Reflection(h=h, k=k, l=l, d_spacing=d, two_theta=two_theta)
-                    )
-
-    return sorted(reflections, key=lambda reflection: reflection.two_theta)
+    reflections = [
+        Reflection(
+            h=int(h),
+            k=int(k),
+            l=int(l),
+            d_spacing=float(d),
+            two_theta=float(position),
+            multiplicity=int(multiplicity),
+        )
+        for (h, k, l), d, position, multiplicity in zip(
+            hkl[inside], d_spacings[inside], two_theta[inside], multiplicities[inside]
+        )
+    ]
+    return sorted(
+        reflections, key=lambda reflection: (reflection.two_theta, reflection.hkl)
+    )
 
 
 def estimate_zero_offset(
     peaks: list[Peak],
-    cell: TetragonalCell,
+    cell: Cell,
     wavelength: float,
     search: tuple[float, float] = DEFAULT_ZERO_SEARCH,
     step: float = DEFAULT_ZERO_SEARCH_STEP,
     tolerance: float = DEFAULT_TOLERANCE,
     two_theta_max: float | None = None,
-    space_group: str | None = DEFAULT_SPACE_GROUP,
+    space_group: str | None = None,
 ) -> ZeroSearch:
     """Find the zero offset that indexes the most peaks unambiguously.
 
@@ -346,11 +409,11 @@ def estimate_zero_offset(
 
 def index_peaks(
     peaks: list[Peak],
-    cell: TetragonalCell,
+    cell: Cell,
     wavelength: float,
     tolerance: float = DEFAULT_TOLERANCE,
     zero_offset: float = DEFAULT_ZERO_OFFSET,
-    space_group: str | None = DEFAULT_SPACE_GROUP,
+    space_group: str | None = None,
 ) -> list[IndexedPeak]:
     """Assign reflections of ``cell`` to ``peaks``, in peak order.
 
@@ -484,10 +547,12 @@ def indexed_to_csv(indexed: list[IndexedPeak], path: str | Path) -> Path:
 class CellFit:
     """The outcome of a least squares cell refinement."""
 
-    cell: TetragonalCell
+    cell: Cell
     n_peaks: int
     rms_two_theta: float
-    c_fitted: bool
+    # The cell parameters whose reciprocal metric component no peak carried
+    # information on, held at the start cell's value; empty when all were fitted.
+    held: tuple[str, ...]
     # Zero offset the indexing was run with, in degrees. Zero unless
     # index_and_refine searched for one.
     zero_offset: float = 0.0
@@ -515,15 +580,23 @@ def _two_theta(d_spacing: float, wavelength: float) -> float:
 def refine_cell(
     indexed: list[IndexedPeak],
     wavelength: float | None = None,
-    start_cell: TetragonalCell | None = None,
+    start_cell: Cell | None = None,
 ) -> CellFit:
-    """Refine a tetragonal cell from indexed peaks by linear least squares.
+    """Refine a cell of any crystal system from indexed peaks by linear least
+    squares on its reciprocal metric.
 
-    For a tetragonal cell 1/d^2 = (h^2 + k^2) A + l^2 C with A = 1/a^2 and
-    C = 1/c^2, so A and C are the coefficients of an ordinary linear least
-    squares problem in the observed 1/d^2. The observed d spacings are
-    recomputed from ``corrected_two_theta`` rather than taken from the peaks, so
-    that any zero point correction already applied is carried through.
+    1/d^2 = h^2 A + k^2 B + l^2 C + 2kl D + 2hl E + 2hk F, linear in the
+    components of the reciprocal metric G*. The crystal system of
+    ``start_cell`` decides which are free: A alone for a cubic cell, with the
+    column h^2 + k^2 + l^2; A with h^2 + k^2 and C for a tetragonal one; A, B
+    and C for orthorhombic; A with h^2 + hk + k^2 and C for hexagonal and
+    trigonal; A, B, C and E for monoclinic (b unique); all six for triclinic.
+    A component no peak carries information on (its column is all zero) is
+    held at the value ``start_cell`` gives it. The fitted G* is inverted to the
+    direct metric, from which the cell parameters are read. The observed d
+    spacings are recomputed from ``corrected_two_theta`` rather than taken
+    from the peaks, so that any zero point correction already applied is
+    carried through.
 
     Parameters
     ----------
@@ -533,76 +606,99 @@ def refine_cell(
         Radiation wavelength in angstroms. :class:`IndexedPeak` does not carry
         one, so it must be given here.
     start_cell
-        Cell the indexing started from. Only needed when no peak has ``l != 0``,
-        in which case its ``c`` is kept unchanged.
+        Cell the indexing started from, which gives the crystal system
+        (tetragonal without one) and the value of any component that has to
+        be held.
 
     Returns
     -------
     CellFit
         The fitted cell, the number of peaks used, the root mean square
         difference in degrees between their corrected and recalculated 2theta,
-        and whether ``c`` was fitted.
+        and the names of the parameters held.
 
     Raises
     ------
     ValueError
-        If ``wavelength`` is None, if fewer than three indexed peaks are
-        available, if ``c`` cannot be fitted and no ``start_cell`` is given, or
-        if the fit returns a coefficient that is not a positive number.
+        If ``wavelength`` is None; if there are not more indexed peaks than
+        free components; if a component has to be held and no ``start_cell``
+        is given; if the peaks cannot separate the free components, naming
+        them; or if the fitted reciprocal metric is not positive definite.
     """
     if wavelength is None:
         raise ValueError(
             "refine_cell needs a wavelength; IndexedPeak does not carry one"
         )
 
+    system = start_cell.crystal_system if start_cell else DEFAULT_CRYSTAL_SYSTEM
+    components = RECIPROCAL_COMPONENTS[system]
     used = [entry for entry in indexed if entry.is_indexed]
-    if len(used) < 3:
+    needed = len(components) + 1
+    if len(used) < needed:
         raise ValueError(
-            f"Need at least 3 indexed peaks to refine a cell, got {len(used)}"
+            f"Need at least {needed} indexed peaks to refine a {system} cell, "
+            f"got {len(used)}"
         )
 
     positions = np.array([entry.corrected_two_theta for entry in used], dtype=float)
     d_observed = wavelength / (2.0 * np.sin(np.radians(positions / 2.0)))
     inverse_squared = 1.0 / d_observed**2
+    hkl = np.array([entry.reflection.hkl for entry in used], dtype=float)
 
-    hk = np.array(
-        [entry.reflection.h**2 + entry.reflection.k**2 for entry in used], dtype=float
+    fitted = []
+    held = []
+    for component in components:
+        _, _, unit = component
+        column = np.einsum("ni,ij,nj->n", hkl, np.array(unit, dtype=float), hkl)
+        if np.any(column != 0.0):
+            fitted.append((component, column))
+        else:
+            held.append(component)
+
+    held_names = tuple(parameter for _, parameter, _ in held)
+    if held and start_cell is None:
+        raise ValueError(
+            f"No indexed peak carries information on {', '.join(held_names)}, so "
+            "it cannot be fitted; pass start_cell to hold it at its value"
+        )
+    fitted_names = ", ".join(
+        f"{name} ({parameter})" for (name, parameter, _), _ in fitted
     )
-    ll = np.array([entry.reflection.l**2 for entry in used], dtype=float)
-
-    c_fitted = bool(np.any(ll > 0.0))
-    if c_fitted:
-        design = np.column_stack((hk, ll))
-    else:
-        if start_cell is None:
-            raise ValueError(
-                "No peak with l != 0, so c cannot be fitted; pass start_cell to "
-                "keep its c"
-            )
-        design = hk.reshape(-1, 1)
+    design = np.column_stack([column for _, column in fitted]) if fitted else None
+    if design is None or np.linalg.matrix_rank(design) < len(fitted):
+        raise ValueError(
+            "The indexed peaks cannot separate the reciprocal metric components "
+            f"{fitted_names or 'none'}; the fit is rank deficient"
+        )
 
     solution, *_ = np.linalg.lstsq(design, inverse_squared, rcond=None)
 
-    a_coefficient = float(solution[0])
-    if not a_coefficient > 0.0:
+    reciprocal = np.zeros((3, 3))
+    for ((_, _, unit), _), value in zip(fitted, solution):
+        reciprocal += float(value) * np.array(unit, dtype=float)
+    if held:
+        start = start_cell.reciprocal_metric
+        for _, _, unit in held:
+            matrix = np.array(unit, dtype=float)
+            i, j = np.argwhere(matrix)[0]
+            reciprocal += start[i, j] / matrix[i, j] * matrix
+
+    if not np.all(np.linalg.eigvalsh(reciprocal) > 0.0):
         raise ValueError(
-            f"Refinement gave a non-positive 1/a^2 of {a_coefficient}; the "
-            "assignments are probably wrong"
+            "Refinement gave a reciprocal metric that is not positive definite; "
+            "the assignments are probably wrong"
         )
-    a = 1.0 / np.sqrt(a_coefficient)
+    direct = np.linalg.inv(reciprocal)
+    a, b, c = np.sqrt(np.diag(direct))
+    cosines = (direct[1, 2] / (b * c), direct[0, 2] / (a * c), direct[0, 1] / (a * b))
+    alpha, beta, gamma = np.degrees(np.arccos(np.clip(cosines, -1.0, 1.0)))
+    six = dict(
+        zip(("a", "b", "c", "alpha", "beta", "gamma"), (a, b, c, alpha, beta, gamma))
+    )
+    cell = Cell.from_parameters(
+        system, {name: float(six[name]) for name in CELL_PARAMETERS[system]}
+    )
 
-    if c_fitted:
-        c_coefficient = float(solution[1])
-        if not c_coefficient > 0.0:
-            raise ValueError(
-                f"Refinement gave a non-positive 1/c^2 of {c_coefficient}; the "
-                "assignments are probably wrong"
-            )
-        c = 1.0 / np.sqrt(c_coefficient)
-    else:
-        c = start_cell.c
-
-    cell = TetragonalCell(a=float(a), c=float(c))
     recalculated = np.array(
         [
             _two_theta(cell.d_spacing(*entry.reflection.hkl), wavelength)
@@ -612,16 +708,16 @@ def refine_cell(
     )
     rms = float(np.sqrt(np.mean(np.square(positions - recalculated))))
 
-    return CellFit(cell=cell, n_peaks=len(used), rms_two_theta=rms, c_fitted=c_fitted)
+    return CellFit(cell=cell, n_peaks=len(used), rms_two_theta=rms, held=held_names)
 
 
 def _seed_cell(
     peaks: list[Peak],
-    cell: TetragonalCell,
+    cell: Cell,
     wavelength: float,
     zero_offset: float,
     space_group: str | None,
-) -> TetragonalCell:
+) -> Cell:
     """Refine ``cell`` on the low angle peaks at one trial offset.
 
     Falls back to the cell it was given whenever there is too little to refine
@@ -640,13 +736,13 @@ def _seed_cell(
 
 def index_and_refine(
     peaks: list[Peak],
-    start_cell: TetragonalCell,
+    start_cell: Cell,
     wavelength: float,
     zero_offset: float = DEFAULT_ZERO_OFFSET,
     coarse_tolerance: float = 0.4,
     coarse_two_theta_max: float = 35.0,
     fine_tolerance: float = DEFAULT_TOLERANCE,
-    space_group: str | None = DEFAULT_SPACE_GROUP,
+    space_group: str | None = None,
     n_cycles: int = 2,
     search_zero: bool = True,
 ) -> tuple[list[IndexedPeak], CellFit]:

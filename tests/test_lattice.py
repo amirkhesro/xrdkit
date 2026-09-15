@@ -5,6 +5,7 @@ import pytest
 
 from xrdkit import (
     TTB_CELL,
+    Cell,
     LatticeFit,
     Peak,
     TetragonalCell,
@@ -61,7 +62,9 @@ def synthetic_peaks(
     seed: int = 7,
 ) -> list[Peak]:
     """Isolated reflections of TRUE_CELL, displaced and offset as a scan would be."""
-    reflections = generate_reflections(TRUE_CELL, WAVELENGTH, TWO_THETA_MAX)
+    reflections = generate_reflections(
+        TRUE_CELL, WAVELENGTH, TWO_THETA_MAX, space_group="P4bm"
+    )
     positions = [reflection.two_theta for reflection in reflections]
     isolated = [
         reflection
@@ -104,6 +107,7 @@ def indexed_synthetic(
         zero_offset=0.0,
         fine_tolerance=FINE_TOLERANCE,
         search_zero=False,
+        space_group="P4bm",
     )
 
 
@@ -253,7 +257,7 @@ def test_the_fitted_cell_is_available_as_a_cell() -> None:
 
     fit = refine_lattice(indexed, WAVELENGTH, cell_fit.cell, fit_zero=True)
 
-    assert isinstance(fit.cell, TetragonalCell)
+    assert isinstance(fit.cell, Cell)
     assert fit.cell.a == fit.a
     assert fit.cell.c == fit.c
 
