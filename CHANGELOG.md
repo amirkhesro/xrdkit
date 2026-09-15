@@ -140,6 +140,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose reflection conditions are not known is indexed without them, with a
   one line note. `density` prints the crystal system and cell it used, and its
   CSV gains `crystal_system` and all six cell parameters with their esds.
+- `xrdkit lattice SCAN`, the lattice parameter workflow. It finds the peaks,
+  refits each position with `fit_profile` as the K alpha 1 line of its
+  doublet (a single line for an instrument without K alpha 2), keeping the
+  found position where a fit fails or moves it by more than the peak's FWHM,
+  indexes them against the start cell from `--cell` or the sample's first
+  structure with the adaptive coarse window, and refines the cell with
+  `refine_lattice`. A pellet refines the specimen displacement with the zero
+  held at `--zero` (default 0); a powder, or a scan that is not a sample,
+  refines the zero, and `--displacement` frees the displacement too. The
+  goniometer radius comes from the instrument or `--radius`. With a formula
+  and Z, from the options or the structure, it gives the theoretical density
+  from the refined volume and its correlated esd, and with an Archimedes
+  density the relative density. It prints the peak counts, the coarse window,
+  the cell, volume, zero and displacement with their esds, the rms and the
+  densities, writes `results/lattice/peaks_STEM.csv` (found and fitted
+  positions, the fit, hkl and difference for every peak) and appends one row
+  per run, with every input, result, method, date and version, to
+  `results/lattice/lattice.csv`, or `results/lattice/KEY/lattice_KEY.csv`
+  for a sample. Takes `--cell`, `--system`, `--space-group`,
+  `--wavelength`, `--formula`, `--z`, `--archimedes`, `--zero`,
+  `--displacement`, `--radius`, `--no-satellites`, `--stem`, `--out` and
+  `--json`.
 
 ### Changed
 

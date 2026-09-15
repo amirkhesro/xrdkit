@@ -958,3 +958,332 @@ def test_density_rejects_an_esd_count_that_does_not_match(tmp_path, capsys) -> N
     assert capsys.readouterr().err == (
         "xrdkit density: --esd-cell takes as many numbers as --cell, 1, not 2\n"
     )
+
+
+# xrdkit lattice.
+
+LATTICE_WAVELENGTH = 1.540598
+TTB_TRUE = Cell.tetragonal(12.58, 3.96)
+
+LAB_INSTRUMENT = """
+[instruments.lab]
+wavelength = [1.540598, 1.544426]
+ka2 = true
+radius = 240
+"""
+
+PEAK_COLUMNS = [
+    "found_two_theta",
+    "fitted_two_theta",
+    "esd_fitted_two_theta",
+    "fit_rejected",
+    "kalpha2_satellite",
+    "intensity",
+    "fwhm",
+    "h",
+    "k",
+    "l",
+    "calculated_two_theta",
+    "difference",
+]
+
+# The columns of a lattice results row, which say what was done and how.
+RESULT_COLUMNS = [
+    "sample",
+    "structure",
+    "scan_file",
+    "wavelength_angstrom",
+    "form",
+    "space_group",
+    "crystal_system",
+    "start_a_angstrom",
+    "start_b_angstrom",
+    "start_c_angstrom",
+    "start_alpha_deg",
+    "start_beta_deg",
+    "start_gamma_deg",
+    "a_angstrom",
+    "esd_a_angstrom",
+    "b_angstrom",
+    "esd_b_angstrom",
+    "c_angstrom",
+    "esd_c_angstrom",
+    "alpha_deg",
+    "esd_alpha_deg",
+    "beta_deg",
+    "esd_beta_deg",
+    "gamma_deg",
+    "esd_gamma_deg",
+    "volume_a3",
+    "esd_volume_a3",
+    "zero_deg",
+    "esd_zero_deg",
+    "zero_refined",
+    "displacement_mm",
+    "esd_displacement_mm",
+    "displacement_refined",
+    "radius_mm",
+    "n_peaks_found",
+    "n_peaks_refitted",
+    "n_fits_rejected",
+    "n_peaks_indexed",
+    "n_peaks_refined",
+    "rms_two_theta_deg",
+    "coarse_two_theta_max_deg",
+    "formula",
+    "z",
+    "formula_mass_g_mol",
+    "theoretical_density_g_cm3",
+    "esd_theoretical_density_g_cm3",
+    "archimedes_density_g_cm3",
+    "esd_archimedes_density_g_cm3",
+    "relative_density_percent",
+    "esd_relative_density_percent",
+    "method",
+    "date",
+    "xrdkit_version",
+]
+
+
+def _write_doublet_xrdml(
+    path: Path,
+    cell: Cell,
+    space_group: str | None,
+    zero: float = 0.0,
+    displacement: float = 0.0,
+    radius: float = 240.0,
+) -> tuple[Path, int]:
+    """A 10 to 80 degree scan of ``cell`` with every lone reflection drawn as
+    a K alpha 1 and K alpha 2 doublet, moved by ``zero`` and by a specimen
+    ``displacement`` in mm on a goniometer of ``radius``. Returns the path and
+    the number of reflections drawn."""
+    reflections = generate_reflections(
+        cell, LATTICE_WAVELENGTH, 79.0, space_group=space_group
+    )
+    positions = [reflection.two_theta for reflection in reflections]
+    drawn = [
+        position
+        for index, position in enumerate(positions)
+        if position > 11.0
+        and (index == 0 or position - positions[index - 1] > 0.4)
+        and (index == len(positions) - 1 or positions[index + 1] - position > 0.4)
+    ]
+    two_theta = np.round(np.arange(10.0, 80.0 + 1e-9, 0.01), 4)
+    counts = np.full(two_theta.size, 100.0)
+    heights = np.random.default_rng(3).uniform(2000.0, 8000.0, len(drawn))
+    sigma = 0.10 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    ratio = 1.544426 / LATTICE_WAVELENGTH
+    for position, height in zip(drawn, heights):
+        theta = np.radians(position / 2.0)
+        centre = (
+            position + zero + np.degrees(-2.0 * displacement * np.cos(theta) / radius)
+        )
+        satellite = 2.0 * np.degrees(
+            np.arcsin(ratio * np.sin(np.radians(centre / 2.0)))
+        )
+        for line, share in ((centre, 1.0), (satellite, 0.5)):
+            counts += share * height * np.exp(-0.5 * ((two_theta - line) / sigma) ** 2)
+    text = XRDML.format(
+        start=10.0, end=80.0, counts=" ".join(str(round(v)) for v in counts)
+    )
+    path.write_text(text, encoding="utf-8")
+    return path, len(drawn)
+
+
+def _rows(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _ttb_lattice_argv(tmp_path: Path) -> tuple[list[str], int]:
+    scan, drawn = _write_doublet_xrdml(
+        tmp_path / "ttb.xrdml", TTB_TRUE, "P4bm", zero=APPLIED_ZERO_OFFSET
+    )
+    argv = ["lattice", str(scan), "--cell", "12.45", "3.94", "--space-group", "P4bm"]
+    argv += ["--formula", COMPOSITION, "--z", "5", "--archimedes", "5.15", "0.02"]
+    return [*argv, "--out", str(tmp_path / "out")], drawn
+
+
+def test_lattice_refines_a_tetragonal_scan_and_writes_both_files(
+    tmp_path, capsys
+) -> None:
+    argv, drawn = _ttb_lattice_argv(tmp_path)
+
+    assert main(argv) == 0
+
+    folder = tmp_path / "out" / "results" / "lattice"
+    peaks_path, results_path = folder / "peaks_ttb.csv", folder / "lattice.csv"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2:] == [str(peaks_path), str(results_path)]
+    assert lines[0].startswith("peaks   ")
+    assert f"{drawn} refitted, 0 fits rejected, {drawn} indexed" in lines[0]
+    assert lines[1] == "coarse window to 35.00 degrees"
+    assert lines[2].startswith("tetragonal cell a = 12.5")
+    assert lines[3].startswith("V = ")
+    assert lines[4].startswith("zero 0.1")
+    assert lines[5] == "displacement not refined"
+    assert lines[6].endswith(
+        "a low indexed fraction or a high rms means the cell should not be trusted"
+    )
+    assert lines[7] == "M = 394.905 g/mol per formula unit, Z = 5"
+    assert lines[8].startswith("theoretical density ")
+    assert lines[9] == "Archimedes density 5.1500 +/- 0.0200 g/cm3"
+    assert lines[10].startswith("relative density ")
+
+    with peaks_path.open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == PEAK_COLUMNS
+    peaks = _rows(peaks_path)
+    fitted = [row for row in peaks if row["fit_rejected"] == "False"]
+    assert len(fitted) == drawn
+    # Below 40 degrees the doublet is unresolved, and its vertex lies above K
+    # alpha 1; the refit moves each of those positions down to K alpha 1.
+    unresolved = [row for row in fitted if float(row["found_two_theta"]) < 40.0]
+    assert unresolved
+    assert all(
+        float(row["fitted_two_theta"]) < float(row["found_two_theta"])
+        for row in unresolved
+    )
+    assert all(abs(float(row["difference"])) < 0.01 for row in fitted)
+
+    (row,) = _rows(results_path)
+    assert list(row) == RESULT_COLUMNS
+    assert row["crystal_system"] == "tetragonal"
+    assert row["space_group"] == "P4bm"
+    assert float(row["a_angstrom"]) == pytest.approx(12.58, abs=0.002)
+    assert float(row["c_angstrom"]) == pytest.approx(3.96, abs=0.002)
+    assert float(row["b_angstrom"]) == float(row["a_angstrom"])
+    assert row["esd_b_angstrom"] == ""
+    assert float(row["zero_deg"]) == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.01)
+    assert row["zero_refined"] == "True" and row["displacement_refined"] == "False"
+    assert float(row["start_a_angstrom"]) == 12.45
+    assert float(row["coarse_two_theta_max_deg"]) == 35.0
+    assert float(row["esd_volume_a3"]) > 0.0
+    relative = float(row["relative_density_percent"])
+    expected = 100.0 * 5.15 / float(row["theoretical_density_g_cm3"])
+    assert relative == pytest.approx(expected, rel=1e-6)
+    assert float(row["esd_relative_density_percent"]) > 0.0
+    assert "refine_lattice" in row["method"]
+
+
+def test_lattice_appends_a_row_per_run(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+
+    assert main(argv) == 0
+    assert main(argv) == 0
+
+    rows = _rows(tmp_path / "out" / "results" / "lattice" / "lattice.csv")
+    assert len(rows) == 2
+    assert rows[0]["a_angstrom"] == rows[1]["a_angstrom"]
+
+
+def test_lattice_json_carries_the_numbers_of_the_row(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+
+    assert main([*argv, "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    (row,) = _rows(tmp_path / "out" / "results" / "lattice" / "lattice.csv")
+    assert result["files"][1] == str(
+        tmp_path / "out" / "results" / "lattice" / "lattice.csv"
+    )
+    for key in (
+        "a_angstrom",
+        "c_angstrom",
+        "volume_a3",
+        "zero_deg",
+        "rms_two_theta_deg",
+    ):
+        assert result[key] == pytest.approx(float(row[key]), rel=1e-12), key
+    assert result["esd_b_angstrom"] is None
+    assert result["n_peaks_indexed"] == int(row["n_peaks_indexed"])
+    assert result["relative_density_percent"] == pytest.approx(
+        float(row["relative_density_percent"])
+    )
+
+
+def test_lattice_by_key_of_a_cubic_sample(project, capsys) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(
+            '\n[structures.sto]\nlibrary = "perovskite/Pm-3m"\n'
+            'composition = "SrTiO3"\ncell = { a = 3.95 }\n'
+        )
+    _write_doublet_xrdml(
+        project / "data" / "raw" / "sto.xrdml", Cell.cubic(3.905), "Pm-3m"
+    )
+    assert main(["add-sample", "data/raw/sto.xrdml", "--structure", "sto"]) == 0
+    capsys.readouterr()
+
+    assert main(["lattice", "sto"]) == 0
+
+    folder = project / "results" / "lattice" / "sto"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "sample  sto, SrTiO3"
+    assert lines[3].startswith("cubic cell a = 3.905")
+    assert lines[-2:] == [
+        str(folder / "peaks_sto.csv"),
+        str(folder / "lattice_sto.csv"),
+    ]
+    (row,) = _rows(folder / "lattice_sto.csv")
+    assert row["sample"] == "sto" and row["structure"] == "sto"
+    assert row["space_group"] == "Pm-3m"
+    assert float(row["a_angstrom"]) == pytest.approx(3.905, abs=0.001)
+    assert float(row["c_angstrom"]) == float(row["a_angstrom"])
+    assert row["esd_c_angstrom"] == ""
+    assert float(row["z"]) == 1
+    assert float(row["theoretical_density_g_cm3"]) == pytest.approx(5.12, abs=0.02)
+
+
+@pytest.mark.parametrize("form", ["pellet", "powder"])
+def test_lattice_refines_by_the_form_of_the_sample(project, capsys, form) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(LAB_INSTRUMENT)
+    raw = project / "data" / "raw" / "ttb.xrdml"
+    if form == "pellet":
+        _write_doublet_xrdml(raw, TTB_TRUE, "P4bm", displacement=0.1)
+    else:
+        _write_doublet_xrdml(raw, TTB_TRUE, "P4bm", zero=APPLIED_ZERO_OFFSET)
+    argv = ["add-sample", "data/raw/ttb.xrdml", "--structure", "ttb_x010"]
+    assert main([*argv, "--instrument", "lab", "--form", form]) == 0
+    capsys.readouterr()
+
+    assert main(["lattice", "ttb"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    (row,) = _rows(project / "results" / "lattice" / "ttb" / "lattice_ttb.csv")
+    assert row["form"] == form
+    assert float(row["a_angstrom"]) == pytest.approx(12.58, abs=0.003)
+    assert float(row["c_angstrom"]) == pytest.approx(3.96, abs=0.003)
+    if form == "pellet":
+        assert "zero 0.0000 degrees (held)" in lines
+        assert any(line.startswith("displacement 0.") for line in lines)
+        assert row["zero_refined"] == "False" and row["esd_zero_deg"] == ""
+        assert row["displacement_refined"] == "True"
+        assert float(row["displacement_mm"]) == pytest.approx(0.1, abs=0.02)
+        assert float(row["radius_mm"]) == 240.0
+    else:
+        assert "displacement not refined" in lines
+        assert row["zero_refined"] == "True"
+        assert float(row["zero_deg"]) == pytest.approx(APPLIED_ZERO_OFFSET, abs=0.01)
+        assert row["displacement_mm"] == "" and row["displacement_refined"] == "False"
+
+
+def test_lattice_displacement_without_a_radius_is_refused(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+
+    assert main([*argv, "--displacement"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "xrdkit lattice: refining a specimen displacement needs the goniometer "
+        "radius: give --radius, or radius for the instrument in the project file\n"
+    )
+    assert not (tmp_path / "out").exists()
+
+
+def test_lattice_missing_file(tmp_path, capsys) -> None:
+    path = tmp_path / "absent" / "scan.xrdml"
+
+    assert main(["lattice", str(path), "--cell", "3.905"]) == 1
+
+    assert capsys.readouterr().err == f"xrdkit lattice: no such file: {path}\n"

@@ -34,6 +34,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from xrdkit import __version__
+from xrdkit.broadening import KALPHA2_INTENSITY_RATIO, fit_profile
 from xrdkit.cell import Cell
 from xrdkit.density import (
     cell_volume,
@@ -50,8 +51,16 @@ from xrdkit.indexing import (
     indexing_summary,
 )
 from xrdkit.io import XRDScan, read_xrdml
+from xrdkit.lattice import LatticeFit, refine_lattice
 from xrdkit.library import CELL_PARAMETERS, CRYSTAL_SYSTEMS, load_entry
-from xrdkit.peaks import exclude_kalpha2, find_peaks, flag_kalpha2, peaks_to_csv
+from xrdkit.peaks import (
+    KALPHA2_RATIO,
+    Peak,
+    exclude_kalpha2,
+    find_peaks,
+    flag_kalpha2,
+    peaks_to_csv,
+)
 from xrdkit.plotting import (
     annotate_hkl,
     apply_style,
@@ -470,12 +479,11 @@ def _crystal_system_of(cell: dict[str, float]) -> str:
 
 def _structure_cell(item: _Input) -> tuple[Cell | None, str | None, str | None]:
     """The start cell and space group to index a sample from, taken from its
-    first structure, and a note to print, if any.
+    first structure, or no cell and the reason.
 
     A library structure gives its entry's crystal system and space group. A
     CIF structure's crystal system is the highest its six parameters fit, and
-    its space group is not known here. Without a cell that can be built there
-    is no cell, and the note says why.
+    its space group is not known here.
     """
     spec = item.structure
     try:
@@ -487,7 +495,7 @@ def _structure_cell(item: _Input) -> tuple[Cell | None, str | None, str | None]:
             system, space_group = _crystal_system_of(parameters), None
         cell = Cell.from_parameters(system, parameters)
     except ValueError as error:
-        return None, None, f"{error}, so the peaks are not labelled with hkl"
+        return None, None, str(error)
     return cell, space_group, None
 
 
@@ -520,9 +528,12 @@ def _run_plot(args: argparse.Namespace) -> int:
     # from it is an error; one taken from a sample's structure is only tried.
     space_group, automatic = args.space_group, False
     if cell is None and item.sample is not None:
-        cell, structure_group, note = _structure_cell(item)
-        if note is not None:
-            print(f"xrdkit plot: {note}", file=sys.stderr)
+        cell, structure_group, reason = _structure_cell(item)
+        if reason is not None:
+            print(
+                f"xrdkit plot: {reason}, so the peaks are not labelled with hkl",
+                file=sys.stderr,
+            )
         space_group, automatic = space_group or structure_group, True
         if cell is not None and space_group is None:
             print(
@@ -907,6 +918,466 @@ def _add_density(subparsers) -> None:
     parser.set_defaults(handler=_run_density)
 
 
+# A refitted peak position is kept only if the fit converged and moved the
+# position by no more than this many of the found peak's FWHM.
+REFIT_MAX_SHIFT_FWHM = 1.0
+
+LATTICE_CAUTION = (
+    "a low indexed fraction or a high rms means the cell should not be trusted"
+)
+
+
+def _refit_peaks(
+    scan: XRDScan, peaks: list[Peak], ka2: bool, wavelength_ratio: float
+) -> tuple[list[Peak], list[dict]]:
+    """The peaks with their positions refitted by :func:`fit_profile`, and a
+    record of each fit.
+
+    Each peak is fitted as a K alpha doublet, or a single line without K alpha
+    2, from its found position and width, so that the position is that of K
+    alpha 1 rather than the vertex of the unresolved doublet. A fit that fails,
+    does not converge or moves the position by more than the peak's FWHM is
+    rejected, and the found position kept. A peak flagged as a K alpha 2
+    satellite is part of its parent's doublet and is not fitted.
+    """
+    refitted, records = [], []
+    for peak in peaks:
+        record = {"fitted": None, "esd": None, "rejected": None}
+        if peak.kalpha2_of is None:
+            try:
+                fit = fit_profile(
+                    scan.two_theta,
+                    scan.intensity,
+                    peak.two_theta,
+                    peak.fwhm,
+                    wavelength_ratio=wavelength_ratio,
+                    intensity_ratio=KALPHA2_INTENSITY_RATIO if ka2 else 0.0,
+                )
+            except ValueError:
+                fit = None
+            accepted = (
+                fit is not None
+                and fit.converged
+                and math.isfinite(fit.two_theta)
+                and abs(fit.two_theta - peak.two_theta)
+                <= REFIT_MAX_SHIFT_FWHM * peak.fwhm
+            )
+            record["rejected"] = not accepted
+            if accepted:
+                record["fitted"], record["esd"] = fit.two_theta, fit.esd_two_theta
+                theta = math.radians(fit.two_theta / 2.0)
+                peak = replace(
+                    peak,
+                    two_theta=fit.two_theta,
+                    d_spacing=scan.wavelength / (2.0 * math.sin(theta)),
+                )
+        refitted.append(peak)
+        records.append(record)
+    return refitted, records
+
+
+def _calculated_two_theta(
+    fit: LatticeFit, hkl: tuple[int, int, int], wavelength: float
+) -> float:
+    """Where the refined cell, zero and displacement put reflection ``hkl``."""
+    sin_theta = wavelength / (2.0 * fit.cell.d_spacing(*hkl))
+    if sin_theta > 1.0:
+        return float("nan")
+    theta = math.asin(sin_theta)
+    shift = fit.zero
+    if fit.displacement is not None:
+        shift += math.degrees(-2.0 * fit.displacement * math.cos(theta) / fit.radius_mm)
+    return 2.0 * math.degrees(theta) + shift
+
+
+def _number(value: float | None, digits: int) -> str:
+    """``value`` to ``digits`` places, or an empty cell for None or nan."""
+    if value is None or not math.isfinite(value):
+        return ""
+    return f"{value:.{digits}f}"
+
+
+def _write_lattice_peaks(
+    path: Path,
+    found: list[Peak],
+    records: list[dict],
+    indexed: list[IndexedPeak],
+    fit: LatticeFit,
+    wavelength: float,
+) -> Path:
+    """Write one row per peak: found and fitted positions, the fit, and the
+    reflection assigned with its difference from the refined position."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(LATTICE_PEAK_COLUMNS)
+        for peak, record, entry in zip(found, records, indexed):
+            reflection = entry.reflection
+            calculated = difference = None
+            if reflection is not None:
+                calculated = _calculated_two_theta(fit, reflection.hkl, wavelength)
+                difference = entry.peak.two_theta - calculated
+            writer.writerow(
+                [
+                    _number(peak.two_theta, 4),
+                    _number(record["fitted"], 4),
+                    _number(record["esd"], 5),
+                    "" if record["rejected"] is None else record["rejected"],
+                    peak.kalpha2_of is not None,
+                    _number(peak.intensity, 1),
+                    _number(peak.fwhm, 4),
+                    *(reflection.hkl if reflection else ("", "", "")),
+                    _number(calculated, 4),
+                    _number(difference, 4),
+                ]
+            )
+    return path
+
+
+LATTICE_PEAK_COLUMNS = (
+    "found_two_theta",
+    "fitted_two_theta",
+    "esd_fitted_two_theta",
+    "fit_rejected",
+    "kalpha2_satellite",
+    "intensity",
+    "fwhm",
+    "h",
+    "k",
+    "l",
+    "calculated_two_theta",
+    "difference",
+)
+
+
+def _append_row(path: Path, row: dict) -> Path:
+    """Append ``row`` to the CSV at ``path``, writing the header first when the
+    file is new.
+
+    Raises
+    ------
+    CommandError
+        If the file exists with other columns.
+    """
+    if path.is_file():
+        with path.open(newline="", encoding="utf-8") as handle:
+            header = next(csv.reader(handle), [])
+        if header != list(row):
+            raise CommandError(
+                f"{path} has other columns than this version writes; move it aside"
+            )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.is_file()
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if new:
+            writer.writerow(row)
+        writer.writerow(["" if value is None else value for value in row.values()])
+    return path
+
+
+def _lattice_method(zero_free: bool, displacement_free: bool, density: bool) -> str:
+    """How the lattice command got its numbers, for the results row."""
+    zero = "refined" if zero_free else "held"
+    displacement = "refined" if displacement_free else "held at zero"
+    method = (
+        "peak positions fitted as K alpha 1 of a split pseudo-Voigt doublet "
+        "(fit_profile); indexed by index_and_refine with an adaptive coarse "
+        "window; cell refined by least squares on the peak positions "
+        f"(refine_lattice), zero {zero}, specimen displacement {displacement}; "
+        "volume esd propagated through the covariance"
+    )
+    if density:
+        method += (
+            "; theoretical density from the refined volume and formula mass; "
+            "relative density = measured / theoretical"
+        )
+    return method
+
+
+def _run_lattice(args: argparse.Namespace) -> int:
+    # Every option is checked before a scan is read or a file written.
+    cell = _cell_option(args)
+    if args.archimedes is not None and len(args.archimedes) > 2:
+        raise CommandError("--archimedes takes a density and at most one esd")
+    if args.radius is not None and not args.radius > 0:
+        raise CommandError(f"--radius must be greater than 0, not {args.radius:g}")
+    item = _resolve(args.scan, {})
+    sample, spec = item.sample, item.structure
+
+    instrument = item.project.instruments[sample.instrument] if sample else None
+    form = sample.form if sample else "powder"
+    zero_free = form == "powder" and args.zero is None
+    displacement_free = form == "pellet" or args.displacement
+    radius = (
+        args.radius if args.radius is not None else getattr(instrument, "radius", None)
+    )
+    if displacement_free and radius is None:
+        raise CommandError(
+            "refining a specimen displacement needs the goniometer radius: give "
+            "--radius, or radius for the instrument in the project file"
+        )
+
+    space_group = args.space_group
+    if cell is None:
+        if sample is None:
+            raise CommandError("--cell is required for a scan that is not a sample")
+        cell, structure_group, reason = _structure_cell(item)
+        if cell is None:
+            raise CommandError(f"{reason}; or give --cell")
+        space_group = space_group or structure_group
+    if space_group is not None and space_group not in SUPPORTED_SPACE_GROUPS:
+        print(
+            f"xrdkit lattice: the reflection conditions of {space_group} are not "
+            "known, so the peaks are indexed without them",
+            file=sys.stderr,
+        )
+    conditions = space_group if space_group in SUPPORTED_SPACE_GROUPS else None
+
+    formula, z = args.formula, args.z
+    if sample is None and (formula is None) != (z is None):
+        raise CommandError("--formula and --z go together, for a theoretical density")
+    if spec is not None:
+        formula = formula or spec.composition
+        if z is None:
+            try:
+                z = resolved_z(spec)
+            except ValueError:
+                z = None
+    has_density = formula is not None and z is not None
+    archimedes = args.archimedes
+    if archimedes is None and sample is not None and sample.archimedes is not None:
+        archimedes = [sample.archimedes]
+    if args.archimedes is not None and not has_density:
+        raise CommandError(
+            "--archimedes needs a theoretical density: give --formula and --z"
+        )
+    mass = None
+    if has_density:
+        try:
+            mass = formula_mass(formula)
+        except ValueError as error:
+            raise CommandError(str(error)) from error
+
+    (scan,) = _read_inputs([item], args.wavelength)
+    found = _peaks(item, scan)
+    if args.no_satellites:
+        found = exclude_kalpha2(found)
+    if not found:
+        raise CommandError(f"no peaks found in {item.path}")
+    ka2 = instrument.ka2 if instrument else True
+    ratio = (
+        instrument.wavelength[1] / instrument.wavelength[0]
+        if instrument and instrument.ka2
+        else KALPHA2_RATIO
+    )
+    peaks, records = _refit_peaks(scan, found, ka2, ratio)
+    n_rejected = sum(1 for record in records if record["rejected"])
+    n_refitted = sum(1 for record in records if record["rejected"] is False)
+
+    try:
+        indexed, cell_fit = index_and_refine(
+            peaks,
+            start_cell=cell,
+            wavelength=scan.wavelength,
+            zero_offset=args.zero or 0.0,
+            space_group=conditions,
+        )
+    except ValueError as error:
+        raise CommandError(f"indexing failed: {error}") from error
+    try:
+        fit = refine_lattice(
+            indexed,
+            scan.wavelength,
+            cell_fit.cell,
+            fit_zero=zero_free,
+            fit_displacement=displacement_free,
+            radius_mm=radius,
+            start_zero=cell_fit.zero_offset if zero_free else (args.zero or 0.0),
+        )
+    except ValueError as error:
+        raise CommandError(f"refinement failed: {error}") from error
+    n_indexed = sum(1 for entry in indexed if entry.is_indexed)
+
+    density = esd_density = relative = esd_relative = measured = esd_measured = None
+    if has_density:
+        density, esd_density = theoretical_density(
+            formula, z, fit.volume, fit.esd_volume
+        )
+        if archimedes is not None:
+            measured = archimedes[0]
+            esd_measured = archimedes[1] if len(archimedes) == 2 else None
+            relative, esd_relative = relative_density(
+                measured, density, esd_measured, esd_density
+            )
+
+    esds = {name: getattr(fit, f"esd_{name}") for name in CELL_PARAMETERS["triclinic"]}
+    row = {
+        "sample": item.name if sample else None,
+        "structure": spec.key if spec else None,
+        "scan_file": str(item.path),
+        "wavelength_angstrom": scan.wavelength,
+        "form": form,
+        "space_group": space_group,
+        "crystal_system": fit.cell.crystal_system,
+        **{
+            f"start_{name}": value
+            for name, value in _cell_columns(cell, None).items()
+            if not name.startswith("esd_")
+        },
+        **_cell_columns(fit.cell, esds),
+        "volume_a3": fit.volume,
+        "esd_volume_a3": fit.esd_volume,
+        "zero_deg": fit.zero,
+        "esd_zero_deg": fit.esd_zero,
+        "zero_refined": zero_free,
+        "displacement_mm": fit.displacement,
+        "esd_displacement_mm": fit.esd_displacement,
+        "displacement_refined": bool(displacement_free),
+        "radius_mm": radius,
+        "n_peaks_found": len(found),
+        "n_peaks_refitted": n_refitted,
+        "n_fits_rejected": n_rejected,
+        "n_peaks_indexed": n_indexed,
+        "n_peaks_refined": fit.n_peaks,
+        "rms_two_theta_deg": fit.rms_two_theta,
+        "coarse_two_theta_max_deg": cell_fit.coarse_two_theta_max,
+        "formula": formula if has_density else None,
+        "z": z if has_density else None,
+        "formula_mass_g_mol": mass,
+        "theoretical_density_g_cm3": density,
+        "esd_theoretical_density_g_cm3": esd_density,
+        "archimedes_density_g_cm3": measured,
+        "esd_archimedes_density_g_cm3": esd_measured,
+        "relative_density_percent": relative,
+        "esd_relative_density_percent": esd_relative,
+        "method": _lattice_method(zero_free, displacement_free, has_density),
+        "date": datetime.datetime.now(datetime.UTC).astimezone().date().isoformat(),
+        "xrdkit_version": __version__,
+    }
+
+    if args.out is None and item.project is not None:
+        folder = results_dir(item.project, "lattice", item.name)
+    else:
+        folder = Path(args.out or ".") / "results" / "lattice"
+    results = folder / (f"lattice_{item.name}.csv" if sample else "lattice.csv")
+    stem = args.stem or item.name
+    peaks_path = _write_lattice_peaks(
+        folder / f"peaks_{stem}.csv", found, records, indexed, fit, scan.wavelength
+    )
+    written = [peaks_path, _append_row(results, row)]
+
+    if not args.json:
+        if sample is not None:
+            print(f"sample  {item.name}, {spec.composition}")
+        print(
+            f"peaks   {len(found)} found, {n_refitted} refitted, {n_rejected} fits "
+            f"rejected, {n_indexed} indexed, {fit.n_peaks} used in the refinement"
+        )
+        print(f"coarse window to {cell_fit.coarse_two_theta_max:.2f} degrees")
+        print(f"{fit.cell.crystal_system} cell {_cell_text(fit.cell.parameters, esds)}")
+        print(f"V = {_plus_minus(fit.volume, fit.esd_volume, 3)} cubic angstrom")
+        held = "" if zero_free else " (held)"
+        print(f"zero {_plus_minus(fit.zero, fit.esd_zero, 4)} degrees{held}")
+        if fit.displacement is None:
+            print("displacement not refined")
+        else:
+            print(
+                f"displacement {_plus_minus(fit.displacement, fit.esd_displacement, 4)} "
+                f"mm, radius {radius:g} mm"
+            )
+        print(f"rms {fit.rms_two_theta:.4f} degrees; {LATTICE_CAUTION}")
+        if has_density:
+            print(f"M = {mass:.3f} g/mol per formula unit, Z = {z:g}")
+            print(f"theoretical density {_plus_minus(density, esd_density, 4)} g/cm3")
+            if measured is not None:
+                print(
+                    f"Archimedes density {_plus_minus(measured, esd_measured, 4)} g/cm3"
+                )
+                print(
+                    f"relative density {_plus_minus(relative, esd_relative, 2)} per cent"
+                )
+    return _finish(args, written, **row)
+
+
+def _add_lattice(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "lattice",
+        help="refine the cell of a scan, with its volume and density",
+        description=(
+            "Find the peaks of a scan, refit each position as the K alpha 1 line "
+            "of its doublet, index them against a start cell of any crystal "
+            "system, and refine the cell with the zero or the specimen "
+            "displacement by least squares. A pellet refines the displacement "
+            "with the zero held (at --zero, the instrument zero from a standard, "
+            "or 0); a powder, or a scan that is not a sample, refines the zero "
+            "unless --zero is given, and the displacement only with "
+            "--displacement. Prints the cell, volume, zero and displacement with "
+            "their esds, and with a formula and Z the theoretical density, and "
+            "with an Archimedes density the relative density. Writes the peaks to "
+            "results/lattice/peaks_STEM.csv and appends one row to "
+            "results/lattice/lattice.csv; for a sample of the project file both "
+            "go to results/lattice/KEY under the project root, the row to "
+            "lattice_KEY.csv, and the cell, space group, formula, Z, form, "
+            "radius and Archimedes density not given as options come from the "
+            "sample, its instrument and its first structure."
+        ),
+    )
+    parser.add_argument(
+        "scan", metavar="SCAN", help="path to a .xrdml file, or a sample key"
+    )
+    _add_cell_options(parser, "start cell to index from")
+    parser.add_argument(
+        "--space-group",
+        metavar="SG",
+        help=(
+            "space group whose reflection conditions apply (default: none, or a "
+            "sample's structure's)"
+        ),
+    )
+    parser.add_argument(
+        "--wavelength",
+        type=float,
+        metavar="ANGSTROM",
+        help="K alpha 1 wavelength (default: the scan's own, or the instrument's)",
+    )
+    parser.add_argument(
+        "--formula", metavar="TEXT", help="formula of one formula unit, for density"
+    )
+    parser.add_argument("--z", type=float, metavar="N", help="formula units per cell")
+    parser.add_argument(
+        "--archimedes",
+        nargs="+",
+        type=float,
+        metavar=("RHO", "ESD"),
+        help="measured density in g/cm3, and optionally its esd",
+    )
+    parser.add_argument(
+        "--zero",
+        type=float,
+        metavar="DEG",
+        help="hold the zero at this value, in degrees, instead of refining it",
+    )
+    parser.add_argument(
+        "--displacement",
+        action="store_true",
+        help="refine the specimen displacement (always refined for a pellet)",
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        metavar="MM",
+        help="goniometer radius in mm (default: the instrument's)",
+    )
+    parser.add_argument(
+        "--no-satellites",
+        action="store_true",
+        help="drop the peaks flagged as K alpha 2 satellites",
+    )
+    _add_output_options(parser, "the scan's file stem, or the sample key")
+    parser.set_defaults(handler=_run_lattice)
+
+
 # The folders xrdkit init makes beside the project file.
 INIT_FOLDERS = ("data/raw", "cifs", "results")
 
@@ -1080,6 +1551,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_plot(subparsers)
     _add_stack(subparsers)
     _add_density(subparsers)
+    _add_lattice(subparsers)
     return parser
 
 
