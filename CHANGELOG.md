@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mass, the cell volume, the theoretical density and, given a measured one, the
   relative density, each with its esd where one exists, and writes one row
   holding every input, every result, the method and the date to
-  `results/density_{stem}.csv`. `--json` prints the same fields.
+  `results/density.csv`, or `results/density_{stem}.csv` with `--stem`. `--json`
+  prints the same fields.
 - `xrdkit.density.parse_formula`, which reads a formula such as
   `"Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"` or `"Ca(OH)2"` into element counts, and
   `relative_density`, a measured density as a percentage of the theoretical one

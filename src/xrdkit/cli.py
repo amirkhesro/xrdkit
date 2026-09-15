@@ -420,7 +420,8 @@ def _run_density(args: argparse.Namespace) -> int:
         "date": datetime.datetime.now(datetime.UTC).astimezone().date().isoformat(),
         "xrdkit_version": __version__,
     }
-    path = Path(args.out) / "results" / f"density_{args.stem or 'density'}.csv"
+    name = f"density_{args.stem}.csv" if args.stem else "density.csv"
+    path = Path(args.out) / "results" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -447,7 +448,8 @@ def _add_density(subparsers) -> None:
             "and with --archimedes the relative density. Give the cell as a and "
             "c of a tetragonal cell with --cell, or as a volume of any symmetry "
             "with --volume. One row with every input and result, the method and "
-            "the date is written to results/density_STEM.csv."
+            "the date is written to results/density.csv, or to "
+            "results/density_STEM.csv with --stem."
         ),
     )
     parser.add_argument(
@@ -491,7 +493,7 @@ def _add_density(subparsers) -> None:
         metavar=("RHO", "ESD"),
         help="measured density in g/cm3, and optionally its esd",
     )
-    _add_output_options(parser, "density")
+    _add_output_options(parser, "none, which writes results/density.csv")
     parser.set_defaults(handler=_run_density)
 
 

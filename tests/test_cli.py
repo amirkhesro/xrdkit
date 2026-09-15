@@ -326,7 +326,7 @@ def test_density_from_a_volume_json(tmp_path, capsys) -> None:
     assert main([*argv, "--out", str(tmp_path)]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["files"] == [str(tmp_path / "results" / "density_density.csv")]
+    assert result["files"] == [str(tmp_path / "results" / "density.csv")]
     assert Path(result["files"][0]).is_file()
     assert result["volume_a3"] == 610.0
     assert result["a_angstrom"] is None
