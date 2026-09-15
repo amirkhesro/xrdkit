@@ -583,11 +583,11 @@ version = 1
 # radius in mm, and instprm, a GSAS-II instrument parameter file, are
 # optional.
 #
-# [instruments.aeris]
+# [instruments.diffractometer]
 # wavelength = [1.540598, 1.544426]
 # ka2 = true
 # radius = 240.0
-# instprm = "data/standards/aeris.instprm"
+# instprm = "data/standards/diffractometer.instprm"
 
 # A structure model, named by its key, which names its results folders too.
 # Give exactly one of library, a structure library entry such as ttb/P4bm or
@@ -597,9 +597,9 @@ version = 1
 # (groups of elements whose occupancies are traded) and origin (the label of
 # the site that fixes the origin) are optional.
 #
-# [structures.ttb_x010]
+# [structures.phase1]
 # library = "ttb/P4bm"
-# composition = "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
+# composition = "Sr0.5Ba0.5Nb2O6"
 # cell = {{ a = 12.45, c = 3.94 }}
 # z = 5
 # exchange = [["Sr", "Ba"]]
@@ -610,10 +610,10 @@ version = 1
 # structures keys. form is powder or pellet. stage, temperature_c, archimedes
 # (the measured density in g/cm3) and notes are optional.
 #
-# [samples.x010_calcined]
-# file = "data/raw/10c.xrdml"
-# instrument = "aeris"
-# structures = ["ttb_x010"]
+# [samples.sample1]
+# file = "data/raw/sample.xrdml"
+# instrument = "diffractometer"
+# structures = ["phase1"]
 # stage = "calcined"
 # form = "powder"
 # temperature_c = 1300

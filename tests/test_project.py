@@ -574,12 +574,12 @@ def test_init_examples_load_once_uncommented(tmp_path: Path, monkeypatch) -> Non
     text = path.read_text(encoding="utf-8")
     uncommented = re.sub(r"(?m)^# (\[|\w+ = )", r"\1", text)
     path.write_text(uncommented, encoding="utf-8")
-    (tmp_path / "data/raw/10c.xrdml").write_bytes(b"")
+    (tmp_path / "data/raw/sample.xrdml").write_bytes(b"")
     (tmp_path / "data/standards").mkdir()
-    (tmp_path / "data/standards/aeris.instprm").write_bytes(b"")
+    (tmp_path / "data/standards/diffractometer.instprm").write_bytes(b"")
 
     project = load_project(path)
 
-    assert list(project.instruments) == ["aeris"]
-    assert project.structures["ttb_x010"].library == "ttb/P4bm"
-    assert project.samples["x010_calcined"].structures == ("ttb_x010",)
+    assert list(project.instruments) == ["diffractometer"]
+    assert project.structures["phase1"].library == "ttb/P4bm"
+    assert project.samples["sample1"].structures == ("phase1",)

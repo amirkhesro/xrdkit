@@ -1,8 +1,8 @@
 # Rhombohedral perovskite ABO3 of the BiFeO3 (and LiNbO3) type, R3c on
 # hexagonal axes, from BiFeO3: Moreau, Michel, Gerson and James, J. Phys.
 # Chem. Solids 32 (1971) 1315-1320, doi:10.1016/S0022-3697(71)80189-0,
-# COD 1001090. No R3c perovskite CIF is in XRD-Analysis/cifs; Palewicz et
-# al., Acta Cryst. B 63 (2007) 537-544, COD 2102909, has the same sites.
+# COD 1001090. Palewicz et al., Acta Cryst. B 63 (2007) 537-544, COD 2102909,
+# has the same sites.
 #
 # The hexagonal cell holds six ABO3: six A positions (A1 on 6a), six B
 # positions (B1 on 6a) and eighteen O (O1 on 18b), so Z = 6.

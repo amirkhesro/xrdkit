@@ -99,7 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plot` labels the trace with them, and `density` takes the formula, z, cell
   and Archimedes density of the sample and its first structure. Options given
   on the command line win. `stack` takes keys and paths mixed. `xrdkit plot`
-  gains `--wavelength`.
+  gains `--wavelength`. Given a sample and no `--cell`, `plot` indexes from
+  the cell and space group of the sample's first structure; for a structure
+  that is not tetragonal P4bm it prints a one line note and plots without hkl
+  labels.
 
 ### Changed
 

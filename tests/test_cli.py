@@ -382,6 +382,13 @@ composition = "BaTiO3"
 cell = {{ a = 3.99, c = 4.03 }}
 """
 
+BFO_STRUCTURE = """
+[structures.bfo]
+library = "perovskite/R3c"
+composition = "BiFeO3"
+cell = { a = 5.5876, c = 13.867 }
+"""
+
 MO_INSTRUMENT = """
 [instruments.mo]
 wavelength = [0.709300, 0.713590]
@@ -521,27 +528,77 @@ def test_check_by_key(sample, capsys) -> None:
     assert result["files"] == [str(path.with_suffix(".json"))]
 
 
-def test_plot_by_key(sample, capsys) -> None:
+def test_plot_by_key_indexes_from_the_structure_cell(project, capsys) -> None:
+    # A tetragonal P4bm sample: the start cell 12.45, 3.94 of its structure.
+    _, n_peaks = _write_indexable_xrdml(project / "data" / "raw" / "ttb.xrdml")
+    argv = ["add-sample", "data/raw/ttb.xrdml", "--structure", "ttb_x010"]
+    assert main(argv) == 0
+    capsys.readouterr()
+
+    assert main(["plot", "ttb", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    result = json.loads(captured.out)
+    folder = project / "results" / "plot" / "ttb"
+    assert result["files"] == [
+        str(folder / name)
+        for name in (
+            "peaks_ttb.csv",
+            "pattern_ttb.png",
+            "pattern_ttb.pdf",
+            "indexed_ttb.csv",
+            "pattern_hkl_ttb.png",
+            "pattern_hkl_ttb.pdf",
+        )
+    ]
+    for path in result["files"]:
+        assert Path(path).is_file(), path
+    assert result["a"] == pytest.approx(REFINED_CELL.a, abs=0.01)
+    assert result["c"] == pytest.approx(REFINED_CELL.c, abs=0.01)
+    assert result["n_indexed"] == n_peaks
+
+    # --out wins over the project's results folder, and --cell over its cell.
+    out = project / "elsewhere"
+    argv = ["plot", "ttb", "--out", str(out), "--stem", "x", "--json"]
+    assert main([*argv, "--cell", "12.5", "3.95"]) == 0
+    assert json.loads(capsys.readouterr().out)["n_indexed"] == n_peaks
+    assert (out / "results" / "indexed_x.csv").is_file()
+    assert (out / "figures" / "pattern_hkl_x.png").is_file()
+
+
+@pytest.mark.parametrize(
+    ("structure", "note"),
+    [
+        ("bto", "hkl labelling in P4mm arrives in the next release"),
+        ("bfo", "hkl labelling for a trigonal cell arrives in the next release"),
+    ],
+)
+def test_plot_by_key_notes_a_cell_it_cannot_label_yet(
+    project, capsys, structure, note
+) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(BFO_STRUCTURE)
+    argv = ["add-sample", "data/raw/10c.xrdml", "--structure", structure]
+    assert main(argv) == 0
+    capsys.readouterr()
+
     assert main(["plot", "10c"]) == 0
 
-    folder = sample / "results" / "plot" / "10c"
+    captured = capsys.readouterr()
+    assert captured.err == (f"xrdkit plot: {note}; plotted without hkl labels\n")
+    folder = project / "results" / "plot" / "10c"
     written = [folder / name for name in ("peaks_10c.csv", "pattern_10c.png")]
     written.append(folder / "pattern_10c.pdf")
-    assert capsys.readouterr().out.splitlines() == [str(path) for path in written]
-    for path in written:
-        assert path.is_file(), path
-
-    # --out wins over the project's results folder.
-    out = sample / "elsewhere"
-    assert main(["plot", "10c", "--out", str(out), "--stem", "x"]) == 0
-    assert (out / "results" / "peaks_x.csv").is_file()
-    assert (out / "figures" / "pattern_x.png").is_file()
+    assert captured.out.splitlines() == [str(path) for path in written]
+    assert not (folder / "indexed_10c.csv").exists()
 
 
 def test_plot_by_key_uses_the_instrument_wavelength(project, capsys) -> None:
     with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
         handle.write(MO_INSTRUMENT)
-    argv = ["add-sample", "data/raw/10c.xrdml", "--structure", "ttb_x010"]
+    # A P4mm structure, which is not indexed in this version.
+    argv = ["add-sample", "data/raw/10c.xrdml", "--structure", "bto"]
     assert main([*argv, "--instrument", "mo"]) == 0
 
     def d_spacing(*options: str) -> tuple[float, float]:

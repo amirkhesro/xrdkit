@@ -43,6 +43,7 @@ from xrdkit.density import (
 from xrdkit.indexing import (
     DEFAULT_SPACE_GROUP,
     DEFAULT_ZERO_OFFSET,
+    SUPPORTED_SPACE_GROUPS,
     IndexedPeak,
     TetragonalCell,
     index_and_refine,
@@ -50,6 +51,7 @@ from xrdkit.indexing import (
     indexing_summary,
 )
 from xrdkit.io import XRDScan, read_xrdml
+from xrdkit.library import load_entry
 from xrdkit.peaks import exclude_kalpha2, find_peaks, flag_kalpha2, peaks_to_csv
 from xrdkit.plotting import (
     annotate_hkl,
@@ -340,6 +342,59 @@ def _peaks(item: _Input, scan: XRDScan) -> list:
     return peaks
 
 
+def _crystal_system_of(cell: dict[str, float]) -> str:
+    """The highest crystal system six cell parameters fit, for a structure
+    whose own crystal system is not known."""
+    a, b, c = cell["a"], cell["b"], cell["c"]
+    angles = (cell["alpha"], cell["beta"], cell["gamma"])
+    if angles == (90.0, 90.0, 90.0):
+        if a == b == c:
+            return "cubic"
+        return "tetragonal" if a == b else "orthorhombic"
+    if angles == (90.0, 90.0, 120.0) and a == b:
+        return "hexagonal"
+    return "monoclinic" if angles[0] == angles[2] == 90.0 else "triclinic"
+
+
+def _structure_cell(
+    item: _Input, space_group: str | None
+) -> tuple[list[float] | None, str | None, str | None]:
+    """The start cell and space group to index a sample from, taken from its
+    first structure, with ``space_group`` given on the command line winning;
+    or no cell, and the note saying why, when that structure's cell cannot be
+    indexed in this version."""
+    spec = item.structure
+    try:
+        cell = resolved_cell(spec)
+    except ValueError as error:
+        return None, None, f"{error}, so the peaks are not labelled with hkl"
+    if spec.library is not None:
+        entry = load_entry(spec.library)
+        system, structure_group = entry.crystal_system, entry.space_group
+    else:
+        system, structure_group = _crystal_system_of(cell), None
+    if system != "tetragonal":
+        return (
+            None,
+            None,
+            (
+                f"hkl labelling for a {system} cell arrives in the next release; "
+                "plotted without hkl labels"
+            ),
+        )
+    chosen = space_group or structure_group
+    if chosen not in SUPPORTED_SPACE_GROUPS:
+        return (
+            None,
+            None,
+            (
+                f"hkl labelling in {chosen or 'the space group of a CIF structure'} "
+                "arrives in the next release; plotted without hkl labels"
+            ),
+        )
+    return [cell["a"], cell["c"]], chosen, None
+
+
 def _run_plot(args: argparse.Namespace) -> int:
     item = _resolve(args.scan, {})
     (scan,) = _read_inputs([item], args.wavelength)
@@ -364,15 +419,20 @@ def _run_plot(args: argparse.Namespace) -> int:
     ax.legend(frameon=False)
     written += save_figure(fig, figures / f"pattern_{stem}")
 
-    if args.cell is not None:
-        a, c = args.cell
+    cell, space_group = args.cell, args.space_group or DEFAULT_SPACE_GROUP
+    if cell is None and item.sample is not None:
+        cell, space_group, note = _structure_cell(item, args.space_group)
+        if note is not None:
+            print(f"xrdkit plot: {note}", file=sys.stderr)
+    if cell is not None:
+        a, c = cell
         try:
             indexed, fit = index_and_refine(
                 peaks,
                 start_cell=TetragonalCell(a=a, c=c),
                 wavelength=scan.wavelength,
                 zero_offset=args.zero,
-                space_group=args.space_group,
+                space_group=space_group,
             )
         except ValueError as error:
             raise CommandError(f"indexing failed: {error}") from error
@@ -409,7 +469,10 @@ def _add_plot(subparsers) -> None:
             "a second figure is labelled with hkl. Without --cell no indexing "
             "is done: hkl labels need a start cell; tetragonal only in this "
             "version. A sample of the project file is read at its instrument's "
-            "wavelength and labelled with its key and composition."
+            "wavelength and labelled with its key and composition, and without "
+            "--cell is indexed from the cell and space group of its first "
+            "structure; a structure that is not tetragonal P4bm is plotted "
+            "without hkl labels, with a note, until the next release."
         ),
     )
     parser.add_argument(
@@ -444,9 +507,11 @@ def _add_plot(subparsers) -> None:
     )
     parser.add_argument(
         "--space-group",
-        default=DEFAULT_SPACE_GROUP,
         metavar="SG",
-        help=f"space group whose reflection conditions apply (default: {DEFAULT_SPACE_GROUP})",
+        help=(
+            "space group whose reflection conditions apply (default: "
+            f"{DEFAULT_SPACE_GROUP}, or a sample's structure's)"
+        ),
     )
     parser.add_argument(
         "--zero",

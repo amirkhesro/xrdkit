@@ -1,8 +1,8 @@
 # Centrosymmetric tetragonal tungsten bronze in P4/mbm, the non polar (and
 # high temperature) bronze, from Ba4La2Fe2Nb8O30 at 295 K: McCabe and West,
 # J. Solid State Chem. 183 (2010) 624-630, doi:10.1016/j.jssc.2009.11.032,
-# COD 1563700. No P4/mbm bronze CIF is in XRD-Analysis/cifs. The Wyckoff
-# positions were checked against the International Tables for P4/mbm (No. 127).
+# COD 1563700. The Wyckoff positions were checked against the International
+# Tables for P4/mbm (No. 127).
 #
 # A cell has six A positions (A1 on 2a, A2 on 4g), ten B positions (B1 on 2c,
 # B2 on 8j) and thirty O. At Z = 5 formula units of AB2O6, the A positions

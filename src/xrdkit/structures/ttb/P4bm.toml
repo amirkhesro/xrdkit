@@ -10,8 +10,7 @@
 # position; B1 is Nb1; B2 is Nb2; O1 to O5 keep their CIF labels.
 #
 # P4bm is polar along c, so no site symmetry fixes the origin along z, and one
-# site's z has to be held. B1 holds it, as Nb1 does in XRD-Analysis's
-# config/samples.toml.
+# site's z has to be held. B1 holds it.
 
 [entry]
 name = "ttb/P4bm"
