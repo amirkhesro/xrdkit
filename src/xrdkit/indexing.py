@@ -57,13 +57,24 @@ DEFAULT_ZERO_OFFSET = 0.0
 DEFAULT_ZERO_SEARCH = (-0.4, 0.4)
 DEFAULT_ZERO_SEARCH_STEP = 0.01
 
-# Every trial offset is given a cell of its own, seeded from the peaks below
-# this position at this tolerance. Holding one cell for the whole search does
-# not work: a cell that is a per cent out shifts the low angle peaks by about
-# as much as a zero offset does, so the trial that wins is whichever one best
-# papers over the cell error rather than the one that is right.
+# Every trial offset is given a cell of its own, seeded from the peaks of a
+# coarse window (see COARSE_WINDOWS) at this tolerance. Holding one cell for
+# the whole search does not work: a cell that is a per cent out shifts the low
+# angle peaks by about as much as a zero offset does, so the trial that wins is
+# whichever one best papers over the cell error rather than the one that is
+# right.
 ZERO_SEED_TOLERANCE = 0.4
-ZERO_SEED_TWO_THETA_MAX = 35.0
+
+# Upper limits, in corrected degrees, tried in turn for a coarse window before
+# the whole pattern. A window is used once it holds enough lone peaks (peaks
+# with exactly one candidate reflection): the free cell parameters plus
+# COARSE_EXTRA_PEAKS, and never fewer than MIN_COARSE_PEAKS. No one fixed limit
+# suits every cell: a large tungsten bronze cell has plenty of reflections
+# below 35 degrees, while a small or pseudo-cubic cell has few there, and those
+# overlap.
+COARSE_WINDOWS = (35.0, 50.0, 70.0)
+COARSE_EXTRA_PEAKS = 2
+MIN_COARSE_PEAKS = 3
 
 CSV_COLUMNS = (
     "two_theta",
@@ -368,8 +379,18 @@ def estimate_zero_offset(
         raise ValueError(
             f"No peak at or below {two_theta_max} degrees to search a zero offset on"
         )
+    # One window for every trial, chosen at the middle of the search: offsets
+    # this small hardly change which peaks stand alone.
+    seed_max = _coarse_window(
+        candidates,
+        cell,
+        wavelength,
+        ZERO_SEED_TOLERANCE,
+        (low + high) / 2.0,
+        space_group,
+    )
     seed_peaks = [
-        peak for peak in candidates if peak.two_theta <= ZERO_SEED_TWO_THETA_MAX
+        peak for peak in candidates if peak.two_theta - (low + high) / 2.0 <= seed_max
     ]
 
     trials = np.arange(low, high + step / 2.0, step)
@@ -552,6 +573,9 @@ class CellFit:
     # Zero offset the indexing was run with, in degrees. Zero unless
     # index_and_refine searched for one.
     zero_offset: float = 0.0
+    # Upper limit of index_and_refine's first, coarse cycle, in corrected
+    # degrees; None from refine_cell on its own.
+    coarse_two_theta_max: float | None = None
 
 
 @dataclass
@@ -707,6 +731,36 @@ def refine_cell(
     return CellFit(cell=cell, n_peaks=len(used), rms_two_theta=rms, held=held_names)
 
 
+def _coarse_window(
+    peaks: list[Peak],
+    cell: Cell,
+    wavelength: float,
+    tolerance: float,
+    zero_offset: float,
+    space_group: str | None,
+) -> float:
+    """The upper limit, in corrected degrees, of a coarse cycle on ``peaks``.
+
+    The first of COARSE_WINDOWS whose peaks, indexed against ``cell`` at
+    ``tolerance``, include enough lone peaks to refine on: the free parameters
+    of the cell's crystal system plus COARSE_EXTRA_PEAKS, and never fewer than
+    MIN_COARSE_PEAKS. Failing those, the highest corrected peak position, which
+    takes in the whole pattern whether or not it has enough.
+    """
+    needed = max(len(cell.parameter_names) + COARSE_EXTRA_PEAKS, MIN_COARSE_PEAKS)
+    highest = max(peak.two_theta - zero_offset for peak in peaks)
+    for limit in COARSE_WINDOWS:
+        if limit >= highest:
+            break
+        window = [peak for peak in peaks if peak.two_theta - zero_offset <= limit]
+        indexed = index_peaks(
+            window, cell, wavelength, tolerance, zero_offset, space_group
+        )
+        if sum(1 for entry in indexed if len(entry.candidates) == 1) >= needed:
+            return limit
+    return highest
+
+
 def _seed_cell(
     peaks: list[Peak],
     cell: Cell,
@@ -736,7 +790,7 @@ def index_and_refine(
     wavelength: float,
     zero_offset: float = DEFAULT_ZERO_OFFSET,
     coarse_tolerance: float = 0.4,
-    coarse_two_theta_max: float = 35.0,
+    coarse_two_theta_max: float | None = None,
     fine_tolerance: float = DEFAULT_TOLERANCE,
     space_group: str | None = None,
     n_cycles: int = 2,
@@ -752,6 +806,18 @@ def index_and_refine(
     ambiguous peak never chooses between two candidates on the strength of a
     cell that is not yet converged.
 
+    Without ``coarse_two_theta_max`` the first cycle's window is chosen from
+    the data: 35, 50 and 70 degrees are tried in turn, and the first holding
+    enough lone peaks (peaks with exactly one candidate at
+    ``coarse_tolerance``) is used, enough being the free parameters of the
+    start cell's crystal system plus two, and never fewer than three. If none
+    does, the whole pattern is used, and the refinement says how many peaks it
+    lacks. A fixed low angle window does not suit every cell: a large cell,
+    such as a tungsten bronze, has many reflections below 35 degrees, but a
+    small or pseudo-cubic one has few there, and those crowd together, so it
+    can be left with too few lone peaks to refine. The zero offset search
+    seeds its trial cells from a window chosen the same way.
+
     Parameters
     ----------
     peaks
@@ -766,7 +832,8 @@ def index_and_refine(
     coarse_tolerance
         Tolerance of the first cycle, in degrees.
     coarse_two_theta_max
-        Upper limit of the first cycle, in corrected degrees.
+        Upper limit of the first cycle, in corrected degrees, or ``None`` to
+        choose it from the data as described above.
     fine_tolerance
         Tolerance of the later cycles and of the returned indexing, in degrees.
     space_group
@@ -783,13 +850,15 @@ def index_and_refine(
     tuple[list[IndexedPeak], CellFit]
         The whole peak list indexed against the final cell with
         ``fine_tolerance``, and the fit of the last cycle. The fit carries the
-        offset everything was indexed with in its ``zero_offset``.
+        offset everything was indexed with in its ``zero_offset``, and the
+        first cycle's window in its ``coarse_two_theta_max``.
 
     Raises
     ------
     ValueError
-        If ``n_cycles`` is below one, if no peak falls below
-        ``coarse_two_theta_max``, or if a cycle has too few peaks to refine on.
+        If ``n_cycles`` is below one, if there are no peaks or none falls
+        below a ``coarse_two_theta_max`` that is given, or if a cycle has too
+        few peaks to refine on.
     """
     if n_cycles < 1:
         raise ValueError(f"Need at least one cycle, got {n_cycles}")
@@ -808,6 +877,17 @@ def index_and_refine(
             space_group=space_group,
         ).offset
 
+    if coarse_two_theta_max is None:
+        if not peaks:
+            raise ValueError("No peak to start the refinement from")
+        coarse_two_theta_max = _coarse_window(
+            peaks,
+            start_cell,
+            wavelength,
+            coarse_tolerance,
+            zero_offset,
+            space_group,
+        )
     coarse_peaks = [
         peak for peak in peaks if peak.two_theta - zero_offset <= coarse_two_theta_max
     ]
@@ -839,4 +919,6 @@ def index_and_refine(
     final = index_peaks(
         peaks, cell, wavelength, fine_tolerance, zero_offset, space_group
     )
-    return final, replace(fit, zero_offset=zero_offset)
+    return final, replace(
+        fit, zero_offset=zero_offset, coarse_two_theta_max=coarse_two_theta_max
+    )

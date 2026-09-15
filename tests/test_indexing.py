@@ -48,12 +48,13 @@ def make_peak(two_theta: float, relative_intensity: float = 50.0) -> Peak:
 
 def isolated_reflections(
     two_theta_max: float = 40.0,
-    cell: TetragonalCell = TTB_CELL,
+    cell: Cell = TTB_CELL,
     separation: float = ISOLATION,
+    space_group: str | None = "P4bm",
 ) -> list:
     """Reflections that are well separated from their neighbours."""
     reflections = generate_reflections(
-        cell, WAVELENGTH, two_theta_max, space_group="P4bm"
+        cell, WAVELENGTH, two_theta_max, space_group=space_group
     )
     positions = [reflection.two_theta for reflection in reflections]
     return [
@@ -344,6 +345,8 @@ def test_index_and_refine_recovers_the_cell_the_peaks_came_from() -> None:
     assert fit.cell.c == pytest.approx(REFINED_CELL.c, abs=0.005)
     assert fit.held == ()
     assert fit.n_peaks == len(peaks)
+    # The bronze has lone peaks enough below 35 degrees, so the window stays.
+    assert fit.coarse_two_theta_max == 35.0
     assert fit.rms_two_theta < 0.01
 
     assert all(entry.is_indexed for entry in indexed)
@@ -418,6 +421,7 @@ def test_refine_cell_keeps_c_when_no_reflection_has_l() -> None:
     fit = refine_cell(indexed, WAVELENGTH, start_cell=TTB_CELL)
 
     assert fit.held == ("c",)
+    assert fit.coarse_two_theta_max is None
     # hk0 fixes a on its own, and c is carried over untouched.
     assert fit.cell.a == pytest.approx(REFINED_CELL.a, abs=0.005)
     assert fit.cell.c == TTB_CELL.c
@@ -744,3 +748,62 @@ def test_refine_cell_rank_deficient_names_the_components() -> None:
 
     with pytest.raises(ValueError, match=r"A \(a\), C \(c\)"):
         refine_cell(exact_indexed(reflections), WAVELENGTH, start_cell=cell)
+
+
+# The pseudo-cubic Pbnm perovskite and the start it is indexed from, a and b
+# split the wrong way round from it by about a per cent.
+PBNM_CELL = Cell.orthorhombic(5.38, 5.44, 7.64)
+PBNM_START = Cell.orthorhombic(5.30, 5.50, 7.60)
+
+
+def lone_peaks(cell: Cell, space_group: str) -> list[Peak]:
+    """Peaks on the reflections of ``cell`` to 80 degrees that stand clear of
+    their neighbours, as a scan would resolve them."""
+    reflections = isolated_reflections(80.0, cell, REFINEMENT_ISOLATION, space_group)
+    return [make_peak(round(reflection.two_theta, 3)) for reflection in reflections]
+
+
+def test_the_coarse_window_widens_for_a_pseudo_cubic_perovskite() -> None:
+    peaks = lone_peaks(PBNM_CELL, "Pbnm")
+
+    indexed, fit = index_and_refine(peaks, PBNM_START, WAVELENGTH, space_group="Pbnm")
+
+    # Below 35 degrees it has three lone peaks; an orthorhombic cell needs five.
+    assert fit.coarse_two_theta_max > 35.0
+    assert fit.coarse_two_theta_max == 50.0
+    for name, value in PBNM_CELL.parameters.items():
+        assert fit.cell.parameters[name] == pytest.approx(value, abs=1e-3), name
+    assert all(entry.is_indexed for entry in indexed)
+
+
+def test_a_fixed_35_degree_window_is_too_narrow_for_the_pbnm_perovskite() -> None:
+    peaks = lone_peaks(PBNM_CELL, "Pbnm")
+
+    with pytest.raises(ValueError, match="at least 4 indexed peaks"):
+        index_and_refine(
+            peaks,
+            PBNM_START,
+            WAVELENGTH,
+            space_group="Pbnm",
+            coarse_two_theta_max=35.0,
+        )
+
+
+def test_a_cubic_cell_with_few_low_angle_peaks_is_indexed() -> None:
+    peaks = lone_peaks(Cell.cubic(3.905), "Pm-3m")
+
+    _, fit = index_and_refine(peaks, Cell.cubic(3.95), WAVELENGTH, space_group="Pm-3m")
+
+    assert fit.cell.a == pytest.approx(3.905, abs=1e-3)
+    # From 3.95 only (100) and (110) fall inside the coarse tolerance at any
+    # window below the top of the pattern, so the whole pattern is taken.
+    assert fit.coarse_two_theta_max == pytest.approx(
+        max(peak.two_theta for peak in peaks)
+    )
+
+
+def test_too_few_peaks_in_the_whole_pattern_still_raises() -> None:
+    peaks = lone_peaks(Cell.cubic(3.905), "Pm-3m")[:1]
+
+    with pytest.raises(ValueError, match="at least 2 indexed peaks"):
+        index_and_refine(peaks, Cell.cubic(3.95), WAVELENGTH, space_group="Pm-3m")
