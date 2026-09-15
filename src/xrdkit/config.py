@@ -13,7 +13,9 @@ A settings file holds two tables of tables, read and checked by
       formula unit, ``{Sr = 0.40, Ba = 0.50, ...}``;
     - ``structure``: the name of its reference structure's table;
     - ``start_cell``: where the cell starts, ``{file, model}`` for a lattice
-      refinement result or ``{a, c}`` given outright;
+      refinement result, or the cell parameters given outright, exactly
+      those of the structure's crystal system (``{a, c}`` for a tetragonal
+      cell, say), each greater than 0;
     - ``two_theta``: the range refined, ``[low, high]`` in degrees;
     - ``background``: ``{function, terms}``;
     - ``refine_microstrain``: whether the microstrain is refined;
@@ -30,14 +32,10 @@ A settings file holds two tables of tables, read and checked by
     - ``cif``: its CIF, relative to the caller's root folder;
     - ``label``, ``phase_name``: how it is named in write ups and in the
       GSAS-II project;
-    - ``space_group``, ``formula_units``: formula units per cell;
+    - ``space_group``;
     - ``sites``: a list of ``{atoms = {label = element, ...}, wyckoff,
       kind}``, one per site, named by its first atom, of kind A, B or O;
     - ``uiso_groups``: a list of ``{name, sites}``, every site in one;
-    - ``origin``: ``{site, axis}``, the site coordinate that fixes the
-      origin along a polar axis;
-    - ``exchange``: ``{elements, sites}``, the elements whose occupancies
-      are traded between the sites;
     - ``composition``: ``{added = {element = host element, ...}}``, how a
       nominal composition goes on the sites: every element the sites hold
       is scaled by one factor over them, which keeps its distribution, and
@@ -45,11 +43,31 @@ A settings file holds two tables of tables, read and checked by
       the host's occupancy there (see
       :func:`xrdkit.structure.composition_edits`);
 
-    and optionally ``free_coordinates``, the coordinates to refine by
-    Wyckoff position, ``{"8d" = "xyz", "2a" = "z", ...}``, every coordinate
-    for a position not named, and ``bond_limits``, ``{kind = {min, max}}``
-    in angstroms, the range outside which a cation to anion bond from a
-    site of that kind is flagged.
+    and optionally ``formula_units``, formula units per cell (Z);
+    ``crystal_system``, one of :data:`xrdkit.library.CRYSTAL_SYSTEMS`;
+    ``origin``, ``{site, axis}``, the site coordinate that fixes the
+    origin along a polar axis, left out when nothing is to be held;
+    ``exchange``, ``{elements, sites}``, the elements whose occupancies are
+    traded between the sites, left out when none are;
+    ``free_coordinates``, the coordinates to refine by Wyckoff position,
+    ``{"8d" = "xyz", "2a" = "z", ...}``, every coordinate for a position not
+    named; and ``bond_limits``, ``{kind = {min, max}}`` in angstroms, the
+    range outside which a cation to anion bond from a site of that kind is
+    flagged. Left out, ``formula_units``, ``crystal_system``, ``origin`` and
+    ``exchange`` are None.
+
+    A structure may instead name an entry of the structure library,
+    ``library = "ttb/P4bm"``, and give ``atoms``, a table of the CIF's atoms
+    on each of the entry's sites by its label, ``{A1 = {Sr1 = "Sr"}, ...}``,
+    in place of ``sites``. Its space group, sites, Wyckoff positions, kinds,
+    free coordinates, Uiso groups, formula units, crystal system and origin
+    (the entry's origin site along its polar axis) then come from the entry,
+    and any of those keys given explicitly overrides the entry's value (an
+    explicit ``sites`` takes the place of ``atoms``, and then the entry's
+    free coordinates, Uiso groups and origin, which name its own sites, do
+    not apply). The sites are still named by their first atoms, and every
+    reference to a site, in ``uiso_groups``, ``origin`` and ``exchange``,
+    may give the entry's label for it instead.
 
 A top level ``unsettled`` table, optional, gives for each mode of the
 caller's pipeline, by name, the rule for a stage that has not settled:
@@ -58,8 +76,9 @@ own ``unsettled`` overrides it mode by mode, and each sample carries the
 two merged as its ``unsettled``.
 
 Every sample's composition is checked against its structure's sites: each
-element must be held by a site or added by the rule, and no kind of site
-may be given more atoms per cell than it has positions.
+element must be held by a site or added by the rule, and, when the
+structure gives its formula units, no kind of site may be given more atoms
+per cell than it has positions.
 """
 
 from __future__ import annotations
@@ -102,14 +121,36 @@ STRUCTURE_REQUIRED = (
     "label",
     "phase_name",
     "space_group",
-    "formula_units",
     "sites",
     "uiso_groups",
-    "origin",
-    "exchange",
     "composition",
 )
-STRUCTURE_OPTIONAL = ("free_coordinates", "bond_limits")
+STRUCTURE_OPTIONAL = (
+    "formula_units",
+    "crystal_system",
+    "origin",
+    "exchange",
+    "free_coordinates",
+    "bond_limits",
+    "library",
+    "atoms",
+)
+# Required of a structure that names a library entry; the rest may come from it.
+LIBRARY_REQUIRED = ("cif", "label", "phase_name", "composition")
+LIBRARY_OPTIONAL = tuple(
+    key
+    for key in STRUCTURE_REQUIRED + STRUCTURE_OPTIONAL
+    if key not in LIBRARY_REQUIRED
+)
+# The crystal system a start cell's parameters tell, when the structure does
+# not say.
+INFERRED_SYSTEMS = {
+    frozenset({"a"}): "cubic",
+    frozenset({"a", "c"}): "tetragonal",
+    frozenset({"a", "b", "c"}): "orthorhombic",
+}
+# The coordinate along each cell axis.
+AXIS_COORDINATE = {"a": "x", "b": "y", "c": "z"}
 
 ELEMENT = re.compile(r"[A-Z][a-z]?")
 WYCKOFF = re.compile(r"(\d+)([a-z])")
@@ -170,6 +211,13 @@ def _number(value: object, where: str, minimum: float | None = None) -> float:
     return float(value)
 
 
+def _positive(value: object, where: str) -> float:
+    number = _number(value, where)
+    if number <= 0.0:
+        raise _fail(where, f"must be greater than 0, not {value!r}")
+    return number
+
+
 def _integer(value: object, where: str, minimum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise _fail(
@@ -214,69 +262,242 @@ def wyckoff_multiplicity(symbol: str) -> int:
 def _sites(value: object, where: str) -> list[dict]:
     if not isinstance(value, list) or not value:
         raise _fail(where, "must be a list of site tables")
-    sites, labels = [], set()
-    for index, table in enumerate(value):
-        at = f"{where}[{index}]"
-        _keys(table, at, ("atoms", "wyckoff", "kind"))
-        atoms = _table(table["atoms"], f"{at}.atoms")
-        if not atoms:
-            raise _fail(f"{at}.atoms", "must name at least one atom")
-        for label, element in atoms.items():
-            _element(element, f"{at}.atoms.{label}")
-            if label in labels:
-                raise _fail(f"{at}.atoms", f"atom {label!r} is on another site too")
-            labels.add(label)
-        wyckoff = _string(table["wyckoff"], f"{at}.wyckoff")
-        try:
-            wyckoff_multiplicity(wyckoff)
-        except ValueError as error:
-            raise _fail(f"{at}.wyckoff", str(error)) from None
-        if table["kind"] not in SITE_KINDS:
-            raise _fail(
-                f"{at}.kind",
-                f"must be one of {', '.join(SITE_KINDS)}, not {table['kind']!r}",
-            )
-        sites.append(
-            {
-                "name": next(iter(atoms)),
-                "atoms": dict(atoms),
-                "wyckoff": wyckoff,
-                "kind": table["kind"],
-            }
+    labels: set[str] = set()
+    return [
+        _site(table, f"{where}[{index}]", labels) for index, table in enumerate(value)
+    ]
+
+
+def _site(value: object, at: str, labels: set[str]) -> dict:
+    """One site table, its atoms' labels added to ``labels``."""
+    table = _keys(value, at, ("atoms", "wyckoff", "kind"))
+    atoms = _table(table["atoms"], f"{at}.atoms")
+    if not atoms:
+        raise _fail(f"{at}.atoms", "must name at least one atom")
+    for label, element in atoms.items():
+        _element(element, f"{at}.atoms.{label}")
+        if label in labels:
+            raise _fail(f"{at}.atoms", f"atom {label!r} is on another site too")
+        labels.add(label)
+    wyckoff = _string(table["wyckoff"], f"{at}.wyckoff")
+    try:
+        wyckoff_multiplicity(wyckoff)
+    except ValueError as error:
+        raise _fail(f"{at}.wyckoff", str(error)) from None
+    if table["kind"] not in SITE_KINDS:
+        raise _fail(
+            f"{at}.kind",
+            f"must be one of {', '.join(SITE_KINDS)}, not {table['kind']!r}",
         )
-    empty = [kind for kind in SITE_KINDS if not any(s["kind"] == kind for s in sites)]
-    if empty:
-        raise _fail(where, f"no site of kind {', '.join(empty)}")
-    return sites
+    return {
+        "name": next(iter(atoms)),
+        "atoms": dict(atoms),
+        "wyckoff": wyckoff,
+        "kind": table["kind"],
+    }
 
 
-def _site_names(value: object, where: str, names: list[str]) -> list[str]:
-    listed = _strings(value, where)
-    unknown = [name for name in listed if name not in names]
+def _library_entry(value: object, where: str):
+    """The structure library entry ``value`` names."""
+    from xrdkit.library import load_entry  # the library imports this module
+
+    name = _string(value, where)
+    try:
+        return load_entry(name)
+    except ValueError as error:
+        raise _fail(where, str(error)) from None
+
+
+def _library_sites(value: object, where: str, entry) -> tuple[list[dict], dict]:
+    """The sites of ``entry`` holding the atoms ``value`` puts on each, by
+    the entry's site label, and the site each label names."""
+    atoms = _table(value, where)
+    known = [site.label for site in entry.sites]
+    unknown = [label for label in atoms if label not in known]
     if unknown:
         raise _fail(
             where,
-            f"no site named {', '.join(map(repr, unknown))}; sites are named by "
-            f"their first atom: {', '.join(names)}",
+            f"no site {', '.join(map(repr, unknown))} in {entry.name}; its sites "
+            f"are {', '.join(known)}",
         )
-    return listed
+    missing = [label for label in known if label not in atoms]
+    if missing:
+        raise _fail(where, f"no atoms for site {', '.join(missing)} of {entry.name}")
+    labels: set[str] = set()
+    sites = []
+    for site in entry.sites:
+        table = {"atoms": atoms[site.label], "wyckoff": site.wyckoff, "kind": site.kind}
+        sites.append(
+            {**_site(table, f"{where}.{site.label}", labels), "label": site.label}
+        )
+    aliases = {site["label"]: site["name"] for site in sites}
+    names = [site["name"] for site in sites]
+    for label, name in aliases.items():
+        if label in names and label != name:
+            raise _fail(
+                where,
+                f"{label}, a site label of {entry.name}, is the first atom of "
+                "another site; relabel that atom",
+            )
+    return sites, aliases
+
+
+def _site_names(
+    value: object,
+    where: str,
+    names: list[str],
+    aliases: Mapping[str, str] | None = None,
+) -> list[str]:
+    """The sites ``value`` lists, each by its name or, through ``aliases``,
+    by its library label, resolved to their names."""
+    aliases = aliases or {}
+    listed = _strings(value, where)
+    unknown = [name for name in listed if name not in names and name not in aliases]
+    if unknown:
+        known = f"sites are named by their first atom: {', '.join(names)}"
+        if aliases:
+            known += f", or by their library label: {', '.join(aliases)}"
+        raise _fail(where, f"no site named {', '.join(map(repr, unknown))}; {known}")
+    resolved = [name if name in names else aliases[name] for name in listed]
+    if len(set(resolved)) != len(resolved):
+        raise _fail(where, f"names a site twice: {', '.join(listed)}")
+    return resolved
+
+
+def _crystal_system(table: Mapping, where: str, entry) -> str | None:
+    """The structure's crystal system: its own, else its entry's, else None."""
+    from xrdkit.library import CRYSTAL_SYSTEMS  # the library imports this module
+
+    if "crystal_system" not in table:
+        return entry.crystal_system if entry else None
+    system = table["crystal_system"]
+    if system not in CRYSTAL_SYSTEMS:
+        raise _fail(
+            f"{where}.crystal_system",
+            f"must be one of {', '.join(CRYSTAL_SYSTEMS)}, not {system!r}",
+        )
+    return system
+
+
+def _origin(
+    table: Mapping,
+    where: str,
+    names: list[str],
+    aliases: Mapping[str, str],
+    entry,
+    from_entry: bool,
+) -> dict | None:
+    """The site coordinate that fixes the origin: the structure's own, else
+    its entry's origin site along its polar axis, else None."""
+    if "origin" not in table:
+        if from_entry and entry.origin_site and entry.polar_axis:
+            return {
+                "site": aliases[entry.origin_site],
+                "axis": AXIS_COORDINATE[entry.polar_axis],
+            }
+        return None
+    origin = _keys(table["origin"], f"{where}.origin", ("site", "axis"))
+    (site,) = _site_names([origin["site"]], f"{where}.origin.site", names, aliases)
+    if origin["axis"] not in ("x", "y", "z"):
+        raise _fail(
+            f"{where}.origin.axis", f"must be x, y or z, not {origin['axis']!r}"
+        )
+    return {"site": site, "axis": origin["axis"]}
+
+
+def _exchange(
+    value: object,
+    where: str,
+    sites: list[dict],
+    kind_of: Mapping[str, str],
+    aliases: Mapping[str, str],
+) -> dict:
+    """The elements whose occupancies are traded, and the sites they are
+    traded between."""
+    exchange = _keys(value, where, ("elements", "sites"))
+    elements = _strings(exchange["elements"], f"{where}.elements", 2)
+    for index, element in enumerate(elements):
+        _element(element, f"{where}.elements[{index}]")
+    names = list(kind_of)
+    between = _site_names(exchange["sites"], f"{where}.sites", names, aliases)
+    if len(between) < 2:
+        raise _fail(f"{where}.sites", "must name at least two sites")
+    if len({kind_of[name] for name in between}) > 1:
+        raise _fail(
+            f"{where}.sites",
+            "must all be of one kind, not "
+            + ", ".join(f"{name} ({kind_of[name]})" for name in between),
+        )
+    on_sites = {
+        element
+        for site in sites
+        if site["name"] in between
+        for element in site["atoms"].values()
+    }
+    absent = [element for element in elements if element not in on_sites]
+    if absent:
+        raise _fail(
+            f"{where}.elements",
+            f"{', '.join(absent)} on none of the sites {', '.join(between)}",
+        )
+    return {"elements": elements, "sites": between}
 
 
 def _structure(table: object, where: str) -> dict:
-    _keys(table, where, STRUCTURE_REQUIRED, STRUCTURE_OPTIONAL)
+    table = _table(table, where)
+    entry = None
+    if "library" in table:
+        _keys(table, where, LIBRARY_REQUIRED, LIBRARY_OPTIONAL)
+        entry = _library_entry(table["library"], f"{where}.library")
+    else:
+        _keys(table, where, STRUCTURE_REQUIRED, STRUCTURE_OPTIONAL)
+        if "atoms" in table:
+            raise _fail(
+                f"{where}.atoms",
+                "goes with library, the entry whose sites the atoms are on; "
+                "give sites instead",
+            )
     structure = {
         key: _string(table[key], f"{where}.{key}")
-        for key in ("cif", "label", "phase_name", "space_group")
+        for key in ("cif", "label", "phase_name")
     }
-    structure["formula_units"] = _integer(
-        table["formula_units"], f"{where}.formula_units", 1
+    structure["library"] = entry.name if entry else None
+    structure["space_group"] = (
+        _string(table["space_group"], f"{where}.space_group")
+        if "space_group" in table
+        else entry.space_group
     )
-    sites = _sites(table["sites"], f"{where}.sites")
+    structure["formula_units"] = (
+        _integer(table["formula_units"], f"{where}.formula_units", 1)
+        if "formula_units" in table
+        else (entry.z if entry else None)
+    )
+    structure["crystal_system"] = _crystal_system(table, where, entry)
+
+    # The entry's sites, and what names them, unless sites are given outright.
+    aliases: dict[str, str] = {}
+    from_entry = entry is not None and "sites" not in table
+    if not from_entry:
+        sites = _sites(table["sites"], f"{where}.sites")
+    elif "atoms" in table:
+        sites, aliases = _library_sites(table["atoms"], f"{where}.atoms", entry)
+    else:
+        raise _fail(
+            where,
+            f"missing key 'atoms'; give the CIF's atoms on each site of "
+            f"{entry.name}, or sites",
+        )
     names = [site["name"] for site in sites]
     kind_of = {site["name"]: site["kind"] for site in sites}
     structure["sites"] = sites
 
-    free = _table(table.get("free_coordinates", {}), f"{where}.free_coordinates")
+    if "free_coordinates" in table:
+        free = _table(table["free_coordinates"], f"{where}.free_coordinates")
+    elif from_entry:
+        # A site the entry leaves nothing free takes "all", which frees nothing.
+        free = {site.wyckoff: "".join(site.free) or "all" for site in entry.sites}
+    else:
+        free = {}
     for wyckoff, axes in free.items():
         at = f"{where}.free_coordinates.{wyckoff}"
         try:
@@ -292,7 +513,18 @@ def _structure(table: object, where: str) -> dict:
             raise _fail(at, f"must be 'all' or some of 'xyz', not {axes!r}")
     structure["free_coordinates"] = dict(free)
 
-    groups = table["uiso_groups"]
+    if "uiso_groups" in table:
+        groups = table["uiso_groups"]
+    elif from_entry:
+        by_group: dict[str, list[str]] = {}
+        for site in entry.sites:
+            if site.uiso_group is not None:
+                by_group.setdefault(site.uiso_group, []).append(site.label)
+        groups = [
+            {"name": name, "sites": members} for name, members in by_group.items()
+        ]
+    else:
+        raise _fail(where, "missing key 'uiso_groups'")
     if not isinstance(groups, list) or not groups:
         raise _fail(f"{where}.uiso_groups", "must be a list of {name, sites} tables")
     placed: dict[str, str] = {}
@@ -301,7 +533,7 @@ def _structure(table: object, where: str) -> dict:
         at = f"{where}.uiso_groups[{index}]"
         _keys(group, at, ("name", "sites"))
         name = _string(group["name"], f"{at}.name")
-        members = _site_names(group["sites"], f"{at}.sites", names)
+        members = _site_names(group["sites"], f"{at}.sites", names, aliases)
         for member in members:
             if member in placed:
                 raise _fail(
@@ -315,40 +547,12 @@ def _structure(table: object, where: str) -> dict:
             f"{where}.uiso_groups", f"sites {', '.join(outside)} are in no Uiso group"
         )
 
-    origin = _keys(table["origin"], f"{where}.origin", ("site", "axis"))
-    _site_names([origin["site"]], f"{where}.origin.site", names)
-    if origin["axis"] not in ("x", "y", "z"):
-        raise _fail(
-            f"{where}.origin.axis", f"must be x, y or z, not {origin['axis']!r}"
-        )
-    structure["origin"] = dict(origin)
-
-    exchange = _keys(table["exchange"], f"{where}.exchange", ("elements", "sites"))
-    elements = _strings(exchange["elements"], f"{where}.exchange.elements", 2)
-    for index, element in enumerate(elements):
-        _element(element, f"{where}.exchange.elements[{index}]")
-    between = _site_names(exchange["sites"], f"{where}.exchange.sites", names)
-    if len(between) < 2:
-        raise _fail(f"{where}.exchange.sites", "must name at least two sites")
-    if len({kind_of[name] for name in between}) > 1:
-        raise _fail(
-            f"{where}.exchange.sites",
-            "must all be of one kind, not "
-            + ", ".join(f"{name} ({kind_of[name]})" for name in between),
-        )
-    on_sites = {
-        element
-        for site in sites
-        if site["name"] in between
-        for element in site["atoms"].values()
-    }
-    absent = [element for element in elements if element not in on_sites]
-    if absent:
-        raise _fail(
-            f"{where}.exchange.elements",
-            f"{', '.join(absent)} on none of the sites {', '.join(between)}",
-        )
-    structure["exchange"] = {"elements": elements, "sites": between}
+    structure["origin"] = _origin(table, where, names, aliases, entry, from_entry)
+    structure["exchange"] = (
+        _exchange(table["exchange"], f"{where}.exchange", sites, kind_of, aliases)
+        if "exchange" in table
+        else None
+    )
 
     rule = _keys(table["composition"], f"{where}.composition", ("added",))
     added = _table(rule["added"], f"{where}.composition.added")
@@ -399,7 +603,8 @@ def check_composition(
     by the structure's composition rule. An element takes the kinds of site
     it is on, or its host's; kinds that share an element are counted
     together, and none may be given more atoms per cell than the
-    multiplicities of their sites add up to.
+    multiplicities of their sites add up to; a structure that gives no
+    formula units cannot be checked for that, and is not.
 
     Raises
     ------
@@ -439,6 +644,8 @@ def check_composition(
             pools.remove(pool)
         pools.append(joined)
     units = structure["formula_units"]
+    if units is None:
+        return
     for pool in pools:
         on = [element for element in composition if kinds_of[element] <= pool]
         content = sum(units * composition[element] for element in on)
@@ -456,20 +663,50 @@ def check_composition(
             )
 
 
-def _start_cell(value: object, where: str) -> dict:
+def _start_cell(value: object, where: str, structure: Mapping) -> dict:
+    """``{file, model}``, or the cell parameters of the crystal system of
+    ``structure``, or, when it has none, of the one the parameters tell."""
+    from xrdkit.library import CELL_PARAMETERS  # the library imports this module
+
     table = _table(value, where)
-    if "file" in table:
+    if "file" in table or "model" in table:
         _keys(table, where, ("file", "model"))
         return {
             "file": _string(table["file"], f"{where}.file"),
             "model": _string(table["model"], f"{where}.model"),
         }
-    if "a" in table or "c" in table:
-        _keys(table, where, ("a", "c"))
-        return {key: _number(table[key], f"{where}.{key}", 0.0) for key in ("a", "c")}
-    raise _fail(
-        where, "must give file and model (a lattice refinement result) or a and c"
-    )
+    if not table:
+        raise _fail(
+            where,
+            "must give file and model (a lattice refinement result) or the cell "
+            "parameters of a crystal system",
+        )
+    every = CELL_PARAMETERS["triclinic"]
+    unknown = [key for key in table if key not in every]
+    if unknown:
+        raise _fail(
+            where,
+            f"unknown key {', '.join(map(repr, unknown))}; the cell parameters are "
+            + ", ".join(every),
+        )
+    given = [key for key in every if key in table]
+    system = structure["crystal_system"]
+    if system is None:
+        system = INFERRED_SYSTEMS.get(frozenset(given))
+        if system is None:
+            raise _fail(
+                where,
+                f"cannot tell the crystal system from {', '.join(given)}; give "
+                f"crystal_system in structures.{structure['name']}",
+            )
+    elif set(given) != set(CELL_PARAMETERS[system]):
+        raise _fail(
+            where,
+            f"a {system} cell (the crystal_system of structures."
+            f"{structure['name']}) has {', '.join(CELL_PARAMETERS[system])}, not "
+            + ", ".join(given),
+        )
+    return {key: _positive(table[key], f"{where}.{key}") for key in given}
 
 
 def _trials(value: object, where: str) -> dict:
@@ -531,7 +768,9 @@ def _sample(table: object, where: str, structures: Mapping[str, dict]) -> dict:
             + (", ".join(structures) or "none"),
         )
     sample["structure"] = name
-    sample["start_cell"] = _start_cell(table["start_cell"], f"{where}.start_cell")
+    sample["start_cell"] = _start_cell(
+        table["start_cell"], f"{where}.start_cell", structures[name]
+    )
 
     two_theta = table["two_theta"]
     if not isinstance(two_theta, list) or len(two_theta) != 2:

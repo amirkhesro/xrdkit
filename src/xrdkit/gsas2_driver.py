@@ -62,7 +62,8 @@ A stage is a dict with a ``name`` and the refinement flags to switch on:
 ``origin``
     ``{phase: {"site": label, "axis": "z"}}``: the site whose coordinate
     along a polar axis is held, whatever else is refined, to fix the origin
-    along it; ``{phase: None}`` drops it. A stage that would refine that
+    along it; ``{phase: None}`` drops it, and ``None``, for a structure with
+    no origin to hold, changes nothing. A stage that would refine that
     coordinate on every site of a phase polar along it fails, since the
     origin would then float.
 ``occupancies``
@@ -74,7 +75,8 @@ A stage is a dict with a ``name`` and the refinement flags to switch on:
     added at occupancy 0 by an atom edit. With every element's content held,
     so is the total over the sites, and with it the vacancies they hold
     between them; each site's own total may change. Other atoms on the sites
-    keep their occupancies.
+    keep their occupancies. ``None``, for a structure with no exchange, adds
+    no constraint.
 Flags carry over from stage to stage, a list growing by the new entries, a
 ``True`` or ``False`` replacing what was there, unless the stage has
 ``"reset": true``, when it starts again from nothing refined. The
@@ -523,7 +525,9 @@ def _coordinates(value, current, name):
 def _origin(value, current, name):
     """The site that holds the origin along a polar axis, by phase,
     ``{phase: {"site": label, "axis": "z"}}``, replacing any before; None
-    drops it."""
+    drops it, and None for the whole leaves them as they were."""
+    if value is None:
+        return copy.deepcopy(current)
     if not isinstance(value, dict):
         raise TypeError(f"stage {name!r}: origin must map phases to a site")
     origin = copy.deepcopy(current)
@@ -559,7 +563,9 @@ def _names(value):
 
 def _occupancies(value, current, name):
     """Occupancy constraints, ``[{"phase", "sites", "elements"}]``, growing
-    by the new ones."""
+    by the new ones; None adds none."""
+    if value is None:
+        return copy.deepcopy(current)
     if not isinstance(value, list):
         raise TypeError(f"stage {name!r}: occupancies must be a list")
     chosen = copy.deepcopy(current)

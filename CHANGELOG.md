@@ -103,6 +103,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Rietveld settings of `xrdkit.config` no longer assume a tetragonal P4bm
+  bronze. A configuration that validated before gives the same result; each
+  structure also carries `library` and `crystal_system`, None unless given.
+  - `exchange` is optional. Without it the structure's `exchange` and
+    `site_setup`'s `exchange` are None, and the GSAS-II driver takes
+    `"occupancies": None` in a stage as no constraint.
+  - `origin` is optional. Without it no coordinate is held for the origin:
+    `site_setup` gives `origin` and `origin_axis` as None and lists the free
+    coordinates of every site. The driver takes `"origin": None` in a stage as
+    no change.
+  - A structure's sites need not include one of each kind A, B and O.
+    `bond_lengths` of a phase with no anion site returns no bonds, with a
+    warning, instead of passing an empty target list on.
+  - A sample's `start_cell` is `{file, model}` or exactly the cell parameters
+    of the structure's crystal system, each greater than 0. `a = 0` is now
+    refused. The crystal system comes from the structure's new optional
+    `crystal_system`, or its library entry. Without either it is inferred
+    from `a` (cubic), `a, c` (tetragonal) or `a, b, c` (orthorhombic), and any
+    other set of parameters asks for `crystal_system`.
+  - `formula_units` is optional. Without it the composition is not checked
+    against the capacity of the sites, and `composition_edits` refuses, naming
+    the structure, instead of assuming a Z.
+  - A structure may give `library = "<entry>"` and `atoms`, the CIF's atoms on
+    each of the entry's sites by label, instead of `space_group`, `sites` and
+    `uiso_groups`. The sites, Wyckoff positions, kinds, free coordinates, Uiso
+    groups, Z, crystal system and origin then come from the entry, and a key
+    given explicitly overrides the entry's value. Sites keep the names of
+    their first atoms, and `uiso_groups`, `origin` and `exchange` may name a
+    site by its library label instead.
 - The peak to background criterion of 20 applies to phase identification
   only, not to plotting: a low ratio does not spoil a figure, but weak phases
   may not be visible. `xrdkit check` says so in its reason.

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -226,7 +227,8 @@ def bond_lengths(
     once, as the first of them; a site is an anion site if its first atom
     is of an element in ``anions``, and a cation site otherwise. Distances
     from one cation site to images of one anion site that are equal to
-    within SAME_DISTANCE are the same bond, counted.
+    within SAME_DISTANCE are the same bond, counted. A phase with no anion
+    site has no such bonds: the result is empty, with a warning saying so.
 
     Returns a list of ``{"centre", "centre_site", "target", "target_site",
     "distance", "esd", "count"}``: the labels of the first atoms and of
@@ -250,6 +252,13 @@ def bond_lengths(
         site_labels[first["label"]] = "/".join(atoms[i]["label"] for i in group)
         chosen = targets if _element(first["type"]) in anions else centres
         chosen.append(first["label"])
+    if not targets:
+        warnings.warn(
+            f"no site of an anion, {', '.join(sorted(anions))}, among the atoms of "
+            "the phase, so no cation to anion bond lengths",
+            stacklevel=2,
+        )
+        return []
     bonds: dict[tuple, dict] = {}
     for found in interatomic_distances(
         cell, atoms, phase["operators"], centres, targets, dmax, dmin
@@ -313,10 +322,20 @@ def composition_edits(
     Raises
     ------
     ValueError
-        If the atoms hold an element the composition lacks, the composition
-        has one the atoms lack that the rule does not add, an added element
-        is on the atoms already, or a label for an added atom is taken.
+        If the structure gives no formula units, the atoms hold an element
+        the composition lacks, the composition has one the atoms lack that
+        the rule does not add, an added element is on the atoms already, or
+        a label for an added atom is taken.
     """
+    if structure.get("formula_units") is None:
+        name = structure.get("name")
+        raise ValueError(
+            f"structure {name} gives no formula_units (Z), which putting a "
+            "composition on its sites needs; add formula_units to it"
+            if name
+            else "the structure gives no formula_units (Z), which putting a "
+            "composition on its sites needs"
+        )
     added_on = structure["composition"]["added"]
     cif = cell_contents(atoms)
     per_cell = {
@@ -384,10 +403,13 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
     - ``kinds``: the sites of each kind, in that order;
     - ``uiso_groups`` and ``group_names``: the site names of each Uiso
       group, and its name;
-    - ``origin``: the site that fixes the origin, and ``origin_axis``;
+    - ``origin``: the site that fixes the origin, and ``origin_axis``, both
+      None for a structure with no origin;
     - ``coordinates``: by kind, the coordinates to refine on each site but
-      the origin's, ``{kind: {site name: free}}``;
-    - ``exchange``: ``{"elements", "sites"}``.
+      the origin's (on every site when there is no origin), ``{kind: {site
+      name: free}}``;
+    - ``exchange``: ``{"elements", "sites"}``, or None for a structure with
+      no exchange.
 
     Raises
     ------
@@ -451,20 +473,26 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
     kinds: dict[str, list[dict]] = {}
     for site in sites:
         kinds.setdefault(site["kind"], []).append(site)
-    origin = by_name[structure["origin"]["site"]]
+    held = structure.get("origin")
+    origin = by_name[held["site"]] if held else None
+    exchange = structure.get("exchange")
     return {
         "sites": sites,
         "kinds": kinds,
         "uiso_groups": [list(group["sites"]) for group in structure["uiso_groups"]],
         "group_names": [group["name"] for group in structure["uiso_groups"]],
         "origin": origin,
-        "origin_axis": structure["origin"]["axis"],
+        "origin_axis": held["axis"] if held else None,
         "coordinates": {
             kind: {site["name"]: site["free"] for site in found if site is not origin}
             for kind, found in kinds.items()
         },
-        "exchange": {
-            "elements": list(structure["exchange"]["elements"]),
-            "sites": list(structure["exchange"]["sites"]),
-        },
+        "exchange": (
+            {
+                "elements": list(exchange["elements"]),
+                "sites": list(exchange["sites"]),
+            }
+            if exchange
+            else None
+        ),
     }
