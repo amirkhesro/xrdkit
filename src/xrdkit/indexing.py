@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -47,6 +48,15 @@ __all__ = [
 
 # Maximum difference between corrected and calculated 2theta, in degrees.
 DEFAULT_TOLERANCE = 0.05
+
+# Two calculated angles, or two distances from a peak to calculated angles,
+# closer than this in degrees are taken as equal, and their order is set by
+# hkl. Reflections of different Laue orbits can be exactly coincident, (553)
+# and (713) in a tetragonal cell for one, yet come out of the metric about
+# 1e-14 degrees apart, as its terms are summed in a different order; without
+# this their order, and so the label a peak takes, would be set by rounding.
+# Far below any experimental resolution and far above that noise.
+COINCIDENCE_TOLERANCE = 1e-9
 
 # Zero point correction subtracted from every observed position, in degrees.
 DEFAULT_ZERO_OFFSET = 0.0
@@ -218,6 +228,28 @@ def _families(
     return hkl_array, multiplicity_array
 
 
+def _in_stated_order(
+    reflections: list[Reflection], value: Callable[[Reflection], float]
+) -> list[Reflection]:
+    """Sort ``reflections`` by ``value``, and by hkl where values tie.
+
+    Values within :data:`COINCIDENCE_TOLERANCE` of the one before count as
+    equal, so a run of them is ordered by hkl alone.
+    """
+    ordered = sorted(
+        reflections, key=lambda reflection: (value(reflection), reflection.hkl)
+    )
+    result: list[Reflection] = []
+    run: list[Reflection] = []
+    for reflection in ordered:
+        if run and value(reflection) - value(run[-1]) > COINCIDENCE_TOLERANCE:
+            result.extend(sorted(run, key=lambda member: member.hkl))
+            run = []
+        run.append(reflection)
+    result.extend(sorted(run, key=lambda member: member.hkl))
+    return result
+
+
 def generate_reflections(
     cell: Cell,
     wavelength: float,
@@ -233,6 +265,12 @@ def generate_reflections(
     :class:`Reflection`, labelled by :func:`~xrdkit.symmetry.representative`
     (h >= k >= 0 and l >= 0 for a tetragonal cell) and carrying the family's
     multiplicity.
+
+    Reflections are ordered by 2theta, and two whose angles agree within
+    :data:`COINCIDENCE_TOLERANCE` (1e-9 degrees) are taken as coincident and
+    ordered by hkl, compared as a tuple, lowest first: (553) comes before (713)
+    in a tetragonal cell, where the two are exactly coincident. The order, and
+    so the reflection :func:`index_peaks` picks, never depends on rounding.
 
     Parameters
     ----------
@@ -252,7 +290,7 @@ def generate_reflections(
     Returns
     -------
     list[Reflection]
-        Reflections inside the window, sorted by 2theta and then hkl.
+        Reflections inside the window, in the order above.
 
     Raises
     ------
@@ -301,9 +339,7 @@ def generate_reflections(
             hkl[inside], d_spacings[inside], two_theta[inside], multiplicities[inside]
         )
     ]
-    return sorted(
-        reflections, key=lambda reflection: (reflection.two_theta, reflection.hkl)
-    )
+    return _in_stated_order(reflections, lambda reflection: reflection.two_theta)
 
 
 def estimate_zero_offset(
@@ -437,6 +473,11 @@ def index_peaks(
     Each observed position has ``zero_offset`` subtracted from it before it is
     compared with the calculated positions.
 
+    Each peak takes the nearest calculated reflection. Distances within
+    :data:`COINCIDENCE_TOLERANCE` of each other are ties, which go to the lowest
+    hkl, as in the order of :func:`generate_reflections`, so a peak on exactly
+    coincident reflections always gets the same label.
+
     Parameters
     ----------
     peaks
@@ -478,12 +519,11 @@ def index_peaks(
             for reflection in reflections
             if abs(position - reflection.two_theta) <= tolerance
         ]
-        # Closest first; ties break on hkl so the choice is reproducible.
-        candidates.sort(
-            key=lambda reflection: (
-                abs(position - reflection.two_theta),
-                reflection.hkl,
-            )
+        # Closest first; distances within COINCIDENCE_TOLERANCE are ties, and
+        # ties break on hkl, so the choice never rests on rounding.
+        candidates = _in_stated_order(
+            candidates,
+            lambda reflection, position=position: abs(position - reflection.two_theta),
         )
         best = candidates[0] if candidates else None
         indexed.append(

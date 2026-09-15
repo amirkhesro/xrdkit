@@ -251,6 +251,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter file or a phase's CIF does not exist.
 - A `.gpx` stem containing a dot, such as `x0.10`, keeps it in the default
   export prefix; only a `.gpx` extension is taken off.
+- Exactly coincident reflections from different Laue orbits, such as (553) and
+  (713) or (860) and (10 0 0) in a tetragonal cell, come out of
+  `generate_reflections` in hkl order, lowest first, and a peak on them is
+  indexed as the lowest. Their angles differ by about 1e-14 degrees through the
+  metric, which used to decide the order and so the label. Angles, and distances
+  from a peak, within the new `COINCIDENCE_TOLERANCE` of 1e-9 degrees now count
+  as equal and are ordered by hkl. Which reflections are generated is unchanged.
 
 ### Planned
 

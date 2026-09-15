@@ -1,6 +1,7 @@
 """Tests for xrdkit.indexing."""
 
 import csv
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -807,3 +808,67 @@ def test_too_few_peaks_in_the_whole_pattern_still_raises() -> None:
 
     with pytest.raises(ValueError, match="at least 2 indexed peaks"):
         index_and_refine(peaks, Cell.cubic(3.95), WAVELENGTH, space_group="Pm-3m")
+
+
+# Cells searched for exactly coincident reflections, with the space group and
+# the upper end of the window.
+COINCIDENCE_CASES = (
+    (TTB_CELL, "P4bm", 150.0),
+    (Cell.tetragonal(3.994, 4.034), "P4mm", 150.0),
+    (Cell.cubic(3.905), "Pm-3m", 170.0),
+    (Cell.trigonal(5.148, 13.863), "R3c", 150.0),
+)
+
+
+def exact_inverse_d_squared(cell: Cell, hkl: tuple[int, int, int]) -> Fraction:
+    """1/d^2 of ``hkl`` in exact arithmetic, for axes at 90 degrees or on
+    hexagonal axes, from the cell edges as the floats they are."""
+    h, k, l = hkl
+    a, b, c = Fraction(cell.a), Fraction(cell.b), Fraction(cell.c)
+    if cell.crystal_system in ("hexagonal", "trigonal"):
+        return Fraction(4, 3) * (h * h + h * k + k * k) / (a * a) + l * l / (c * c)
+    return h * h / (a * a) + k * k / (b * b) + l * l / (c * c)
+
+
+@pytest.mark.parametrize(("cell", "space_group", "two_theta_max"), COINCIDENCE_CASES)
+def test_exactly_coincident_reflections_come_out_in_hkl_order(
+    cell, space_group, two_theta_max
+) -> None:
+    reflections = generate_reflections(
+        cell, WAVELENGTH, two_theta_max, space_group=space_group
+    )
+    positions: dict[Fraction, list[int]] = {}
+    for index, reflection in enumerate(reflections):
+        key = exact_inverse_d_squared(cell, reflection.hkl)
+        positions.setdefault(key, []).append(index)
+    groups = [indices for indices in positions.values() if len(indices) > 1]
+
+    if cell is TTB_CELL:
+        assert groups, "the TTB cell has exactly coincident reflections to test on"
+    for indices in groups:
+        hkl = [reflections[index].hkl for index in indices]
+        assert indices == list(range(indices[0], indices[0] + len(indices))), hkl
+        assert hkl == sorted(hkl), hkl
+
+
+def test_a_peak_on_exactly_coincident_reflections_takes_the_lower_hkl() -> None:
+    # (860) and (10 0 0): h^2 + k^2 = 100 and l = 0 for both. Through the
+    # metric the two angles differ by about 1e-14 degrees in this cell.
+    assert exact_inverse_d_squared(TTB_CELL, (8, 6, 0)) == exact_inverse_d_squared(
+        TTB_CELL, (10, 0, 0)
+    )
+    reflections = generate_reflections(
+        TTB_CELL, WAVELENGTH, 80.0, 70.0, space_group="P4bm"
+    )
+    by_hkl = {reflection.hkl: reflection for reflection in reflections}
+
+    # The peak sits on each calculated angle in turn, so that whichever is
+    # nearer by rounding cannot decide the label.
+    for hkl in ((8, 6, 0), (10, 0, 0)):
+        peaks = [make_peak(by_hkl[hkl].two_theta)]
+        entry = index_peaks(peaks, TTB_CELL, WAVELENGTH, space_group="P4bm")[0]
+        assert entry.reflection.hkl == (8, 6, 0)
+        assert [candidate.hkl for candidate in entry.candidates[:2]] == [
+            (8, 6, 0),
+            (10, 0, 0),
+        ]
