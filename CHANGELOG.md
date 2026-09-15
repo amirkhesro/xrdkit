@@ -74,6 +74,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[project]` filled in and a commented example instrument, structure and
   sample, and makes `data/raw`, `cifs` and `results`. It refuses to overwrite
   an existing `xrdkit.toml`.
+- In the project file, `ka2 = true` needs exactly two wavelengths and
+  `ka2 = false` exactly one, and an `instprm` that is given must exist.
+  `xrdkit.project` also gains `resolved_z` (a structure's z, or its library
+  entry's), `resolved_cell` (all six cell parameters from a library entry's
+  crystal system), `load_project_text` and `toml_string`.
+- `xrdkit add-sample FILE --structure KEY [--structure KEY ...] [--name KEY]
+  [--instrument KEY] [--stage TEXT] [--form powder|pellet] [--temperature-c N]
+  [--archimedes N] [--notes TEXT]`, which appends a `[samples.KEY]` table to
+  the project file found from the current folder, leaving the rest of the file
+  byte for byte, and prints it. FILE must lie inside the project folder and is
+  stored relative to it; the key defaults to the file's stem and the instrument
+  to the only one. The file with the table added is validated before anything
+  is written, and an existing key is refused.
+- `xrdkit check`, `plot` and `stack` take a sample key of the project file
+  wherever they take a scan path, and `xrdkit density` takes one as an optional
+  `SAMPLE` argument. An existing file is used exactly as before; any other
+  argument without a folder separator is looked up in `[samples]` of the
+  project found from the current folder. A sample is read at its instrument's
+  K alpha 1 wavelength (its K alpha 2 over K alpha 1 ratio flags the
+  satellites, and an instrument without K alpha 2 flags none), its outputs go
+  to `results/<command>/<key>` under the project root unless `--out` is given,
+  `check` heads its report with the key and composition and keeps it there,
+  `plot` labels the trace with them, and `density` takes the formula, z, cell
+  and Archimedes density of the sample and its first structure. Options given
+  on the command line win. `stack` takes keys and paths mixed. `xrdkit plot`
+  gains `--wavelength`.
 
 ### Changed
 

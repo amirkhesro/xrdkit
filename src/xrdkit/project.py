@@ -58,8 +58,12 @@ __all__ = [
     "StructureSpec",
     "find_project",
     "load_project",
+    "load_project_text",
     "project_template",
+    "resolved_cell",
+    "resolved_z",
     "results_dir",
+    "toml_string",
 ]
 
 PROJECT_FILE = "xrdkit.toml"
@@ -245,6 +249,13 @@ def _instrument(check: _Checker, key: str, value: object) -> Instrument:
     ka2 = table["ka2"]
     if not isinstance(ka2, bool):
         raise check.fail(f"{where}.ka2", f"must be true or false, not {ka2!r}")
+    if len(wavelength) != (2 if ka2 else 1):
+        raise check.fail(
+            where,
+            "ka2 = true needs two wavelengths, Kα1 and Kα2"
+            if ka2
+            else "ka2 = false needs one wavelength, Kα1",
+        )
     return Instrument(
         key=key,
         wavelength=tuple(
@@ -258,7 +269,7 @@ def _instrument(check: _Checker, key: str, value: object) -> Instrument:
             else None
         ),
         instprm=(
-            check.path(table["instprm"], f"{where}.instprm", exists=False)
+            check.path(table["instprm"], f"{where}.instprm", exists=True)
             if "instprm" in table
             else None
         ),
@@ -442,12 +453,25 @@ def load_project(path: str | os.PathLike | None = None) -> Project:
         raise FileNotFoundError(
             f"no project file {source}; run xrdkit init to make one"
         )
-    source = source.resolve()
-    with source.open("rb") as handle:
-        try:
-            data = tomllib.load(handle)
-        except tomllib.TOMLDecodeError as error:
-            raise ValueError(f"{source}: not valid TOML: {error}") from None
+    return load_project_text(source.read_text(encoding="utf-8"), source)
+
+
+def load_project_text(text: str, path: str | os.PathLike) -> Project:
+    """Check ``text`` as the project file at ``path`` would be checked, its
+    paths taken relative to the folder of ``path``, without reading or
+    writing that file; so that a change can be checked before it is made.
+
+    Raises
+    ------
+    ValueError
+        If the text is not valid TOML or does not check out, naming ``path``,
+        the table and the key.
+    """
+    source = Path(path).resolve()
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"{source}: not valid TOML: {error}") from None
 
     check = _Checker(source, source.parent)
     check.keys(data, "top level", ("project",), TOP_LEVEL[1:])
@@ -479,6 +503,63 @@ def load_project(path: str | os.PathLike | None = None) -> Project:
         structures=structures,
         samples=samples,
     )
+
+
+def resolved_z(spec: StructureSpec) -> int:
+    """The formula units per cell of ``spec``: its own ``z``, or else that of
+    its library entry.
+
+    Raises
+    ------
+    ValueError
+        If ``spec`` uses a CIF and gives no ``z``.
+    """
+    if spec.z is not None:
+        return spec.z
+    if spec.library is None:
+        raise ValueError(
+            f"structures.{spec.key}: uses a CIF and gives no z; add z to the structure"
+        )
+    return load_entry(spec.library).z
+
+
+# The cell parameters a crystal system leaves out, and their values: equal to
+# another parameter, or a fixed angle.
+_IMPLIED = {
+    "cubic": {"b": "a", "c": "a", "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+    "tetragonal": {"b": "a", "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+    "orthorhombic": {"alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+    "hexagonal": {"b": "a", "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+    "trigonal": {"b": "a", "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+    "monoclinic": {"alpha": 90.0, "gamma": 90.0},
+    "triclinic": {},
+}
+
+
+def resolved_cell(spec: StructureSpec) -> dict[str, float]:
+    """All six cell parameters of ``spec``, a, b, c in angstroms and alpha,
+    beta, gamma in degrees, with those its library entry's crystal system
+    leaves out filled in (b = a and the angles of a tetragonal cell, say).
+
+    Raises
+    ------
+    ValueError
+        If ``spec`` gives no cell, or uses a CIF and does not give all six,
+        since a CIF structure's crystal system is not known here.
+    """
+    if spec.cell is None:
+        raise ValueError(f"structures.{spec.key}: gives no cell")
+    cell = dict(spec.cell)
+    if spec.library is not None:
+        for name, value in _IMPLIED[load_entry(spec.library).crystal_system].items():
+            cell[name] = cell[value] if isinstance(value, str) else value
+    missing = [name for name in CELL_PARAMETERS if name not in cell]
+    if missing:
+        raise ValueError(
+            f"structures.{spec.key}: uses a CIF, so its cell needs all of "
+            f"{', '.join(CELL_PARAMETERS)}; it lacks {', '.join(missing)}"
+        )
+    return {name: cell[name] for name in CELL_PARAMETERS}
 
 
 def results_dir(project: Project, command: str, sample: Sample | str) -> Path:
@@ -541,8 +622,13 @@ version = 1
 """
 
 
+def toml_string(value: str) -> str:
+    """``value`` as a TOML basic string, quoted and escaped."""
+    return json.dumps(value, ensure_ascii=False)
+
+
 def project_template(name: str) -> str:
     """The text of a new project file named ``name``, as ``xrdkit init``
     writes it: ``[project]`` filled in and a commented example of each other
     table."""
-    return TEMPLATE.format(name=json.dumps(name, ensure_ascii=False))
+    return TEMPLATE.format(name=toml_string(name))

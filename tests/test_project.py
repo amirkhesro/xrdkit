@@ -1,6 +1,7 @@
 """Tests for xrdkit.project and xrdkit init."""
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,9 @@ from xrdkit.project import (
     StructureSpec,
     find_project,
     load_project,
+    load_project_text,
+    resolved_cell,
+    resolved_z,
     results_dir,
 )
 
@@ -64,7 +68,12 @@ structures = ["ttb_x010"]
 form = "pellet"
 """
 
-PLACEHOLDERS = ("data/raw/10c.xrdml", "data/raw/10s.xrdml", "cifs/2100720.cif")
+PLACEHOLDERS = (
+    "data/raw/10c.xrdml",
+    "data/raw/10s.xrdml",
+    "cifs/2100720.cif",
+    "data/standards/aeris.instprm",
+)
 
 
 @pytest.fixture
@@ -406,6 +415,26 @@ BROKEN = [
         "[-1.540598]",
         r"instruments\.mono\.wavelength\[0\]: must be positive",
     ),
+    # ka2 true needs two wavelengths, false one.
+    (
+        "ka2 with one wavelength",
+        "[1.540598, 1.544426]",
+        "[1.540598]",
+        r"instruments\.aeris: ka2 = true needs two wavelengths",
+    ),
+    (
+        "no ka2 with two wavelengths",
+        "wavelength = [1.540598]\nka2 = false",
+        "wavelength = [1.540598, 1.544426]\nka2 = false",
+        r"instruments\.mono: ka2 = false needs one wavelength",
+    ),
+    # instprm exists when given.
+    (
+        "missing instprm",
+        "data/standards/aeris.instprm",
+        "data/standards/missing.instprm",
+        r"instruments\.aeris\.instprm: no such file",
+    ),
     # Sample and structure keys name folders.
     (
         "sample key with a space",
@@ -433,6 +462,46 @@ def test_validation(project_dir: Path, old: str, new: str, message: str) -> None
     with pytest.raises(ValueError, match=message) as raised:
         load_project(path)
     assert str(raised.value).startswith(str(path))
+
+
+# load_project_text, resolved_z and resolved_cell
+
+
+def test_load_project_text_checks_text_as_the_file_at_path(project_dir: Path) -> None:
+    path = project_dir / PROJECT_FILE
+    text = path.read_text(encoding="utf-8")
+
+    assert load_project_text(text, path) == load_project(path)
+    with pytest.raises(ValueError, match=r"samples\.x0\.10\.pellet\.form"):
+        load_project_text(text.replace('"pellet"', '"film"'), path)
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_resolved_z(project_dir: Path) -> None:
+    project = load_project(project_dir)
+    ttb = project.structures["ttb_x010"]
+    cod = project.structures["cod-2100720"]
+
+    assert resolved_z(ttb) == 5
+    assert resolved_z(replace(ttb, z=None)) == 5
+    assert resolved_z(replace(cod, z=10)) == 10
+    with pytest.raises(ValueError, match=r"structures\.cod-2100720: uses a CIF"):
+        resolved_z(cod)
+
+
+def test_resolved_cell(project_dir: Path) -> None:
+    project = load_project(project_dir)
+
+    assert resolved_cell(project.structures["ttb_x010"]) == {
+        "a": 12.45,
+        "b": 12.45,
+        "c": 3.94,
+        "alpha": 90.0,
+        "beta": 90.0,
+        "gamma": 90.0,
+    }
+    with pytest.raises(ValueError, match="uses a CIF, so its cell needs all of"):
+        resolved_cell(project.structures["cod-2100720"])
 
 
 # results_dir
@@ -506,6 +575,8 @@ def test_init_examples_load_once_uncommented(tmp_path: Path, monkeypatch) -> Non
     uncommented = re.sub(r"(?m)^# (\[|\w+ = )", r"\1", text)
     path.write_text(uncommented, encoding="utf-8")
     (tmp_path / "data/raw/10c.xrdml").write_bytes(b"")
+    (tmp_path / "data/standards").mkdir()
+    (tmp_path / "data/standards/aeris.instprm").write_bytes(b"")
 
     project = load_project(path)
 
