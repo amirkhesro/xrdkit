@@ -98,6 +98,7 @@ from xrdkit.plotting import (
     plot_stacked,
     save_figure,
 )
+from xrdkit.quality import ScanQuality, assess_scan, format_report
 from xrdkit.sizestrain import (
     ComponentSizeStrain,
     ResolutionLimit,
@@ -145,6 +146,7 @@ __all__ = [
     "ProfileFit",
     "Reflection",
     "ResolutionLimit",
+    "ScanQuality",
     "SimulatedReflection",
     "TetragonalCell",
     "WilliamsonHall",
@@ -154,6 +156,7 @@ __all__ = [
     "accepted_stages",
     "annotate_hkl",
     "apply_style",
+    "assess_scan",
     "bond_lengths",
     "build_refine_job",
     "cell_contents",
@@ -174,6 +177,7 @@ __all__ = [
     "fit_caglioti",
     "fit_profile",
     "flag_kalpha2",
+    "format_report",
     "formula_mass",
     "generate_reflections",
     "gsas2_fwhm",

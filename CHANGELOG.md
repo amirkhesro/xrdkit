@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plotting with hkl indices, lattice parameters and theoretical density by Le
   Bail, and Rietveld refinement. Every snippet in it was executed against real
   scans before it was written down.
+- The `xrdkit` command, with its first subcommand, `xrdkit check SCAN
+  [--json]`. It reads a `.xrdml` scan and prints the numbers `check_scan.py`
+  prints in the user guide, followed by a verdict for each workflow (plotting,
+  phase identification, Le Bail, Rietveld). A workflow the scan is not good
+  enough for gets a list of the criteria it failed, each with its measured
+  value and threshold. A missing or unreadable file exits with status 1.
+- `xrdkit.quality`: `assess_scan` and `format_report`, which do the work behind
+  `xrdkit check`, and `CRITERIA`, the thresholds of the user guide's Section 2
+  table held in one place.
 
 ### Changed
 

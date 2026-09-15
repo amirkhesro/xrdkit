@@ -43,6 +43,9 @@ Repository = "https://github.com/amirkhesro/xrdkit"
 Issues = "https://github.com/amirkhesro/xrdkit/issues"
 Changelog = "https://github.com/amirkhesro/xrdkit/blob/main/CHANGELOG.md"
 
+[project.scripts]
+xrdkit = "xrdkit.cli:main"
+
 [project.optional-dependencies]
 phases = [
     "pymatgen>=2026.5.4",
