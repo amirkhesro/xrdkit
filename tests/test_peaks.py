@@ -13,7 +13,11 @@ from xrdkit import (
     flag_kalpha2,
     peaks_to_csv,
 )
-from xrdkit.peaks import KALPHA2_RATIO
+from xrdkit.peaks import (
+    KALPHA2_INTENSITY_BAND,
+    KALPHA2_POSITION_TOLERANCE,
+    KALPHA2_RATIO,
+)
 
 WAVELENGTH = 1.5406
 
@@ -310,9 +314,129 @@ def test_flag_kalpha2_rejects_a_bad_intensity_ratio() -> None:
 
 def test_a_tight_tolerance_flags_nothing() -> None:
     peaks = find_peaks(make_doublet_scan(), flag_satellites=False)
-    flag_kalpha2(peaks, tolerance=0.0001)
+    # A thousandth of the 0.08 and 0.12 degree FWHM, about the old 0.0001 degrees.
+    flag_kalpha2(peaks, position_tolerance=0.001)
 
     assert all(peak.kalpha2_of is None for peak in peaks)
+
+
+# A pair at 70 degrees, where the K alpha 2 split is about 0.20 degrees. The
+# lines are narrow and finely sampled, so the found positions are good to a few
+# thousandths of a degree and the half FWHM position window is 0.02 degrees.
+PAIR_PARENT = 70.0
+PAIR_HEIGHT = 6000.0
+PAIR_FWHM = 0.04
+PAIR_STEP = 0.002
+PAIR_BACKGROUND = 50.0
+
+
+def make_pair_scan(fraction: float, offset: float = 0.0) -> XRDScan:
+    """A peak at 70 degrees and a second peak ``offset`` degrees above its
+    calculated K alpha 2 position, ``fraction`` of its height."""
+    two_theta = np.arange(69.0, 71.0 + PAIR_STEP / 2, PAIR_STEP)
+    intensity = np.full(two_theta.size, PAIR_BACKGROUND)
+    sigma = PAIR_FWHM * FWHM_TO_SIGMA
+    second = satellite_position(PAIR_PARENT) + offset
+    for position, height in (
+        (PAIR_PARENT, PAIR_HEIGHT),
+        (second, PAIR_HEIGHT * fraction),
+    ):
+        intensity += height * np.exp(-((two_theta - position) ** 2) / (2 * sigma**2))
+
+    rng = np.random.default_rng(12345)
+    intensity += rng.normal(0.0, 3.0, two_theta.size)
+
+    return XRDScan(
+        two_theta=two_theta,
+        intensity=intensity,
+        wavelength=WAVELENGTH,
+        start_angle=float(two_theta[0]),
+        end_angle=float(two_theta[-1]),
+        step_size=PAIR_STEP,
+        time_per_step=1.0,
+        sample_id="pair",
+        source_path="synthetic://pair",
+    )
+
+
+def test_a_true_doublet_at_half_intensity_is_flagged() -> None:
+    peaks = find_peaks(make_pair_scan(0.5))
+
+    assert len(peaks) == 2
+    ratio = peaks[1].intensity / peaks[0].intensity
+    # (3000 + 50) / (6000 + 50), inside the band.
+    assert ratio == pytest.approx(0.504, abs=0.005)
+    assert KALPHA2_INTENSITY_BAND[0] <= ratio <= KALPHA2_INTENSITY_BAND[1]
+    gap = peaks[1].two_theta - satellite_position(peaks[0].two_theta)
+    assert abs(gap) <= 0.002
+    assert abs(gap) <= KALPHA2_POSITION_TOLERANCE * peaks[0].fwhm
+    assert [peak.kalpha2_of for peak in peaks] == [None, 0]
+
+
+def test_two_reflections_of_comparable_intensity_are_not_flagged() -> None:
+    # The 4 2 2 beside 5 5 1 case: the right spacing, but 0.85 of the height.
+    peaks = find_peaks(make_pair_scan(0.85))
+
+    assert len(peaks) == 2
+    # (5100 + 50) / (6000 + 50), above the 0.8 ceiling.
+    assert peaks[1].intensity / peaks[0].intensity == pytest.approx(0.851, abs=0.005)
+    assert abs(peaks[1].two_theta - satellite_position(peaks[0].two_theta)) <= 0.002
+    assert [peak.kalpha2_of for peak in peaks] == [None, None]
+
+
+def test_the_right_ratio_outside_the_position_window_is_not_flagged() -> None:
+    # 0.026 degrees high, against a window of half the 0.04 degree FWHM.
+    peaks = find_peaks(make_pair_scan(0.5, offset=0.026))
+
+    assert len(peaks) == 2
+    assert peaks[0].fwhm == pytest.approx(PAIR_FWHM, rel=0.05)
+    assert peaks[1].intensity / peaks[0].intensity == pytest.approx(0.504, abs=0.005)
+    gap = peaks[1].two_theta - satellite_position(peaks[0].two_theta)
+    assert gap == pytest.approx(0.026, abs=0.002)
+    assert gap > KALPHA2_POSITION_TOLERANCE * peaks[0].fwhm
+    assert [peak.kalpha2_of for peak in peaks] == [None, None]
+
+
+def test_an_instrument_without_kalpha2_flags_nothing() -> None:
+    peaks = find_peaks(make_pair_scan(0.5))
+    assert [peak.kalpha2_of for peak in peaks] == [None, 0]
+
+    flag_kalpha2(peaks, wavelength_ratio=None)
+
+    assert len(peaks) == 2
+    assert [peak.kalpha2_of for peak in peaks] == [None, None]
+
+
+def make_peak(two_theta: float, intensity: float, fwhm: float) -> Peak:
+    return Peak(
+        two_theta=two_theta,
+        intensity=intensity,
+        prominence=intensity,
+        fwhm=fwhm,
+        d_spacing=WAVELENGTH / (2.0 * np.sin(np.radians(two_theta / 2.0))),
+        relative_intensity=100.0,
+    )
+
+
+def test_the_parent_is_the_nearest_peak_below_in_the_window() -> None:
+    # The third peak sits exactly on the first's satellite position and 0.030
+    # degrees below the second's, inside the second's 0.10 degree window.
+    candidate = satellite_position(70.0)
+    peaks = [
+        make_peak(70.0, 6000.0, 0.10),
+        make_peak(70.03, 6000.0, 0.20),
+        make_peak(candidate, 3000.0, 0.10),
+    ]
+    assert satellite_position(70.03) - candidate == pytest.approx(0.030, abs=0.001)
+
+    flag_kalpha2(peaks)
+    assert [peak.kalpha2_of for peak in peaks] == [None, None, 1]
+
+    # When that nearest parent fails the intensity band, at 3000 / 3200, the
+    # peak is not handed on to the farther one.
+    peaks[1].intensity = 3200.0
+    flag_kalpha2(peaks)
+    assert [peak.kalpha2_of for peak in peaks] == [None, None, None]
 
 
 def test_exclude_kalpha2_removes_exactly_the_satellites() -> None:

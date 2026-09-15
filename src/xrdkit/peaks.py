@@ -36,14 +36,14 @@ KALPHA1_WAVELENGTH = 1.54056
 KALPHA2_WAVELENGTH = 1.54439
 KALPHA2_RATIO = KALPHA2_WAVELENGTH / KALPHA1_WAVELENGTH
 
-# Largest gap between a peak and the satellite position predicted for it, in
-# degrees.
-DEFAULT_KALPHA2_TOLERANCE = 0.03
+# Largest gap between a peak and the satellite position predicted for its
+# parent, as a fraction of the parent's FWHM.
+KALPHA2_POSITION_TOLERANCE = 0.5
 
-# A K alpha 2 satellite carries about half the intensity of its parent, but a
-# satellite resolved on the tail of its parent measures well above that, so the
-# ceiling is set high enough to admit the partly overlapped ones.
-DEFAULT_KALPHA2_INTENSITY_RATIO = (0.25, 0.90)
+# Allowed range of a satellite's intensity over its parent's. The theoretical
+# ratio is 0.5; a genuine reflection that happens to sit at the K alpha 2
+# spacing above a neighbour of comparable height falls above the ceiling.
+KALPHA2_INTENSITY_BAND = (0.2, 0.8)
 
 CSV_COLUMNS = (
     "two_theta",
@@ -228,36 +228,41 @@ def _satellite_position(two_theta: float, wavelength_ratio: float) -> float:
 
 def flag_kalpha2(
     peaks: list[Peak],
-    tolerance: float = DEFAULT_KALPHA2_TOLERANCE,
-    intensity_ratio: tuple[float, float] = DEFAULT_KALPHA2_INTENSITY_RATIO,
-    wavelength_ratio: float = KALPHA2_RATIO,
+    position_tolerance: float = KALPHA2_POSITION_TOLERANCE,
+    intensity_ratio: tuple[float, float] = KALPHA2_INTENSITY_BAND,
+    wavelength_ratio: float | None = KALPHA2_RATIO,
 ) -> list[Peak]:
     """Flag the peaks that look like K alpha 2 satellites, in place.
 
     A satellite sits at the position the parent's d spacing would give at the
     longer K alpha 2 wavelength, and carries roughly half the parent's
-    intensity. Every stronger peak is tested as a possible parent and the
-    closest one that satisfies both conditions wins, so a peak that happens to
-    fall near two predicted positions is attributed to the better match.
+    intensity. A peak is flagged only when both hold. Its parent is the nearest
+    peak below it in 2theta whose predicted satellite position lies within
+    ``position_tolerance`` times that peak's FWHM of it; the peak is then
+    flagged only if its intensity over that parent's lies in
+    ``intensity_ratio``. A peak whose nearest parent fails the intensity test
+    is not handed on to a farther one. Position alone is not enough: a genuine
+    reflection can sit at the K alpha 2 spacing above a neighbour, and is told
+    apart by being of comparable height.
+
+    Intensities are the peak heights in counts, ``Peak.intensity``.
 
     Only resolved satellites can be caught this way. Below about 50 degrees the
     pair is not separated enough for the peak finder to report two peaks, so
-    there is nothing to flag. A satellite that is only just resolved, still
-    sitting on the tail of its parent, measures high because its height is taken
-    above a baseline the parent has raised, which is why the default ceiling on
-    the intensity ratio is well above the half that clean separation would give.
+    there is nothing to flag.
 
     Parameters
     ----------
     peaks
         Peaks to flag, as returned by :func:`find_peaks`. Modified in place.
-    tolerance
-        Largest allowed gap between a peak and a predicted satellite position,
-        in degrees.
+    position_tolerance
+        Largest allowed gap between a peak and its parent's predicted
+        satellite position, as a fraction of the parent's FWHM.
     intensity_ratio
         Allowed ``(low, high)`` range of the peak's intensity over its parent's.
     wavelength_ratio
-        K alpha 2 over K alpha 1, 1.002486 for copper.
+        K alpha 2 over K alpha 1, 1.002486 for copper, or None for radiation
+        without K alpha 2, which flags nothing.
 
     Returns
     -------
@@ -275,25 +280,37 @@ def flag_kalpha2(
             f"Need 0 < low < high for intensity_ratio, got {intensity_ratio}"
         )
 
+    if wavelength_ratio is None:
+        for peak in peaks:
+            peak.kalpha2_of = None
+        return peaks
+
     # Predicting once per peak keeps this a single pass over the pairs.
     predicted = [
         _satellite_position(peak.two_theta, wavelength_ratio) for peak in peaks
     ]
 
-    for index, peak in enumerate(peaks):
-        best_parent = None
-        best_gap = float("inf")
-        for parent_index, parent in enumerate(peaks):
-            if parent_index == index or parent.intensity <= peak.intensity:
+    for peak in peaks:
+        parent_index = None
+        for index, other in enumerate(peaks):
+            if other.two_theta >= peak.two_theta:
                 continue
-            if not low <= peak.intensity / parent.intensity <= high:
+            # A nan prediction, beyond the reach of K alpha 2, fails this.
+            if not abs(peak.two_theta - predicted[index]) <= (
+                position_tolerance * other.fwhm
+            ):
                 continue
-            gap = abs(peak.two_theta - predicted[parent_index])
-            # A tie keeps the earlier parent, which is the lower angle one.
-            if gap <= tolerance and gap < best_gap:
-                best_parent = parent_index
-                best_gap = gap
-        peak.kalpha2_of = best_parent
+            # A tie in 2theta keeps the earlier peak.
+            if parent_index is None or other.two_theta > peaks[parent_index].two_theta:
+                parent_index = index
+        peak.kalpha2_of = None
+        if parent_index is not None:
+            parent = peaks[parent_index]
+            if (
+                parent.intensity > 0.0
+                and low <= peak.intensity / parent.intensity <= high
+            ):
+                peak.kalpha2_of = parent_index
 
     return peaks
 
