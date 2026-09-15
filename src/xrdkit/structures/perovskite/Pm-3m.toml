@@ -1,0 +1,46 @@
+# The ideal cubic perovskite ABO3 in Pm-3m, with the origin on A.
+#
+# Prototype: SrTiO3, Namade et al., Materials Research Bulletin 202 (2026)
+# 114197, doi:10.1016/j.materresbull.2026.114197, COD 1577245. In it Sr is at
+# (0, 0, 0), Ti at (1/2, 1/2, 1/2) and O at (0, 1/2, 1/2).
+#
+# The CIF states Z = 2, but the cell holds one SrTiO3: its sites add up to
+# Sr1 Ti1 O3, and the CIF's own density, 5.115 g/cm3, is the Z = 1 value.
+# Z is therefore 1 here.
+#
+# Symmetry fixes every site, so no site has a free coordinate. The group is
+# not polar, so there is no origin to hold.
+
+[entry]
+name = "perovskite/Pm-3m"
+family = "perovskite"
+crystal_system = "cubic"
+space_group = "Pm-3m"
+setting = ""
+cell_parameters = ["a"]
+z = 1
+reference = "SrTiO3, COD 1577245"
+
+# A is on 1a, (0, 0, 0).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "1a"
+free = []
+uiso_group = "A"
+
+# B is on 1b, (1/2, 1/2, 1/2).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "1b"
+free = []
+uiso_group = "B"
+
+# O is on 3c, (0, 1/2, 1/2).
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "3c"
+free = []
+uiso_group = "O"

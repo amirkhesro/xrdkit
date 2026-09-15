@@ -1,0 +1,95 @@
+# Tetragonal tungsten bronze in P4bm, taken from Sr0.48Ba0.52Nb2O6:
+# Podlozhenov et al., Acta Cryst. B 62 (2006) 960-965,
+# doi:10.1107/S0108768106038869, COD 2100720.
+#
+# A cell has six A positions (A1 on 2a, A2 on 4c), ten B positions (B1 on 2b,
+# B2 on 8d) and thirty O. At Z = 5 formula units of AB2O6, the A positions hold
+# five cations, so one sixth of them are empty.
+#
+# CIF labels for each site: A1 is Sr1; A2 is Ba2 and Sr2, which share one
+# position; B1 is Nb1; B2 is Nb2; O1 to O5 keep their CIF labels.
+#
+# P4bm is polar along c, so no site symmetry fixes the origin along z, and one
+# site's z has to be held. B1 holds it, as Nb1 does in XRD-Analysis's
+# config/samples.toml.
+
+[entry]
+name = "ttb/P4bm"
+family = "tetragonal tungsten bronze"
+crystal_system = "tetragonal"
+space_group = "P4bm"
+setting = ""
+cell_parameters = ["a", "c"]
+z = 5
+polar_axis = "c"
+origin_site = "B1"
+reference = "COD 2100720"
+
+# A1 is on 2a, (0, 0, z).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "2a"
+free = ["z"]
+uiso_group = "A"
+
+# A2 is on 4c, (x, x+1/2, z). y follows x.
+[[sites]]
+label = "A2"
+kind = "A"
+wyckoff = "4c"
+free = ["x", "z"]
+uiso_group = "A"
+
+# B1 is on 2b, (0, 1/2, z). The CIF writes it as (1/2, 0, z).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "2b"
+free = ["z"]
+uiso_group = "B"
+
+# B2 is on 8d, the general position.
+[[sites]]
+label = "B2"
+kind = "B"
+wyckoff = "8d"
+free = ["x", "y", "z"]
+uiso_group = "B"
+
+# O1 is on 4c, (x, x+1/2, z). y follows x.
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "4c"
+free = ["x", "z"]
+uiso_group = "O"
+
+[[sites]]
+label = "O2"
+kind = "O"
+wyckoff = "8d"
+free = ["x", "y", "z"]
+uiso_group = "O"
+
+[[sites]]
+label = "O3"
+kind = "O"
+wyckoff = "8d"
+free = ["x", "y", "z"]
+uiso_group = "O"
+
+# O4 is on 2b, (0, 1/2, z). The CIF writes it as (1/2, 0, z).
+[[sites]]
+label = "O4"
+kind = "O"
+wyckoff = "2b"
+free = ["z"]
+uiso_group = "O"
+
+[[sites]]
+label = "O5"
+kind = "O"
+wyckoff = "8d"
+free = ["x", "y", "z"]
+uiso_group = "O"

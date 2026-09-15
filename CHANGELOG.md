@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ATOMIC_MASSES` covers every element from H to U: IUPAC 2021 conventional
   standard atomic weights, and for the elements with no stable isotope the
   mass number of the longest lived one.
+- `xrdkit.library`, a structure library shipped as package data, one TOML file
+  per entry under `xrdkit/structures/<family>/<name>.toml`. `list_entries()`
+  names the entries, and `load_entry(name)` reads and validates one into a
+  `StructureEntry` of `Site`s. It holds two entries so far: `ttb/P4bm`, the
+  tetragonal tungsten bronze from COD 2100720, and `perovskite/Pm-3m`, the ideal
+  cubic perovskite.
 
 ### Changed
 

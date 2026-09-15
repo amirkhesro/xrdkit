@@ -72,6 +72,7 @@ from xrdkit.indexing import (
 )
 from xrdkit.io import XRDScan, read_xrdml
 from xrdkit.lattice import LatticeFit, lattice_fit_to_dict, refine_lattice
+from xrdkit.library import Site, StructureEntry, list_entries, load_entry
 from xrdkit.peaks import (
     Peak,
     exclude_kalpha2,
@@ -150,6 +151,8 @@ __all__ = [
     "ResolutionLimit",
     "ScanQuality",
     "SimulatedReflection",
+    "Site",
+    "StructureEntry",
     "TetragonalCell",
     "WilliamsonHall",
     "XRDScan",
@@ -192,7 +195,9 @@ __all__ = [
     "interatomic_distances",
     "kalpha2_position",
     "lattice_fit_to_dict",
+    "list_entries",
     "load_config",
+    "load_entry",
     "log_tail",
     "mark_peaks",
     "match_candidate",
