@@ -165,6 +165,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Breaking: `flag_kalpha2` flags a peak only when it lies within half its
+  nearest lower parent's FWHM (`KALPHA2_POSITION_TOLERANCE`) of that parent's
+  K alpha 2 position and its height above the background over the parent's
+  lies in 0.2 to 0.8 (`KALPHA2_INTENSITY_BAND`). `tolerance` in degrees is
+  replaced by `position_tolerance`, a fraction of the FWHM,
+  `wavelength_ratio=None` flags nothing, and `Peak` gains `background`, the
+  lowest intensity within `BACKGROUND_HALF_WIDTH` of the peak.
+- Breaking: `xrdkit lattice` leaves peaks flagged as K alpha 2 satellites out
+  of the indexing and refinement, where they used to enter both at their raw
+  found positions. A flagged peak that the refined cell puts within the
+  indexing tolerance of a reflection is recovered: refitted, and the indexing
+  and refinement run once more with it. `--no-satellites` now skips that
+  recovery, and no longer drops the flagged peaks from the peaks file and the
+  found count. The report prints the satellites excluded, the peaks recovered
+  and the indexed fraction; the peaks file gains `recovered` and the results
+  row `n_satellites` and `n_peaks_recovered`, so results files written before
+  must be regenerated rather than appended to. `n_peaks_indexed` now counts
+  only the peaks that took part.
 - Breaking: `cell_volume(cell, esd=None)` takes a `Cell` and a mapping of free
   parameter name to esd, in place of a tetragonal cell and `esd_a` and `esd_c`.
 - Breaking: `CellFit.c_fitted` is replaced by `CellFit.held`, the names of the

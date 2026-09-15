@@ -23,6 +23,7 @@ from xrdkit import (
     read_xrdml,
 )
 from xrdkit.cli import HKL_HEADROOM, main
+from xrdkit.indexing import DEFAULT_TOLERANCE
 from xrdkit.project import PROJECT_FILE, Sample, load_project
 from xrdkit.quality import WORKFLOWS
 
@@ -978,6 +979,7 @@ PEAK_COLUMNS = [
     "esd_fitted_two_theta",
     "fit_rejected",
     "kalpha2_satellite",
+    "recovered",
     "intensity",
     "fwhm",
     "h",
@@ -1026,6 +1028,8 @@ RESULT_COLUMNS = [
     "n_peaks_found",
     "n_peaks_refitted",
     "n_fits_rejected",
+    "n_satellites",
+    "n_peaks_recovered",
     "n_peaks_indexed",
     "n_peaks_refined",
     "rms_two_theta_deg",
@@ -1052,11 +1056,13 @@ def _write_doublet_xrdml(
     zero: float = 0.0,
     displacement: float = 0.0,
     radius: float = 240.0,
+    extra: tuple[tuple[float, float], ...] = (),
 ) -> tuple[Path, int]:
     """A 10 to 80 degree scan of ``cell`` with every lone reflection drawn as
     a K alpha 1 and K alpha 2 doublet, moved by ``zero`` and by a specimen
-    ``displacement`` in mm on a goniometer of ``radius``. Returns the path and
-    the number of reflections drawn."""
+    ``displacement`` in mm on a goniometer of ``radius``, and a doublet for
+    each ``(position, height)`` in ``extra``. Returns the path and the number
+    of lone reflections drawn."""
     reflections = generate_reflections(
         cell, LATTICE_WAVELENGTH, 79.0, space_group=space_group
     )
@@ -1073,7 +1079,7 @@ def _write_doublet_xrdml(
     heights = np.random.default_rng(3).uniform(2000.0, 8000.0, len(drawn))
     sigma = 0.10 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     ratio = 1.544426 / LATTICE_WAVELENGTH
-    for position, height in zip(drawn, heights):
+    for position, height in [*zip(drawn, heights), *extra]:
         theta = np.radians(position / 2.0)
         centre = (
             position + zero + np.degrees(-2.0 * displacement * np.cos(theta) / radius)
@@ -1116,7 +1122,8 @@ def test_lattice_refines_a_tetragonal_scan_and_writes_both_files(
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2:] == [str(peaks_path), str(results_path)]
     assert lines[0].startswith("peaks   ")
-    assert f"{drawn} refitted, 0 fits rejected, {drawn} indexed" in lines[0]
+    assert f"{drawn} refitted, 0 fits rejected, " in lines[0]
+    assert f"{drawn} of {drawn} indexed (100.0 per cent)" in lines[0]
     assert lines[1] == "coarse window to 35.00 degrees"
     assert lines[2].startswith("tetragonal cell a = 12.5")
     assert lines[3].startswith("V = ")
@@ -1287,3 +1294,182 @@ def test_lattice_missing_file(tmp_path, capsys) -> None:
     assert main(["lattice", str(path), "--cell", "3.905"]) == 1
 
     assert capsys.readouterr().err == f"xrdkit lattice: no such file: {path}\n"
+
+
+# Satellites excluded from the refinement, and recovered when a reflection
+# needs them.
+
+
+def _assert_counts_add_up(row: dict[str, str], peaks: list[dict[str, str]]) -> None:
+    """The counts of a results row obey the stated relation and agree with the
+    peaks file."""
+    found, refitted, rejected, satellites, recovered, indexed, used = (
+        int(row[name])
+        for name in (
+            "n_peaks_found",
+            "n_peaks_refitted",
+            "n_fits_rejected",
+            "n_satellites",
+            "n_peaks_recovered",
+            "n_peaks_indexed",
+            "n_peaks_refined",
+        )
+    )
+    assert found == refitted + rejected + satellites
+    assert recovered <= refitted + rejected
+    assert used <= indexed <= refitted + rejected
+    assert found == len(peaks)
+    assert refitted == sum(peak["fit_rejected"] == "False" for peak in peaks)
+    assert rejected == sum(peak["fit_rejected"] == "True" for peak in peaks)
+    assert satellites == sum(peak["kalpha2_satellite"] == "True" for peak in peaks)
+    assert recovered == sum(peak["recovered"] == "True" for peak in peaks)
+    assert indexed == sum(peak["h"] != "" for peak in peaks)
+
+
+def _lattice_run(argv: list[str], out: Path) -> tuple[dict, list[dict]]:
+    """Run ``argv`` into ``out`` and return the results row and the peaks rows."""
+    assert main([*argv, "--out", str(out)]) == 0
+    folder = out / "results" / "lattice"
+    (row,) = _rows(folder / "lattice.csv")
+    (peaks_file,) = folder.glob("peaks_*.csv")
+    return row, _rows(peaks_file)
+
+
+# 2 2 2 of this cell falls exactly on the K alpha 2 position of 3 1 0, and
+# every other reflection lies at least 0.6 degrees from both; the satellites of
+# the lone reflections lie at least 0.15 degrees from any reflection.
+COINCIDENT_CELL = Cell.tetragonal(4.05, 5.65762)
+
+
+def _coincident_argv(tmp_path: Path) -> tuple[list[str], float]:
+    """A lattice run on a scan with 3 1 0 at 8000 counts and 2 2 2 at 1600 on
+    its K alpha 2 line, which together give a peak of 0.7 of 3 1 0's height at
+    the satellite position; returns the argv and the 2 2 2 position."""
+    positions = {
+        reflection.hkl: reflection.two_theta
+        for reflection in generate_reflections(
+            COINCIDENT_CELL, LATTICE_WAVELENGTH, 79.0
+        )
+    }
+    coincident = positions[(2, 2, 2)]
+    scan, _ = _write_doublet_xrdml(
+        tmp_path / "coincident.xrdml",
+        COINCIDENT_CELL,
+        None,
+        extra=((positions[(3, 1, 0)], 8000.0), (coincident, 1600.0)),
+    )
+    return ["lattice", str(scan), "--cell", "4.04", "5.67"], coincident
+
+
+def test_lattice_excludes_a_satellite_that_matches_no_reflection(
+    tmp_path, capsys
+) -> None:
+    argv, drawn = _ttb_lattice_argv(tmp_path)
+    argv = argv[: argv.index("--out")]
+
+    row, peaks = _lattice_run(argv, tmp_path / "run")
+    line = capsys.readouterr().out.splitlines()[0]
+
+    satellites = [peak for peak in peaks if peak["kalpha2_satellite"] == "True"]
+    assert satellites
+    for peak in satellites:
+        assert peak["recovered"] == "False"
+        assert peak["fit_rejected"] == "" and peak["fitted_two_theta"] == ""
+        assert peak["h"] == "" and peak["difference"] == ""
+    assert int(row["n_satellites"]) == len(satellites)
+    assert int(row["n_peaks_recovered"]) == 0
+    # Only the drawn K alpha 1 lines are indexed and refined.
+    assert int(row["n_peaks_indexed"]) == drawn
+    assert int(row["n_peaks_refined"]) == drawn
+    assert f"{len(satellites)} satellites excluded, 0 recovered; " in line
+    _assert_counts_add_up(row, peaks)
+
+
+def test_lattice_recovers_a_satellite_that_matches_a_reflection(
+    tmp_path, capsys
+) -> None:
+    argv, coincident = _coincident_argv(tmp_path)
+
+    row, peaks = _lattice_run(argv, tmp_path / "run")
+    line = capsys.readouterr().out.splitlines()[0]
+
+    (recovered,) = [peak for peak in peaks if peak["recovered"] == "True"]
+    assert float(recovered["found_two_theta"]) == pytest.approx(coincident, abs=0.01)
+    assert recovered["kalpha2_satellite"] == "False"
+    assert recovered["fit_rejected"] == "False"
+    fitted = float(recovered["fitted_two_theta"])
+    assert fitted != float(recovered["found_two_theta"])
+    # Most of this peak is 3 1 0's K alpha 2 line, which a doublet fitted to
+    # 2 2 2 alone does not model, so the refit is pulled towards 2 2 2's own
+    # weaker satellite; it stays within the indexing tolerance.
+    assert fitted == pytest.approx(coincident, abs=DEFAULT_TOLERANCE)
+    assert (recovered["h"], recovered["k"], recovered["l"]) == ("2", "2", "2")
+    assert abs(float(recovered["difference"])) <= DEFAULT_TOLERANCE
+    # Every other flagged peak is a satellite of a lone reflection, and stays
+    # out.
+    others = [peak for peak in peaks if peak["kalpha2_satellite"] == "True"]
+    assert others
+    assert all(peak["h"] == "" for peak in others)
+    assert int(row["n_peaks_recovered"]) == 1
+    assert int(row["n_satellites"]) == len(others)
+    assert f"{len(others)} satellites excluded, 1 recovered; " in line
+    _assert_counts_add_up(row, peaks)
+
+
+def test_lattice_indexed_fraction_is_of_the_peaks_taking_part(tmp_path, capsys) -> None:
+    argv, _ = _coincident_argv(tmp_path)
+
+    row, _ = _lattice_run(argv, tmp_path / "run")
+    line = capsys.readouterr().out.splitlines()[0]
+
+    indexed = int(row["n_peaks_indexed"])
+    taking_part = int(row["n_peaks_refitted"]) + int(row["n_fits_rejected"])
+    percent = 100.0 * indexed / taking_part
+    assert f"{indexed} of {taking_part} indexed ({percent:.1f} per cent)" in line
+
+
+def test_no_satellites_leaves_an_unmatched_satellite_as_it_was(
+    tmp_path, capsys
+) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+    argv = argv[: argv.index("--out")]
+
+    row, peaks = _lattice_run(argv, tmp_path / "default")
+    bare_row, bare_peaks = _lattice_run([*argv, "--no-satellites"], tmp_path / "bare")
+
+    for name in (
+        "n_peaks_found",
+        "n_peaks_refitted",
+        "n_fits_rejected",
+        "n_satellites",
+        "n_peaks_recovered",
+        "n_peaks_indexed",
+        "n_peaks_refined",
+        "a_angstrom",
+        "c_angstrom",
+    ):
+        assert bare_row[name] == row[name], name
+    assert bare_peaks == peaks
+    _assert_counts_add_up(bare_row, bare_peaks)
+
+
+def test_no_satellites_excludes_a_satellite_that_matches_a_reflection(
+    tmp_path, capsys
+) -> None:
+    argv, coincident = _coincident_argv(tmp_path)
+
+    row, _ = _lattice_run(argv, tmp_path / "default")
+    bare_row, bare_peaks = _lattice_run([*argv, "--no-satellites"], tmp_path / "bare")
+
+    (peak,) = [
+        peak
+        for peak in bare_peaks
+        if abs(float(peak["found_two_theta"]) - coincident) < 0.01
+    ]
+    assert peak["kalpha2_satellite"] == "True" and peak["recovered"] == "False"
+    assert peak["fitted_two_theta"] == "" and peak["h"] == ""
+    assert int(bare_row["n_peaks_recovered"]) == 0
+    assert int(bare_row["n_satellites"]) == int(row["n_satellites"]) + 1
+    assert int(bare_row["n_peaks_indexed"]) == int(row["n_peaks_indexed"]) - 1
+    assert int(bare_row["n_peaks_refined"]) == int(row["n_peaks_refined"]) - 1
+    _assert_counts_add_up(bare_row, bare_peaks)

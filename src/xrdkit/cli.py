@@ -43,10 +43,13 @@ from xrdkit.density import (
     theoretical_density,
 )
 from xrdkit.indexing import (
+    DEFAULT_TOLERANCE,
     DEFAULT_ZERO_OFFSET,
     SUPPORTED_SPACE_GROUPS,
+    CellFit,
     IndexedPeak,
     index_and_refine,
+    index_peaks,
     indexed_to_csv,
     indexing_summary,
 )
@@ -942,7 +945,7 @@ def _refit_peaks(
     """
     refitted, records = [], []
     for peak in peaks:
-        record = {"fitted": None, "esd": None, "rejected": None}
+        record = {"fitted": None, "esd": None, "rejected": None, "recovered": False}
         if peak.kalpha2_of is None:
             try:
                 fit = fit_profile(
@@ -976,6 +979,103 @@ def _refit_peaks(
     return refitted, records
 
 
+def _index_and_fit(
+    peaks: list[Peak],
+    cell: Cell,
+    wavelength: float,
+    zero: float | None,
+    space_group: str | None,
+    zero_free: bool,
+    displacement_free: bool,
+    radius: float | None,
+) -> tuple[list[IndexedPeak | None], CellFit, LatticeFit]:
+    """Index and refine on the peaks not flagged as K alpha 2 satellites.
+
+    Returns one entry per peak, None for a flagged peak, which takes no part,
+    with the fit of the indexing and the refined lattice.
+
+    Raises
+    ------
+    CommandError
+        If the indexing or the refinement fails.
+    """
+    taking_part = [index for index, peak in enumerate(peaks) if peak.kalpha2_of is None]
+    try:
+        indexed, cell_fit = index_and_refine(
+            [peaks[index] for index in taking_part],
+            start_cell=cell,
+            wavelength=wavelength,
+            zero_offset=zero or 0.0,
+            fine_tolerance=DEFAULT_TOLERANCE,
+            space_group=space_group,
+        )
+    except ValueError as error:
+        raise CommandError(f"indexing failed: {error}") from error
+    try:
+        fit = refine_lattice(
+            indexed,
+            wavelength,
+            cell_fit.cell,
+            fit_zero=zero_free,
+            fit_displacement=displacement_free,
+            radius_mm=radius,
+            start_zero=cell_fit.zero_offset if zero_free else (zero or 0.0),
+        )
+    except ValueError as error:
+        raise CommandError(f"refinement failed: {error}") from error
+    entries: list[IndexedPeak | None] = [None] * len(peaks)
+    for index, entry in zip(taking_part, indexed):
+        entries[index] = entry
+    return entries, cell_fit, fit
+
+
+def _recover_satellites(
+    peaks: list[Peak], cell_fit: CellFit, wavelength: float, space_group: str | None
+) -> list[int]:
+    """The indices of the flagged peaks that a reflection needs: those within
+    the indexing's own tolerance of a reflection of ``cell_fit``'s cell, at the
+    zero offset the indexing used."""
+    flagged = [index for index, peak in enumerate(peaks) if peak.kalpha2_of is not None]
+    if not flagged:
+        return []
+    matches = index_peaks(
+        [peaks[index] for index in flagged],
+        cell_fit.cell,
+        wavelength,
+        DEFAULT_TOLERANCE,
+        cell_fit.zero_offset,
+        space_group,
+    )
+    return [index for index, match in zip(flagged, matches) if match.is_indexed]
+
+
+def _peak_counts(
+    found: list[Peak],
+    records: list[dict],
+    indexed: list[IndexedPeak | None],
+    fit: LatticeFit,
+) -> dict[str, int]:
+    """The peak counts of a lattice run, for the results row and the report.
+
+    found = refitted + rejected + satellites; used <= indexed <= refitted + rejected; recovered <= refitted + rejected.
+
+    A recovered peak is no longer a satellite: it counts as refitted, or as
+    rejected if its fit is. The indexed fraction is indexed over refitted plus
+    rejected, the peaks that took part.
+    """
+    return {
+        "n_peaks_found": len(found),
+        "n_peaks_refitted": sum(record["rejected"] is False for record in records),
+        "n_fits_rejected": sum(record["rejected"] is True for record in records),
+        "n_satellites": sum(peak.kalpha2_of is not None for peak in found),
+        "n_peaks_recovered": sum(record["recovered"] for record in records),
+        "n_peaks_indexed": sum(
+            entry is not None and entry.is_indexed for entry in indexed
+        ),
+        "n_peaks_refined": fit.n_peaks,
+    }
+
+
 def _calculated_two_theta(
     fit: LatticeFit, hkl: tuple[int, int, int], wavelength: float
 ) -> float:
@@ -1001,18 +1101,19 @@ def _write_lattice_peaks(
     path: Path,
     found: list[Peak],
     records: list[dict],
-    indexed: list[IndexedPeak],
+    indexed: list[IndexedPeak | None],
     fit: LatticeFit,
     wavelength: float,
 ) -> Path:
-    """Write one row per peak: found and fitted positions, the fit, and the
-    reflection assigned with its difference from the refined position."""
+    """Write one row per peak: found and fitted positions, the fit, whether it
+    is a satellite or was recovered from one, and the reflection assigned with
+    its difference from the refined position."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(LATTICE_PEAK_COLUMNS)
         for peak, record, entry in zip(found, records, indexed):
-            reflection = entry.reflection
+            reflection = entry.reflection if entry is not None else None
             calculated = difference = None
             if reflection is not None:
                 calculated = _calculated_two_theta(fit, reflection.hkl, wavelength)
@@ -1024,6 +1125,7 @@ def _write_lattice_peaks(
                     _number(record["esd"], 5),
                     "" if record["rejected"] is None else record["rejected"],
                     peak.kalpha2_of is not None,
+                    record["recovered"],
                     _number(peak.intensity, 1),
                     _number(peak.fwhm, 4),
                     *(reflection.hkl if reflection else ("", "", "")),
@@ -1040,6 +1142,7 @@ LATTICE_PEAK_COLUMNS = (
     "esd_fitted_two_theta",
     "fit_rejected",
     "kalpha2_satellite",
+    "recovered",
     "intensity",
     "fwhm",
     "h",
@@ -1076,16 +1179,26 @@ def _append_row(path: Path, row: dict) -> Path:
     return path
 
 
-def _lattice_method(zero_free: bool, displacement_free: bool, density: bool) -> str:
+def _lattice_method(
+    zero_free: bool, displacement_free: bool, density: bool, recover: bool
+) -> str:
     """How the lattice command got its numbers, for the results row."""
     zero = "refined" if zero_free else "held"
     displacement = "refined" if displacement_free else "held at zero"
+    satellites = (
+        "peaks flagged as K alpha 2 satellites excluded, except those within the "
+        "indexing tolerance of a reflection of the refined cell, which are "
+        "refitted and the indexing and refinement run once more with them"
+        if recover
+        else "peaks flagged as K alpha 2 satellites excluded (none recovered, "
+        "--no-satellites)"
+    )
     method = (
         "peak positions fitted as K alpha 1 of a split pseudo-Voigt doublet "
-        "(fit_profile); indexed by index_and_refine with an adaptive coarse "
-        "window; cell refined by least squares on the peak positions "
-        f"(refine_lattice), zero {zero}, specimen displacement {displacement}; "
-        "volume esd propagated through the covariance"
+        f"(fit_profile); {satellites}; indexed by index_and_refine with an "
+        "adaptive coarse window; cell refined by least squares on the peak "
+        f"positions (refine_lattice), zero {zero}, specimen displacement "
+        f"{displacement}; volume esd propagated through the covariance"
     )
     if density:
         method += (
@@ -1161,8 +1274,6 @@ def _run_lattice(args: argparse.Namespace) -> int:
 
     (scan,) = _read_inputs([item], args.wavelength)
     found = _peaks(item, scan)
-    if args.no_satellites:
-        found = exclude_kalpha2(found)
     if not found:
         raise CommandError(f"no peaks found in {item.path}")
     ka2 = instrument.ka2 if instrument else True
@@ -1172,32 +1283,35 @@ def _run_lattice(args: argparse.Namespace) -> int:
         else KALPHA2_RATIO
     )
     peaks, records = _refit_peaks(scan, found, ka2, ratio)
-    n_rejected = sum(1 for record in records if record["rejected"])
-    n_refitted = sum(1 for record in records if record["rejected"] is False)
 
-    try:
-        indexed, cell_fit = index_and_refine(
+    def index_and_fit() -> tuple[list[IndexedPeak | None], CellFit, LatticeFit]:
+        return _index_and_fit(
             peaks,
-            start_cell=cell,
-            wavelength=scan.wavelength,
-            zero_offset=args.zero or 0.0,
-            space_group=conditions,
-        )
-    except ValueError as error:
-        raise CommandError(f"indexing failed: {error}") from error
-    try:
-        fit = refine_lattice(
-            indexed,
+            cell,
             scan.wavelength,
-            cell_fit.cell,
-            fit_zero=zero_free,
-            fit_displacement=displacement_free,
-            radius_mm=radius,
-            start_zero=cell_fit.zero_offset if zero_free else (args.zero or 0.0),
+            args.zero,
+            conditions,
+            zero_free,
+            displacement_free,
+            radius,
         )
-    except ValueError as error:
-        raise CommandError(f"refinement failed: {error}") from error
-    n_indexed = sum(1 for entry in indexed if entry.is_indexed)
+
+    indexed, cell_fit, fit = index_and_fit()
+    recovered = (
+        []
+        if args.no_satellites
+        else _recover_satellites(peaks, cell_fit, scan.wavelength, conditions)
+    )
+    if recovered:
+        for index in recovered:
+            found[index] = replace(found[index], kalpha2_of=None)
+            (peaks[index],), (records[index],) = _refit_peaks(
+                scan, [found[index]], ka2, ratio
+            )
+            records[index]["recovered"] = True
+        indexed, cell_fit, fit = index_and_fit()
+    counts = _peak_counts(found, records, indexed, fit)
+    taking_part = counts["n_peaks_refitted"] + counts["n_fits_rejected"]
 
     density = esd_density = relative = esd_relative = measured = esd_measured = None
     if has_density:
@@ -1235,11 +1349,7 @@ def _run_lattice(args: argparse.Namespace) -> int:
         "esd_displacement_mm": fit.esd_displacement,
         "displacement_refined": bool(displacement_free),
         "radius_mm": radius,
-        "n_peaks_found": len(found),
-        "n_peaks_refitted": n_refitted,
-        "n_fits_rejected": n_rejected,
-        "n_peaks_indexed": n_indexed,
-        "n_peaks_refined": fit.n_peaks,
+        **counts,
         "rms_two_theta_deg": fit.rms_two_theta,
         "coarse_two_theta_max_deg": cell_fit.coarse_two_theta_max,
         "formula": formula if has_density else None,
@@ -1251,7 +1361,9 @@ def _run_lattice(args: argparse.Namespace) -> int:
         "esd_archimedes_density_g_cm3": esd_measured,
         "relative_density_percent": relative,
         "esd_relative_density_percent": esd_relative,
-        "method": _lattice_method(zero_free, displacement_free, has_density),
+        "method": _lattice_method(
+            zero_free, displacement_free, has_density, not args.no_satellites
+        ),
         "date": datetime.datetime.now(datetime.UTC).astimezone().date().isoformat(),
         "xrdkit_version": __version__,
     }
@@ -1270,9 +1382,16 @@ def _run_lattice(args: argparse.Namespace) -> int:
     if not args.json:
         if sample is not None:
             print(f"sample  {item.name}, {spec.composition}")
+        indexed_percent = 100.0 * counts["n_peaks_indexed"] / taking_part
         print(
-            f"peaks   {len(found)} found, {n_refitted} refitted, {n_rejected} fits "
-            f"rejected, {n_indexed} indexed, {fit.n_peaks} used in the refinement"
+            f"peaks   {counts['n_peaks_found']} found, "
+            f"{counts['n_peaks_refitted']} refitted, "
+            f"{counts['n_fits_rejected']} fits rejected, "
+            f"{counts['n_satellites']} satellites excluded, "
+            f"{counts['n_peaks_recovered']} recovered; "
+            f"{counts['n_peaks_indexed']} of {taking_part} indexed "
+            f"({indexed_percent:.1f} per cent), "
+            f"{counts['n_peaks_refined']} used in the refinement"
         )
         print(f"coarse window to {cell_fit.coarse_two_theta_max:.2f} degrees")
         print(f"{fit.cell.crystal_system} cell {_cell_text(fit.cell.parameters, esds)}")
@@ -1308,7 +1427,10 @@ def _add_lattice(subparsers) -> None:
             "Find the peaks of a scan, refit each position as the K alpha 1 line "
             "of its doublet, index them against a start cell of any crystal "
             "system, and refine the cell with the zero or the specimen "
-            "displacement by least squares. A pellet refines the displacement "
+            "displacement by least squares. Peaks flagged as K alpha 2 "
+            "satellites are left out, except those the refined cell puts within "
+            "the indexing tolerance of a reflection, which are refitted and the "
+            "indexing and refinement run once more with them. A pellet refines the displacement "
             "with the zero held (at --zero, the instrument zero from a standard, "
             "or 0); a powder, or a scan that is not a sample, refines the zero "
             "unless --zero is given, and the displacement only with "
@@ -1372,7 +1494,10 @@ def _add_lattice(subparsers) -> None:
     parser.add_argument(
         "--no-satellites",
         action="store_true",
-        help="drop the peaks flagged as K alpha 2 satellites",
+        help=(
+            "exclude every peak flagged as a K alpha 2 satellite, recovering "
+            "none that the refined cell puts on a reflection"
+        ),
     )
     _add_output_options(parser, "the scan's file stem, or the sample key")
     parser.set_defaults(handler=_run_lattice)
