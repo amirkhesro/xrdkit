@@ -23,9 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `xrdkit.quality`: `assess_scan` and `format_report`, which do the work behind
   `xrdkit check`, and `CRITERIA`, the thresholds of the user guide's Section 2
   table held in one place.
+- `xrdkit plot SCAN`, which writes the peak list to `results/peaks_{stem}.csv`
+  and the pattern to `figures/pattern_{stem}` (png and pdf). With `--cell A C`
+  it also indexes the peaks from that tetragonal start cell, writes
+  `results/indexed_{stem}.csv` and an hkl labelled `figures/pattern_hkl_{stem}`,
+  and prints the refined cell and zero. `--space-group`, `--zero`, `--label` and
+  `--no-satellites` tune it.
+- `xrdkit stack SCAN [SCAN ...] --labels TEXT [TEXT ...]`, which writes the
+  scans stacked to `figures/stack_{stem}`, with `--offset` and
+  `--no-normalise`.
+- Both figure commands take `--stem`, `--out DIR` (under which `results/` and
+  `figures/` are created), `--scale {linear,sqrt,log}` and `--json`. Each
+  prints the files it wrote, and exits with status 1 when an input file is
+  missing.
 
 ### Changed
 
+- The peak to background criterion of 20 applies to phase identification
+  only, not to plotting: a low ratio does not spoil a figure, but weak phases
+  may not be visible. `xrdkit check` says so in its reason.
 - The tests that read a measured scan take the folder from the
   `XRDKIT_TEST_RAW_DIR` environment variable, and skip with a message naming
   it when it is unset or the folder holds no `.xrdml` files. No path into a

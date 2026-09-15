@@ -37,12 +37,11 @@ _PLOTTING: dict[str, float | tuple[float, float]] = {
     "angular_range": (10.0, 80.0),
     "step_size": (0.01, 0.03),
     "maximum": 2000.0,
-    "peak_over_median": 20.0,
 }
 
 CRITERIA: dict[str, dict[str, float | tuple[float, float]]] = {
     "plotting": _PLOTTING,
-    "phase_identification": {**_PLOTTING, "median": 100.0},
+    "phase_identification": {**_PLOTTING, "median": 100.0, "peak_over_median": 20.0},
     "le_bail": {
         "angular_range": (10.0, 120.0),
         "step_size": (0.013, 0.026),
@@ -137,7 +136,7 @@ def _judge(quality: ScanQuality, criteria: dict) -> Verdict:
     ):
         reasons.append(
             f"peak over median {quality.peak_over_median:.1f}, "
-            f"below {criteria['peak_over_median']:g}"
+            f"below {criteria['peak_over_median']:g}, weak phases may not be visible"
         )
 
     if (

@@ -44,8 +44,12 @@ def test_criteria_hold_the_guide_numbers() -> None:
     assert plotting["angular_range"] == (10.0, 80.0)
     assert plotting["step_size"] == (0.01, 0.03)
     assert plotting["maximum"] == 2000.0
-    assert plotting["peak_over_median"] == 20.0
-    assert CRITERIA["phase_identification"] == {**plotting, "median": 100.0}
+    assert "peak_over_median" not in plotting
+    assert CRITERIA["phase_identification"] == {
+        **plotting,
+        "median": 100.0,
+        "peak_over_median": 20.0,
+    }
     assert CRITERIA["le_bail"] == {
         "angular_range": (10.0, 120.0),
         "step_size": (0.013, 0.026),
@@ -133,16 +137,31 @@ def test_low_background_and_contrast_fail_phase_identification() -> None:
 
     assert quality.verdicts["plotting"].reasons == [
         "strongest peak 1200 counts, below 2000",
-        "peak over median 15.0, below 20",
     ]
     assert quality.verdicts["phase_identification"].reasons == [
         "strongest peak 1200 counts, below 2000",
         "median 80 counts, below 100",
-        "peak over median 15.0, below 20",
+        "peak over median 15.0, below 20, weak phases may not be visible",
     ]
     assert "high angle peak over median 5.0, below 10" in (
         quality.verdicts["le_bail"].reasons
     )
+
+
+def test_low_contrast_is_fine_for_plotting_but_not_phase_identification() -> None:
+    # Peak over median 14, as in the guide's 10s.xrdml, with every other number
+    # good for both workflows.
+    scan = _scan(10.0, 90.0, 0.02, 1000.0, 14000.0, 1000.0, 3000.0)
+    quality = assess_scan(scan)
+
+    assert quality.peak_over_median == pytest.approx(14.0)
+    assert quality.verdicts["plotting"].suitable
+    assert quality.verdicts["plotting"].reasons == []
+    phase = quality.verdicts["phase_identification"]
+    assert not phase.suitable
+    assert len(phase.reasons) == 1
+    assert phase.reasons[0].startswith("peak over median 14.0, below 20")
+    assert phase.reasons[0].endswith("weak phases may not be visible")
 
 
 def test_step_and_range_limits_are_inclusive() -> None:
