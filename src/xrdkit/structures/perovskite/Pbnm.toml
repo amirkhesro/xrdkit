@@ -1,0 +1,58 @@
+# Orthorhombic perovskite ABO3 of the GdFeO3 (and CaTiO3) type, Pbnm, from
+# LaTiO3: Cwik et al., Phys. Rev. B 68 (2003) 060401, COD 1532652.
+#
+# The setting is Pbnm, the cab setting of Pnma (No. 62), with the long axis c
+# about 2 ap and a and b about sqrt(2) ap. It is not the standard Pnma
+# setting: the coordinates, the Wyckoff forms below and the cell parameters all
+# follow Pbnm.
+#
+# A cell holds four ABO3: four A positions (A1 on 4c), four B positions (B1
+# on 4b) and twelve O (O1 on 4c, O2 on 8d), so Z = 4.
+#
+# CIF labels for each site: A1 is La1; B1 is Ti1; O1 is O1, the apical O on
+# 4c; O2 is O2, the equatorial O on 8d.
+#
+# Pbnm is centrosymmetric and not polar, so symmetry fixes the origin and no
+# site's coordinate has to be held.
+
+[entry]
+name = "perovskite/Pbnm"
+family = "perovskite"
+crystal_system = "orthorhombic"
+space_group = "Pbnm"
+setting = "cab"
+cell_parameters = ["a", "b", "c"]
+z = 4
+reference = "LaTiO3, COD 1532652"
+
+# A1 is on 4c, (x, y, 1/4).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "4c"
+free = ["x", "y"]
+uiso_group = "A"
+
+# B1 is on 4b, (1/2, 0, 0).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "4b"
+free = []
+uiso_group = "B"
+
+# O1 is on 4c, (x, y, 1/4).
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "4c"
+free = ["x", "y"]
+uiso_group = "O"
+
+# O2 is on 8d, the general position.
+[[sites]]
+label = "O2"
+kind = "O"
+wyckoff = "8d"
+free = ["x", "y", "z"]
+uiso_group = "O"

@@ -1,0 +1,56 @@
+# Tetragonal perovskite ABO3 of the BaTiO3 type, P4mm, from BaTiO3 at 298 K:
+# Aimi et al., J. Ceram. Soc. Jpn. 129 (2021) 73-78,
+# doi:10.2109/jcersj2.20147, COD 1559964.
+#
+# A cell holds one ABO3: one A position (A1 on 1a), one B position (B1 on
+# 1b) and three O (O1 on 1b, O2 on 2c), so Z = 1.
+#
+# CIF labels for each site: A1 is Ba; B1 is Ti; O1 is O1, the apical O on 1b;
+# O2 is O2, the equatorial O on 2c.
+#
+# P4mm is polar along c, so no site symmetry fixes the origin along z, and one
+# site's z has to be held. A1 holds it, at z = 0, as Ba does in the CIF.
+
+[entry]
+name = "perovskite/P4mm"
+family = "perovskite"
+crystal_system = "tetragonal"
+space_group = "P4mm"
+setting = ""
+cell_parameters = ["a", "c"]
+z = 1
+polar_axis = "c"
+origin_site = "A1"
+reference = "BaTiO3, COD 1559964"
+
+# A1 is on 1a, (0, 0, z).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "1a"
+free = ["z"]
+uiso_group = "A"
+
+# B1 is on 1b, (1/2, 1/2, z).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "1b"
+free = ["z"]
+uiso_group = "B"
+
+# O1 is on 1b, (1/2, 1/2, z).
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "1b"
+free = ["z"]
+uiso_group = "O"
+
+# O2 is on 2c, (1/2, 0, z) and (0, 1/2, z).
+[[sites]]
+label = "O2"
+kind = "O"
+wyckoff = "2c"
+free = ["z"]
+uiso_group = "O"

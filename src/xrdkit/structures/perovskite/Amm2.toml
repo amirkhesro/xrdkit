@@ -1,0 +1,56 @@
+# Orthorhombic perovskite ABO3 of the BaTiO3 type, Amm2, from BaTiO3 at
+# 190 K: Kwei, Lawson, Billinge and Cheong, J. Phys. Chem. 97 (1993)
+# 2368-2377, doi:10.1021/j100112a043, COD 9014492.
+#
+# The cell is A centred, with a about ap and b and c about sqrt(2) ap. It
+# holds two ABO3: two A positions (A1 on 2a), two B positions (B1 on 2b) and
+# six O (O1 on 2a, O2 on 4e), so Z = 2.
+#
+# CIF labels for each site: A1 is Ba; B1 is Ti; O1 is O1; O2 is O2.
+#
+# Amm2 is polar along c, so no site symmetry fixes the origin along z, and one
+# site's z has to be held. A1 holds it, at z = 0, as Ba does in the CIF.
+
+[entry]
+name = "perovskite/Amm2"
+family = "perovskite"
+crystal_system = "orthorhombic"
+space_group = "Amm2"
+setting = ""
+cell_parameters = ["a", "b", "c"]
+z = 2
+polar_axis = "c"
+origin_site = "A1"
+reference = "BaTiO3, COD 9014492"
+
+# A1 is on 2a, (0, 0, z).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "2a"
+free = ["z"]
+uiso_group = "A"
+
+# B1 is on 2b, (1/2, 0, z).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "2b"
+free = ["z"]
+uiso_group = "B"
+
+# O1 is on 2a, (0, 0, z).
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "2a"
+free = ["z"]
+uiso_group = "O"
+
+# O2 is on 4e, (1/2, y, z).
+[[sites]]
+label = "O2"
+kind = "O"
+wyckoff = "4e"
+free = ["y", "z"]
+uiso_group = "O"

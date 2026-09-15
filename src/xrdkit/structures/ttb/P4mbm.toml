@@ -1,0 +1,102 @@
+# Centrosymmetric tetragonal tungsten bronze in P4/mbm, the non polar (and
+# high temperature) bronze, from Ba4La2Fe2Nb8O30 at 295 K: McCabe and West,
+# J. Solid State Chem. 183 (2010) 624-630, doi:10.1016/j.jssc.2009.11.032,
+# COD 1563700. No P4/mbm bronze CIF is in XRD-Analysis/cifs. The Wyckoff
+# positions were checked against the International Tables for P4/mbm (No. 127).
+#
+# A cell has six A positions (A1 on 2a, A2 on 4g), ten B positions (B1 on 2c,
+# B2 on 8j) and thirty O. At Z = 5 formula units of AB2O6, the A positions
+# hold five cations, so one sixth of them are empty. The A sites are in the
+# z = 0 plane and the B sites in the z = 1/2 plane. The equatorial O (O1,
+# O2, O3) are in the B plane, and the apical O (O4 above B1, O5 above B2) are
+# in the A plane.
+#
+# The labels follow ttb/P4bm, which is this structure without the mirror
+# normal to c, shifted by c/2. CIF labels for each site: A1 is Ba2 and La2,
+# which share one position; A2 is Ba1 and La1; B1 is Nb2 and Fe2; B2 is Nb1
+# and Fe1; O1 is O2; O2 is O3; O3 is O1; O4 is O5; O5 is O4.
+#
+# P4/mbm is centrosymmetric and not polar, so symmetry fixes the origin and
+# no site's coordinate has to be held.
+
+[entry]
+name = "ttb/P4mbm"
+family = "tetragonal tungsten bronze"
+crystal_system = "tetragonal"
+space_group = "P4/mbm"
+setting = ""
+cell_parameters = ["a", "c"]
+z = 5
+reference = "COD 1563700"
+
+# A1 is on 2a, (0, 0, 0).
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "2a"
+free = []
+uiso_group = "A"
+
+# A2 is on 4g, (x, x+1/2, 0). y follows x.
+[[sites]]
+label = "A2"
+kind = "A"
+wyckoff = "4g"
+free = ["x"]
+uiso_group = "A"
+
+# B1 is on 2c, (0, 1/2, 1/2).
+[[sites]]
+label = "B1"
+kind = "B"
+wyckoff = "2c"
+free = []
+uiso_group = "B"
+
+# B2 is on 8j, (x, y, 1/2).
+[[sites]]
+label = "B2"
+kind = "B"
+wyckoff = "8j"
+free = ["x", "y"]
+uiso_group = "B"
+
+# O1 is on 4h, (x, x+1/2, 1/2). y follows x.
+[[sites]]
+label = "O1"
+kind = "O"
+wyckoff = "4h"
+free = ["x"]
+uiso_group = "O"
+
+# O2 is on 8j, (x, y, 1/2).
+[[sites]]
+label = "O2"
+kind = "O"
+wyckoff = "8j"
+free = ["x", "y"]
+uiso_group = "O"
+
+# O3 is on 8j, (x, y, 1/2).
+[[sites]]
+label = "O3"
+kind = "O"
+wyckoff = "8j"
+free = ["x", "y"]
+uiso_group = "O"
+
+# O4 is on 2d, (0, 1/2, 0).
+[[sites]]
+label = "O4"
+kind = "O"
+wyckoff = "2d"
+free = []
+uiso_group = "O"
+
+# O5 is on 8i, (x, y, 0).
+[[sites]]
+label = "O5"
+kind = "O"
+wyckoff = "8i"
+free = ["x", "y"]
+uiso_group = "O"

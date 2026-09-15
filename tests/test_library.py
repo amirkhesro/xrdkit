@@ -1,11 +1,11 @@
 """Tests for xrdkit.library."""
 
+import re
 from importlib.resources import files
 
 import pytest
 
 import xrdkit
-from xrdkit.config import wyckoff_multiplicity
 from xrdkit.library import Site, StructureEntry, list_entries, load_entry
 
 # A valid entry, for a library of one under tmp_path; each validation test
@@ -41,12 +41,18 @@ def write_entry(root, text: str, name: str = "test/cubic") -> None:
     (folder / f"{stem}.toml").write_text(text, encoding="utf-8")
 
 
+def multiplicity(wyckoff: str) -> int:
+    """The multiplicity of a Wyckoff position written as "18b"."""
+    match = re.fullmatch(r"(\d+)[a-z]", wyckoff)
+    assert match, f"not a Wyckoff position: {wyckoff!r}"
+    return int(match.group(1))
+
+
 def cell_contents_by_kind(entry: StructureEntry) -> dict[str, int]:
+    """Positions per cell of each kind of site."""
     contents: dict[str, int] = {}
     for site in entry.sites:
-        contents[site.kind] = contents.get(site.kind, 0) + wyckoff_multiplicity(
-            site.wyckoff
-        )
+        contents[site.kind] = contents.get(site.kind, 0) + multiplicity(site.wyckoff)
     return contents
 
 
@@ -82,15 +88,123 @@ def test_ttb_entry() -> None:
     assert {site.uiso_group for site in entry.sites} == {"A", "B", "O"}
 
 
-def test_ttb_entry_holds_five_ab2o6_with_a_sixth_of_a_empty() -> None:
-    assert cell_contents_by_kind(load_entry("ttb/P4bm")) == {"A": 6, "B": 10, "O": 30}
+def test_p4mbm_bronze_entry() -> None:
+    entry = load_entry("ttb/P4mbm")
+
+    assert entry.family == "tetragonal tungsten bronze"
+    assert entry.crystal_system == "tetragonal"
+    assert entry.space_group == "P4/mbm"
+    assert entry.z == 5
+    assert entry.cell_parameters == ("a", "c")
+    assert len(entry.sites) == 9
+    assert entry.polar_axis is None
+    assert entry.origin_site is None
+    assert entry.reference == "COD 1563700"
+    assert [(site.label, site.wyckoff, site.free) for site in entry.sites] == [
+        ("A1", "2a", ()),
+        ("A2", "4g", ("x",)),
+        ("B1", "2c", ()),
+        ("B2", "8j", ("x", "y")),
+        ("O1", "4h", ("x",)),
+        ("O2", "8j", ("x", "y")),
+        ("O3", "8j", ("x", "y")),
+        ("O4", "2d", ()),
+        ("O5", "8i", ("x", "y")),
+    ]
 
 
-def test_ttb_origin_site_is_free_along_the_polar_axis() -> None:
-    entry = load_entry("ttb/P4bm")
+def test_tetragonal_perovskite_entry() -> None:
+    entry = load_entry("perovskite/P4mm")
+
+    assert entry.crystal_system == "tetragonal"
+    assert entry.space_group == "P4mm"
+    assert entry.z == 1
+    assert entry.cell_parameters == ("a", "c")
+    assert len(entry.sites) == 4
+    assert entry.polar_axis == "c"
+    assert entry.origin_site == "A1"
+    assert [site.wyckoff for site in entry.sites] == ["1a", "1b", "1b", "2c"]
+
+
+def test_rhombohedral_perovskite_entry() -> None:
+    entry = load_entry("perovskite/R3c")
+
+    assert entry.crystal_system == "trigonal"
+    assert entry.space_group == "R3c"
+    assert entry.setting == "hexagonal"
+    assert entry.z == 6
+    assert entry.cell_parameters == ("a", "c")
+    assert len(entry.sites) == 3
+    assert entry.polar_axis == "c"
+    assert entry.origin_site == "A1"
+    assert [site.wyckoff for site in entry.sites] == ["6a", "6a", "18b"]
+
+
+def test_orthorhombic_pbnm_perovskite_entry() -> None:
+    entry = load_entry("perovskite/Pbnm")
+
+    assert entry.crystal_system == "orthorhombic"
+    assert entry.space_group == "Pbnm"
+    assert entry.setting == "cab"
+    assert entry.z == 4
+    assert entry.cell_parameters == ("a", "b", "c")
+    assert len(entry.sites) == 4
+    assert entry.polar_axis is None
+    assert entry.origin_site is None
+    assert [(site.wyckoff, site.free) for site in entry.sites] == [
+        ("4c", ("x", "y")),
+        ("4b", ()),
+        ("4c", ("x", "y")),
+        ("8d", ("x", "y", "z")),
+    ]
+
+
+def test_orthorhombic_amm2_perovskite_entry() -> None:
+    entry = load_entry("perovskite/Amm2")
+
+    assert entry.crystal_system == "orthorhombic"
+    assert entry.space_group == "Amm2"
+    assert entry.z == 2
+    assert entry.cell_parameters == ("a", "b", "c")
+    assert len(entry.sites) == 4
+    assert entry.polar_axis == "c"
+    assert entry.origin_site == "A1"
+    assert [(site.wyckoff, site.free) for site in entry.sites] == [
+        ("2a", ("z",)),
+        ("2b", ("z",)),
+        ("2a", ("z",)),
+        ("4e", ("y", "z")),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "contents"),
+    [
+        ("perovskite/Pm-3m", {"A": 1, "B": 1, "O": 3}),
+        ("perovskite/P4mm", {"A": 1, "B": 1, "O": 3}),
+        ("perovskite/R3c", {"A": 6, "B": 6, "O": 18}),
+        ("perovskite/Pbnm", {"A": 4, "B": 4, "O": 12}),
+        ("perovskite/Amm2", {"A": 2, "B": 2, "O": 6}),
+        # Five AB2O6 on six A positions, a sixth of them empty.
+        ("ttb/P4bm", {"A": 6, "B": 10, "O": 30}),
+        ("ttb/P4mbm", {"A": 6, "B": 10, "O": 30}),
+    ],
+)
+def test_multiplicities_give_the_cell_contents(
+    name: str, contents: dict[str, int]
+) -> None:
+    assert cell_contents_by_kind(load_entry(name)) == contents
+
+
+@pytest.mark.parametrize("name", list_entries())
+def test_origin_site_is_free_along_the_polar_axis(name: str) -> None:
+    entry = load_entry(name)
+    if entry.polar_axis is None:
+        assert entry.origin_site is None
+        return
     origin = next(site for site in entry.sites if site.label == entry.origin_site)
 
-    assert "z" in origin.free
+    assert {"a": "x", "b": "y", "c": "z"}[entry.polar_axis] in origin.free
 
 
 def test_perovskite_entry() -> None:
@@ -110,15 +224,21 @@ def test_perovskite_entry() -> None:
         Site("B1", "B", "1b", (), "B"),
         Site("O1", "O", "3c", (), "O"),
     )
-    assert cell_contents_by_kind(entry) == {"A": 1, "B": 1, "O": 3}
 
 
-def test_list_entries_has_both() -> None:
+def test_list_entries_has_all_seven() -> None:
     names = list_entries()
 
-    assert "ttb/P4bm" in names
-    assert "perovskite/Pm-3m" in names
     assert names == sorted(names)
+    assert set(names) >= {
+        "perovskite/Amm2",
+        "perovskite/P4mm",
+        "perovskite/Pbnm",
+        "perovskite/Pm-3m",
+        "perovskite/R3c",
+        "ttb/P4bm",
+        "ttb/P4mbm",
+    }
 
 
 def test_unknown_entry_names_the_available_ones() -> None:

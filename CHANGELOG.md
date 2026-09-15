@@ -56,9 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `xrdkit.library`, a structure library shipped as package data, one TOML file
   per entry under `xrdkit/structures/<family>/<name>.toml`. `list_entries()`
   names the entries, and `load_entry(name)` reads and validates one into a
-  `StructureEntry` of `Site`s. It holds two entries so far: `ttb/P4bm`, the
-  tetragonal tungsten bronze from COD 2100720, and `perovskite/Pm-3m`, the ideal
-  cubic perovskite.
+  `StructureEntry` of `Site`s. It holds seven entries: the perovskites
+  `perovskite/Pm-3m` (ideal cubic), `perovskite/P4mm` (tetragonal BaTiO3 type),
+  `perovskite/R3c` (BiFeO3 type, hexagonal axes), `perovskite/Pbnm` (GdFeO3
+  type, in the Pbnm setting) and `perovskite/Amm2` (orthorhombic BaTiO3 type),
+  and the tetragonal tungsten bronzes `ttb/P4bm` (polar, from COD 2100720) and
+  `ttb/P4mbm` (centrosymmetric, P4/mbm).
 
 ### Changed
 
