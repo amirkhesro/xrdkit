@@ -8,7 +8,7 @@ import pytest
 
 from xrdkit import (
     ATOMIC_MASSES,
-    TetragonalCell,
+    Cell,
     cell_volume,
     formula_mass,
     parse_formula,
@@ -86,7 +86,7 @@ def test_atomic_masses_cover_the_elements_asked_for() -> None:
 
 
 def test_density_of_cubic_srtio3() -> None:
-    volume, _ = cell_volume(TetragonalCell(a=SRTIO3_A, c=SRTIO3_A))
+    volume, _ = cell_volume(Cell.cubic(SRTIO3_A))
     density, esd = theoretical_density(SRTIO3, 1, volume)
 
     assert density == pytest.approx(5.11, abs=0.01)
@@ -94,33 +94,32 @@ def test_density_of_cubic_srtio3() -> None:
 
 
 def test_cell_volume_without_esds() -> None:
-    volume, esd = cell_volume(TetragonalCell(a=12.5, c=3.9))
+    volume, esd = cell_volume(Cell.tetragonal(12.5, 3.9))
 
     assert volume == pytest.approx(12.5**2 * 3.9)
     assert esd is None
 
 
 @pytest.mark.parametrize(
-    ("esd_a", "esd_c", "expected"),
+    ("esd", "expected"),
     [
-        (0.001, None, 2 * 12.5 * 3.9 * 0.001),
-        (None, 0.002, 12.5**2 * 0.002),
-        (0.001, 0.002, np.hypot(2 * 12.5 * 3.9 * 0.001, 12.5**2 * 0.002)),
+        ({"a": 0.001}, 2 * 12.5 * 3.9 * 0.001),
+        ({"c": 0.002}, 12.5**2 * 0.002),
+        ({"a": 0.001, "c": 0.002}, np.hypot(2 * 12.5 * 3.9 * 0.001, 12.5**2 * 0.002)),
     ],
     ids=["a only", "c only", "both"],
 )
-def test_cell_volume_esd_propagation(
-    esd_a: float | None, esd_c: float | None, expected: float
-) -> None:
-    _, esd = cell_volume(TetragonalCell(a=12.5, c=3.9), esd_a=esd_a, esd_c=esd_c)
+def test_cell_volume_esd_propagation(esd: dict[str, float], expected: float) -> None:
+    # A free parameter left out of the mapping counts as zero.
+    _, propagated = cell_volume(Cell.tetragonal(12.5, 3.9), esd)
 
-    assert esd == pytest.approx(expected)
+    assert propagated == pytest.approx(expected, rel=1e-6)
 
 
 def test_cell_volume_esd_agrees_with_monte_carlo() -> None:
-    cell = TetragonalCell(a=12.47, c=3.93)
+    cell = Cell.tetragonal(12.47, 3.93)
     esd_a, esd_c = 0.002, 0.001
-    _, esd = cell_volume(cell, esd_a=esd_a, esd_c=esd_c)
+    _, esd = cell_volume(cell, {"a": esd_a, "c": esd_c})
 
     rng = np.random.default_rng(1)
     a = rng.normal(cell.a, esd_a, 200_000)
@@ -292,3 +291,28 @@ def test_relative_density_rejects_non_positive_densities(
 ) -> None:
     with pytest.raises(ValueError, match="must be positive"):
         relative_density(measured, theoretical)
+
+
+def test_cell_volume_esd_for_a_hexagonal_cell() -> None:
+    a, c, esd_a, esd_c = 5.148, 13.863, 0.0004, 0.002
+    volume, esd = cell_volume(Cell.hexagonal(a, c), {"a": esd_a, "c": esd_c})
+
+    # V = (sqrt 3 / 2) a^2 c, so dV/da = sqrt 3 a c and dV/dc = (sqrt 3 / 2) a^2.
+    assert volume == pytest.approx(np.sqrt(3) / 2 * a**2 * c)
+    expected = np.hypot(np.sqrt(3) * a * c * esd_a, np.sqrt(3) / 2 * a**2 * esd_c)
+    assert esd == pytest.approx(expected, rel=1e-6)
+    _, c_only = cell_volume(Cell.trigonal(a, c), {"c": esd_c})
+    assert c_only == pytest.approx(np.sqrt(3) / 2 * a**2 * esd_c, rel=1e-6)
+
+
+def test_cell_volume_esd_with_nothing_to_propagate_is_none() -> None:
+    cell = Cell.tetragonal(12.5, 3.9)
+
+    assert cell_volume(cell)[1] is None
+    assert cell_volume(cell, {})[1] is None
+    assert cell_volume(cell, {"a": 0.0, "c": 0.0})[1] is None
+
+
+def test_cell_volume_rejects_an_esd_for_a_parameter_that_is_not_free() -> None:
+    with pytest.raises(ValueError, match="'b'"):
+        cell_volume(Cell.tetragonal(12.5, 3.9), {"a": 0.001, "b": 0.001})

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 import numpy as np
 from scipy.constants import Avogadro
 
-from xrdkit.indexing import TetragonalCell
+from xrdkit.cell import Cell
 
 __all__ = [
     "ATOMIC_MASSES",
@@ -239,24 +239,59 @@ def formula_mass(composition: Mapping[str, float] | str) -> float:
     return float(sum(ATOMIC_MASSES[element] * n for element, n in composition.items()))
 
 
-def cell_volume(
-    cell: TetragonalCell,
-    esd_a: float | None = None,
-    esd_c: float | None = None,
-) -> tuple[float, float | None]:
-    """Return the volume a^2 c of a tetragonal cell and its esd, in cubic angstroms.
+# Central difference step of the volume gradient: this fraction of each
+# parameter, and never less than the floor.
+GRADIENT_STEP = 1e-6
+GRADIENT_FLOOR = 1e-9
 
-    The esd is propagated to first order, sqrt((2ac esd_a)^2 + (a^2 esd_c)^2),
-    treating a and c as uncorrelated since the fits here report no covariance.
-    An esd left as ``None`` counts as zero, and the esd returned is ``None``
-    only when neither is given.
+
+def volume_gradient(cell: Cell) -> np.ndarray:
+    """The derivative of the volume of ``cell`` with respect to each of its
+    free parameters, in the order of ``cell.parameter_names``, by central
+    differences (each dependent parameter moving with the free one)."""
+    gradient = []
+    for name, value in cell.parameters.items():
+        step = max(GRADIENT_STEP * abs(value), GRADIENT_FLOOR)
+        up = cell.replace(**{name: value + step}).volume
+        down = cell.replace(**{name: value - step}).volume
+        gradient.append((up - down) / (2.0 * step))
+    return np.array(gradient)
+
+
+def cell_volume(
+    cell: Cell, esd: Mapping[str, float] | None = None
+) -> tuple[float, float | None]:
+    """Return the volume of ``cell`` and its esd, in cubic angstroms.
+
+    ``esd`` maps free parameters of the cell (``cell.parameter_names``) to
+    their esds. The esd of the volume is propagated to first order through
+    :func:`volume_gradient`, treating the parameters as uncorrelated since no
+    covariance is given here; :class:`~xrdkit.lattice.LatticeFit` carries one
+    with its correlations included. A free parameter left out counts as zero,
+    and the esd returned is ``None`` when no mapping is given or every esd in
+    it is zero.
+
+    Raises
+    ------
+    ValueError
+        If ``esd`` names a parameter that is not free in the cell.
     """
-    volume = cell.a**2 * cell.c
-    if esd_a is None and esd_c is None:
-        return float(volume), None
-    from_a = 2.0 * cell.a * cell.c * (esd_a or 0.0)
-    from_c = cell.a**2 * (esd_c or 0.0)
-    return float(volume), float(np.hypot(from_a, from_c))
+    volume = cell.volume
+    if esd is None:
+        return volume, None
+    unknown = [name for name in esd if name not in cell.parameter_names]
+    if unknown:
+        raise ValueError(
+            f"esd for {', '.join(map(repr, unknown))}, which is not a free "
+            f"parameter of a {cell.crystal_system} cell; the free parameters are "
+            + ", ".join(cell.parameter_names)
+        )
+    deviations = np.array(
+        [float(esd.get(name) or 0.0) for name in cell.parameter_names]
+    )
+    if not np.any(deviations):
+        return volume, None
+    return volume, float(np.sqrt(np.sum((volume_gradient(cell) * deviations) ** 2)))
 
 
 def theoretical_density(

@@ -6,9 +6,10 @@ import pytest
 from xrdkit import (
     TTB_CELL,
     Cell,
+    IndexedPeak,
     LatticeFit,
     Peak,
-    TetragonalCell,
+    cell_volume,
     generate_reflections,
     index_and_refine,
     lattice_fit_to_dict,
@@ -19,7 +20,7 @@ WAVELENGTH = 1.5406
 
 # The cell the synthetic peaks come from, and the systematic errors applied to
 # them before they are handed to the indexer.
-TRUE_CELL = TetragonalCell(a=12.48, c=3.93)
+TRUE_CELL = Cell.tetragonal(12.48, 3.93)
 ZERO_OFFSET = 0.17
 DISPLACEMENT = 0.1
 RADIUS_MM = 145.0
@@ -272,9 +273,19 @@ def test_lattice_fit_to_dict_is_flat_and_scalar() -> None:
     assert set(row) == {
         "a",
         "esd_a",
+        "b",
+        "esd_b",
         "c",
         "esd_c",
+        "alpha",
+        "esd_alpha",
+        "beta",
+        "esd_beta",
+        "gamma",
+        "esd_gamma",
         "c_over_a",
+        "volume",
+        "esd_volume",
         "zero",
         "esd_zero",
         "displacement",
@@ -290,3 +301,129 @@ def test_lattice_fit_to_dict_is_flat_and_scalar() -> None:
     )
     assert row["a"] == fit.a
     assert row["c_over_a"] == pytest.approx(fit.c / fit.a)
+    assert row["volume"] == fit.volume
+    assert row["esd_volume"] == fit.esd_volume
+    assert row["esd_b"] is None and row["b"] == fit.a
+
+
+# Cells of other crystal systems, the space group to generate them in, and a
+# start cell a little way off.
+OTHER_SYSTEMS = {
+    "cubic": (Cell.cubic(3.905), "Pm-3m", Cell.cubic(3.95)),
+    "orthorhombic": (
+        Cell.orthorhombic(5.38, 5.44, 7.64),
+        "Pbnm",
+        Cell.orthorhombic(5.40, 5.42, 7.62),
+    ),
+    "hexagonal": (Cell.hexagonal(5.148, 13.863), "R3c", Cell.hexagonal(5.16, 13.84)),
+}
+
+
+def shifted_indexed(cell: Cell, space_group: str, seed: int = 11) -> list[IndexedPeak]:
+    """Reflections of ``cell`` to 100 degrees moved by ZERO_OFFSET and a little
+    noise, each assigned to its own reflection as its only candidate."""
+    rng = np.random.default_rng(seed)
+    indexed = []
+    for reflection in generate_reflections(
+        cell, WAVELENGTH, 100.0, space_group=space_group
+    ):
+        position = reflection.two_theta + ZERO_OFFSET + rng.uniform(-NOISE, NOISE)
+        indexed.append(
+            IndexedPeak(
+                peak=make_peak(position),
+                corrected_two_theta=position,
+                reflection=reflection,
+                difference=0.0,
+                candidates=[reflection],
+            )
+        )
+    return indexed
+
+
+@pytest.mark.parametrize("system", list(OTHER_SYSTEMS))
+def test_refine_lattice_recovers_cells_of_other_systems(system) -> None:
+    cell, space_group, start = OTHER_SYSTEMS[system]
+
+    fit = refine_lattice(shifted_indexed(cell, space_group), WAVELENGTH, start)
+
+    assert fit.converged
+    assert fit.cell.crystal_system == system
+    assert fit.parameter_names == cell.parameter_names
+    n_free = len(cell.parameter_names) + 1
+    assert fit.covariance.shape == (n_free, n_free)
+    for name, value in cell.parameters.items():
+        esd = getattr(fit, f"esd_{name}")
+        assert esd > 0.0
+        assert abs(getattr(fit, name) - value) < 5.0 * esd, name
+    assert abs(fit.zero - ZERO_OFFSET) < 5.0 * fit.esd_zero
+    assert fit.volume == fit.cell.volume
+    assert fit.esd_volume > 0.0
+    assert abs(fit.volume - cell.volume) < 5.0 * fit.esd_volume
+
+
+@pytest.mark.parametrize(
+    ("system", "fixed"),
+    [
+        ("cubic", {"b": "a", "c": "a", "alpha": 90.0, "beta": 90.0, "gamma": 90.0}),
+        ("orthorhombic", {"alpha": 90.0, "beta": 90.0, "gamma": 90.0}),
+        ("hexagonal", {"b": "a", "alpha": 90.0, "beta": 90.0, "gamma": 120.0}),
+    ],
+)
+def test_parameters_fixed_by_the_system_have_the_implied_value_and_no_esd(
+    system, fixed
+) -> None:
+    cell, space_group, start = OTHER_SYSTEMS[system]
+
+    fit = refine_lattice(shifted_indexed(cell, space_group), WAVELENGTH, start)
+
+    for name, value in fixed.items():
+        expected = getattr(fit, value) if isinstance(value, str) else value
+        assert getattr(fit, name) == pytest.approx(expected, abs=1e-9), name
+        assert getattr(fit, f"esd_{name}") is None, name
+    row = lattice_fit_to_dict(fit)
+    assert ("c_over_a" in row) == (system == "hexagonal")
+
+
+def test_tetragonal_b_is_a_with_no_esd_and_the_volume_is_the_cells() -> None:
+    indexed, cell_fit = indexed_synthetic()
+
+    fit = refine_lattice(indexed, WAVELENGTH, cell_fit.cell, fit_zero=True)
+
+    assert fit.b == fit.a
+    assert fit.esd_b is None
+    assert (fit.alpha, fit.beta, fit.gamma) == (90.0, 90.0, 90.0)
+    assert fit.esd_alpha is None and fit.esd_beta is None and fit.esd_gamma is None
+    assert fit.parameter_names == ("a", "c")
+    assert fit.covariance.shape == (3, 3)
+    assert fit.volume == fit.cell.volume
+    assert fit.volume == pytest.approx(fit.a**2 * fit.c)
+
+
+def test_volume_esd_carries_the_correlation_of_a_and_c() -> None:
+    indexed, cell_fit = indexed_synthetic()
+    fit = refine_lattice(indexed, WAVELENGTH, cell_fit.cell, fit_zero=True)
+
+    block = fit.covariance[:2, :2]
+    rng = np.random.default_rng(5)
+    a, c = rng.multivariate_normal([fit.a, fit.c], block, 200_000).T
+    monte_carlo = float(np.std(a**2 * c))
+    assert fit.esd_volume == pytest.approx(monte_carlo, rel=0.1)
+
+    # With the zero refined, a and c come out positively correlated here (both
+    # trade against the zero in the same direction), and since V = a^2 c rises
+    # with both, the correlated esd is larger than the one that treats them
+    # as independent.
+    correlation = block[0, 1] / np.sqrt(block[0, 0] * block[1, 1])
+    _, independent = cell_volume(fit.cell, {"a": fit.esd_a, "c": fit.esd_c})
+    assert correlation > 0.0
+    assert fit.esd_volume > independent
+
+
+def test_a_step_the_cell_rejects_does_not_stop_the_fit() -> None:
+    indexed, cell_fit = indexed_synthetic()
+    # A start far enough out that a reflection cannot diffract at first.
+    far = Cell.tetragonal(cell_fit.cell.a, 0.5)
+
+    fit = refine_lattice(indexed, WAVELENGTH, far, fit_zero=True)
+
+    assert np.all(np.isfinite(fit.residuals))

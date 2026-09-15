@@ -34,6 +34,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from xrdkit import __version__
+from xrdkit.cell import Cell
 from xrdkit.density import (
     cell_volume,
     formula_mass,
@@ -45,7 +46,6 @@ from xrdkit.indexing import (
     DEFAULT_ZERO_OFFSET,
     SUPPORTED_SPACE_GROUPS,
     IndexedPeak,
-    TetragonalCell,
     index_and_refine,
     indexed_to_csv,
     indexing_summary,
@@ -429,7 +429,7 @@ def _run_plot(args: argparse.Namespace) -> int:
         try:
             indexed, fit = index_and_refine(
                 peaks,
-                start_cell=TetragonalCell(a=a, c=c),
+                start_cell=Cell.tetragonal(a, c),
                 wavelength=scan.wavelength,
                 zero_offset=args.zero,
                 space_group=space_group,
@@ -673,7 +673,10 @@ def _run_density(args: argparse.Namespace) -> int:
             a, c = args.cell
             if args.esd_cell is not None:
                 esd_a, esd_c = args.esd_cell
-            volume, esd_volume = cell_volume(TetragonalCell(a=a, c=c), esd_a, esd_c)
+            volume, esd_volume = cell_volume(
+                Cell.tetragonal(a, c),
+                None if args.esd_cell is None else {"a": esd_a, "c": esd_c},
+            )
         else:
             volume, esd_volume = args.volume, args.esd_volume
         density, esd_density = theoretical_density(
