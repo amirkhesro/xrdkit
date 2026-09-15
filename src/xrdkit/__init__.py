@@ -21,6 +21,7 @@ from xrdkit.broadening import (
     pseudo_voigt_from_components,
     split_pseudo_voigt,
 )
+from xrdkit.cell import Cell
 from xrdkit.config import (
     ConfigError,
     check_composition,
@@ -136,6 +137,7 @@ __all__ = [
     "BroadeningCorrection",
     "Caglioti",
     "CandidateMatch",
+    "Cell",
     "CellFit",
     "CodRecord",
     "ComponentSizeStrain",
