@@ -977,16 +977,20 @@ PEAK_COLUMNS = [
     "found_two_theta",
     "fitted_two_theta",
     "esd_fitted_two_theta",
+    "corrected_two_theta",
+    "d_spacing",
     "fit_rejected",
     "kalpha2_satellite",
     "recovered",
     "intensity",
+    "relative_intensity",
     "fwhm",
     "h",
     "k",
     "l",
     "calculated_two_theta",
     "difference",
+    "n_candidates",
 ]
 
 # The columns of a lattice results row, which say what was done and how.
@@ -1172,6 +1176,43 @@ def test_lattice_refines_a_tetragonal_scan_and_writes_both_files(
     assert "refine_lattice" in row["method"]
 
 
+def test_lattice_peaks_file_is_a_complete_indexing_table(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+
+    assert main(argv) == 0
+
+    folder = tmp_path / "out" / "results" / "lattice"
+    with (folder / "peaks_ttb.csv").open(newline="", encoding="utf-8") as handle:
+        header = next(csv.reader(handle))
+    assert header.index("corrected_two_theta") == (
+        header.index("esd_fitted_two_theta") + 1
+    )
+    assert header.index("d_spacing") == header.index("corrected_two_theta") + 1
+    assert header.index("relative_intensity") == header.index("intensity") + 1
+    assert header[-1] == "n_candidates"
+    # The results file keeps its columns, so rows written before still append.
+    with (folder / "lattice.csv").open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == RESULT_COLUMNS
+
+    peaks = _rows(folder / "peaks_ttb.csv")
+    (row,) = _rows(folder / "lattice.csv")
+    zero = float(row["zero_deg"])
+    for peak in peaks:
+        corrected = float(peak["corrected_two_theta"])
+        theta = np.radians(corrected / 2.0)
+        assert float(peak["d_spacing"]) == pytest.approx(
+            LATTICE_WAVELENGTH / (2.0 * np.sin(theta)), abs=1e-5
+        )
+        used = peak["fitted_two_theta"] or peak["found_two_theta"]
+        if peak["kalpha2_satellite"] == "True":
+            used = peak["found_two_theta"]
+        assert corrected == pytest.approx(float(used) - zero, abs=2e-4)
+    assert max(float(peak["relative_intensity"]) for peak in peaks) == 100.0
+    indexed = [peak for peak in peaks if peak["h"] != ""]
+    assert indexed
+    assert all(int(peak["n_candidates"]) >= 1 for peak in indexed)
+
+
 def test_lattice_appends_a_row_per_run(tmp_path, capsys) -> None:
     argv, _ = _ttb_lattice_argv(tmp_path)
 
@@ -1258,6 +1299,16 @@ def test_lattice_refines_by_the_form_of_the_sample(project, capsys, form) -> Non
     lines = capsys.readouterr().out.splitlines()
     (row,) = _rows(project / "results" / "lattice" / "ttb" / "lattice_ttb.csv")
     assert row["form"] == form
+    # With the zero or the displacement taken off, an indexed peak sits at the
+    # Bragg position of its reflection in the refined cell.
+    cell = Cell.tetragonal(float(row["a_angstrom"]), float(row["c_angstrom"]))
+    peaks = _rows(project / "results" / "lattice" / "ttb" / "peaks_ttb.csv")
+    indexed = [peak for peak in peaks if peak["h"] != ""]
+    assert indexed
+    for peak in indexed:
+        d = cell.d_spacing(int(peak["h"]), int(peak["k"]), int(peak["l"]))
+        bragg = 2.0 * np.degrees(np.arcsin(LATTICE_WAVELENGTH / (2.0 * d)))
+        assert float(peak["corrected_two_theta"]) == pytest.approx(bragg, abs=0.01)
     assert float(row["a_angstrom"]) == pytest.approx(12.58, abs=0.003)
     assert float(row["c_angstrom"]) == pytest.approx(3.96, abs=0.003)
     if form == "pellet":
@@ -1406,11 +1457,15 @@ def test_lattice_recovers_a_satellite_that_matches_a_reflection(
     assert fitted == pytest.approx(coincident, abs=DEFAULT_TOLERANCE)
     assert (recovered["h"], recovered["k"], recovered["l"]) == ("2", "2", "2")
     assert abs(float(recovered["difference"])) <= DEFAULT_TOLERANCE
+    # Every peak indexed has at least one candidate; an excluded satellite took
+    # no part in the indexing and has no count.
+    assert all(int(peak["n_candidates"]) >= 1 for peak in peaks if peak["h"] != "")
     # Every other flagged peak is a satellite of a lone reflection, and stays
     # out.
     others = [peak for peak in peaks if peak["kalpha2_satellite"] == "True"]
     assert others
     assert all(peak["h"] == "" for peak in others)
+    assert all(peak["n_candidates"] == "" for peak in others)
     assert int(row["n_peaks_recovered"]) == 1
     assert int(row["n_satellites"]) == len(others)
     assert f"{len(others)} satellites excluded, 1 recovered; " in line

@@ -1122,6 +1122,22 @@ def _calculated_two_theta(
     return 2.0 * math.degrees(theta) + shift
 
 
+def _corrected_two_theta(fit: LatticeFit, observed: float) -> float:
+    """``observed`` with the refined zero and displacement taken off: the
+    position whose Bragg angle, moved as :func:`_calculated_two_theta` moves a
+    reflection, lands on ``observed``. The displacement shift depends on that
+    angle, so it is found by iteration, which the shift's small size makes
+    converge at once."""
+    corrected = observed - fit.zero
+    if fit.displacement is None:
+        return corrected
+    for _ in range(5):
+        theta = math.radians(corrected / 2.0)
+        shift = math.degrees(-2.0 * fit.displacement * math.cos(theta) / fit.radius_mm)
+        corrected = observed - fit.zero - shift
+    return corrected
+
+
 def _number(value: float | None, digits: int) -> str:
     """``value`` to ``digits`` places, or an empty cell for None or nan."""
     if value is None or not math.isfinite(value):
@@ -1137,9 +1153,18 @@ def _write_lattice_peaks(
     fit: LatticeFit,
     wavelength: float,
 ) -> Path:
-    """Write one row per peak: found and fitted positions, the fit, whether it
-    is a satellite or was recovered from one, and the reflection assigned with
-    its difference from the refined position."""
+    """Write one row per peak: found and fitted positions, the fit, the
+    position after the refined zero and displacement are taken off and its d
+    spacing, whether it is a satellite or was recovered from one, its
+    intensity absolute and relative to the strongest peak, and the reflection
+    assigned with its difference from the refined position and the number of
+    reflections within the indexing tolerance.
+
+    The corrected position is of the position that took part in the indexing,
+    fitted or found, or of the found position for a peak that took no part;
+    its d spacing is from ``wavelength`` and the position as written. The
+    candidate count is left empty for a peak that took no part."""
+    strongest = max(peak.intensity for peak in found)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -1150,19 +1175,30 @@ def _write_lattice_peaks(
             if reflection is not None:
                 calculated = _calculated_two_theta(fit, reflection.hkl, wavelength)
                 difference = entry.peak.two_theta - calculated
+            position = entry.peak.two_theta if entry is not None else peak.two_theta
+            corrected = _number(_corrected_two_theta(fit, position), 4)
+            d_spacing = None
+            if corrected:
+                d_spacing = wavelength / (
+                    2.0 * math.sin(math.radians(float(corrected) / 2.0))
+                )
             writer.writerow(
                 [
                     _number(peak.two_theta, 4),
                     _number(record["fitted"], 4),
                     _number(record["esd"], 5),
+                    corrected,
+                    _number(d_spacing, 5),
                     "" if record["rejected"] is None else record["rejected"],
                     peak.kalpha2_of is not None,
                     record["recovered"],
                     _number(peak.intensity, 1),
+                    _number(100.0 * peak.intensity / strongest, 1),
                     _number(peak.fwhm, 4),
                     *(reflection.hkl if reflection else ("", "", "")),
                     _number(calculated, 4),
                     _number(difference, 4),
+                    "" if entry is None else len(entry.candidates),
                 ]
             )
     return path
@@ -1172,16 +1208,20 @@ LATTICE_PEAK_COLUMNS = (
     "found_two_theta",
     "fitted_two_theta",
     "esd_fitted_two_theta",
+    "corrected_two_theta",
+    "d_spacing",
     "fit_rejected",
     "kalpha2_satellite",
     "recovered",
     "intensity",
+    "relative_intensity",
     "fwhm",
     "h",
     "k",
     "l",
     "calculated_two_theta",
     "difference",
+    "n_candidates",
 )
 
 

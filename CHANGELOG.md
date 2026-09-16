@@ -244,6 +244,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.gitignore` also covers `*.gpx`, `*.xy`, `*.xye` and `*.cif`, and the
   `results/`, `output/`, `figures/` and `data/` folders, so a refinement run
   in a working copy cannot leave data or output staged by accident.
+- The peaks file of `xrdkit lattice` gains `corrected_two_theta` and
+  `d_spacing` after `esd_fitted_two_theta`, `relative_intensity` after
+  `intensity`, and `n_candidates` last, so that it is a complete indexing
+  table; the results file `lattice.csv` keeps its columns.
 
 ### Documentation
 
