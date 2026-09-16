@@ -7,7 +7,7 @@
 5. [Workflow 2: identifying the phases](#5-workflow-2-identifying-the-phases)
 6. [Workflow 3: lattice parameters and theoretical density](#6-workflow-3-lattice-parameters-and-theoretical-density)
 7. [Workflow 4: Rietveld refinement](#7-workflow-4-rietveld-refinement)
-8. [Known limitations of version 0.1.0](#8-known-limitations-of-version-010)
+8. [Known limitations](#8-known-limitations)
 
 If Python is not yet installed on your machine, start with
 [GETTING_STARTED.md](GETTING_STARTED.md), which installs Python and xrdkit
@@ -495,10 +495,12 @@ trusted to put reflections near the right peaks, and each later cycle indexes
 the whole list against the cell the previous cycle gave. It also searches for
 the zero offset first, unless you pass one.
 
-The indexing in `xrdkit.indexing` is tetragonal, and `P4bm` is the only space
-group whose reflection conditions it knows; pass `space_group=None` to apply
-none. `TTB_CELL` is the tetragonal tungsten bronze starting cell, a = 12.45 and
-c = 3.94 angstrom.
+The indexing in `xrdkit.indexing` takes a cell of any crystal system, and knows
+the reflection conditions of the eight space groups listed in Section 8.2. With
+no `space_group` passed it applies no conditions at all, so the examples here
+pass `space_group="P4bm"`, the group of the tetragonal tungsten bronze, to keep
+the reflections that group forbids out of the labels. `TTB_CELL` is the
+tetragonal tungsten bronze starting cell, a = 12.45 and c = 3.94 angstrom.
 
 Continues `plot_pattern.py`. Add these lines at the end of the file.
 
@@ -1409,8 +1411,8 @@ shutil.copyfile(result["exports"]["instprm"], f"data/standards/{STEM}.instprm")
 
 Save this as `lattice_density.py` in the project folder, edit the settings
 lines at the top, and run it with `py lattice_density.py` on Windows, or
-`python3 lattice_density.py` on macOS. It takes about two minutes, nearly all
-of it in the Le Bail refinement.
+`python3 lattice_density.py` on macOS. It takes three to four minutes, nearly
+all of it in the Le Bail refinement.
 
 The whole of `lattice_density.py`:
 
@@ -2035,7 +2037,7 @@ V = 611.546 +/- 0.050 cubic angstrom
 theoretical density 5.3615 +/- 0.0004 g/cm3
 ```
 
-The volume `cell_volume` returns agrees with the volume GSAS-II reports, 611.551
+The volume `cell_volume` returns agrees with the volume GSAS-II reports, 611.546
 cubic angstrom, but its esd is a little smaller, 0.050 against 0.058, because
 `cell_volume` propagates the esds of a and c as though the two were
 uncorrelated, which the fits here give no covariance to do better with. Use
@@ -3035,7 +3037,7 @@ parameter file and the same script becomes the shape to wrap a refinement of
 your own in: build the job, run it inside `try`, and on `Gsas2Error` write the
 report out rather than losing what the log had to say.
 
-## 8. Known limitations of version 0.1.0
+## 8. Known limitations
 
 Eight things the kit does not do yet. The first six are met somewhere in this
 guide and are on the list for the next release; the last two concern the K
@@ -3101,10 +3103,18 @@ ordinary dataclass and every routine downstream of the reader takes one of those
 rather than a file path. Load the columns yourself and fill the fields in, as
 `read_xy.py` above does.
 
-Indexing is tetragonal only, and `P4bm` is the only space group whose reflection
-conditions `xrdkit.indexing` knows. Pass `space_group=None` to apply none, which
-works for any tetragonal cell but labels reflections the conditions would have
-forbidden. Nothing in the module handles a lower symmetry cell.
+Space group coverage is partial. Indexing and refinement take a `Cell` of any of
+the seven crystal systems, but reflection conditions, the equivalence of
+reflections and their multiplicities come from the symmetry operations of eight
+space groups only: Pm-3m, P4mm, P4bm, P4/mbm, R3c, R3m, Pbnm and Amm2. A symbol
+outside those eight raises a `ValueError` in the library, while `xrdkit plot`
+and `xrdkit lattice` print a note and index without conditions. With no space
+group passed the default is `None`, which applies no conditions and takes the
+equivalence from the crystal system alone, so a pattern of the tetragonal
+tungsten bronze must be given `space_group="P4bm"` or its labels may name
+reflections the group forbids. Trigonal and rhombohedral groups are handled on
+hexagonal axes only, so a cell in the rhombohedral setting has to be converted
+to hexagonal axes first.
 
 `standard_stages` is the instrument calibration sequence, background and scale,
 zero, cell, U V W, X Y, SH/L, and not a sample refinement sequence. There is no
