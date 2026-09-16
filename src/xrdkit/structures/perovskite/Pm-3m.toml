@@ -24,6 +24,7 @@ reference = "SrTiO3, COD 1577245"
 # A is on 1a, (0, 0, 0).
 [[sites]]
 label = "A1"
+elements = ["Sr"]
 kind = "A"
 wyckoff = "1a"
 free = []
@@ -32,6 +33,7 @@ uiso_group = "A"
 # B is on 1b, (1/2, 1/2, 1/2).
 [[sites]]
 label = "B1"
+elements = ["Ti"]
 kind = "B"
 wyckoff = "1b"
 free = []
@@ -40,6 +42,7 @@ uiso_group = "B"
 # O is on 3c, (0, 1/2, 1/2).
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "3c"
 free = []

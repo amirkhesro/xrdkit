@@ -22,14 +22,43 @@ holds
     ``cell``, ``{a = ..., c = ...}`` in angstroms and degrees, required with
     ``library`` and then with exactly the entry's cell parameters, optional
     with ``cif``; and optionally ``z``, formula units per cell,
-    ``exchange``, lists of the elements whose occupancies are traded, and
-    ``origin``, the label of the site that fixes the origin.
+    ``exchange``, lists of the elements whose occupancies are traded,
+    ``atoms`` and ``origin``.
+
+    ``atoms`` takes the shapes :mod:`xrdkit.config` reads, with its readers.
+    With ``library`` it is a table of the entry's sites by label, each the
+    atoms on it, ``{A1 = {Sr1 = "Sr", La1 = "La"}, ...}``; a site named
+    holds exactly those atoms, and one not named the prototype's elements.
+    When it is given, every element of the composition must be on a site, so
+    an element the prototype does not carry must be placed by it; it may be
+    left out when the composition holds only the prototype's elements. With
+    ``cif`` it is the list of the CIF's sites, ``[{atoms = {Nb1 = "Nb"},
+    wyckoff = "2b", kind = "B"}, ...]``, each named by its first atom.
+
+    ``origin`` is the site that fixes the origin: a site label, one of the
+    entry's sites with ``library``; ``false``, to fix none; or, with
+    ``cif``, ``{site, axis}``, axis x, y or z. Left out, the entry's origin
+    site applies, and a CIF structure has none. With ``cif`` and ``atoms``
+    the site must be one of the atoms' sites.
 
 ``[samples.<key>]``
     ``file``, its scan; ``instrument``, an instrument key; ``structures``,
     one or more structure keys; ``form``, powder or pellet; and optionally
     ``stage``, free text, ``temperature_c``, ``archimedes``, its measured
-    density in g/cm3, and ``notes``.
+    density in g/cm3, ``notes``, and ``refine``, a table overriding any key
+    of ``[refine]`` for this sample.
+
+``[refine]``
+    Optional defaults for refining every sample, over the package's own:
+    ``two_theta``, ``[low, high]`` in degrees (the scan's own range when
+    left out); ``background``, ``{function, terms}``, by default
+    chebyschev-1 with 6 terms; ``max_passes``, the most passes of a stage
+    by mode, ``{lebail, fixed_atoms, coordinates, occupancies}``, by default
+    60, 60, 100 and 100; ``unsettled``, what becomes of a stage not settled
+    by then, accept or reject by mode, by default accept; and ``followed``,
+    reflections to follow from mode to mode as ``[h, k, l]`` triples, by
+    default none. A table given in part keeps the rest of the table below
+    it; :func:`refine_settings` resolves a sample's settings.
 
 Sample and structure keys name folders, so they hold only letters, digits,
 dots, underscores and hyphens.
@@ -43,9 +72,15 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from xrdkit.config import (
+    UNSETTLED_RULES,
+    ConfigError,
+    read_library_atoms,
+    read_sites,
+)
 from xrdkit.density import ATOMIC_MASSES, parse_formula
 from xrdkit.library import list_entries, load_entry
 
@@ -54,12 +89,14 @@ __all__ = [
     "PROJECT_FILE",
     "Instrument",
     "Project",
+    "Refine",
     "Sample",
     "StructureSpec",
     "find_project",
     "load_project",
     "load_project_text",
     "project_template",
+    "refine_settings",
     "resolved_cell",
     "resolved_z",
     "results_dir",
@@ -71,14 +108,29 @@ VERSION = 1
 FORMS = ("powder", "pellet")
 CELL_PARAMETERS = ("a", "b", "c", "alpha", "beta", "gamma")
 
-TOP_LEVEL = ("project", "instruments", "structures", "samples")
+TOP_LEVEL = ("project", "instruments", "structures", "samples", "refine")
 PROJECT_KEYS = ("name", "version")
 INSTRUMENT_REQUIRED = ("wavelength", "ka2")
 INSTRUMENT_OPTIONAL = ("radius", "instprm")
 STRUCTURE_REQUIRED = ("composition",)
-STRUCTURE_OPTIONAL = ("library", "cif", "cell", "z", "exchange", "origin")
+STRUCTURE_OPTIONAL = ("library", "cif", "cell", "z", "exchange", "origin", "atoms")
 SAMPLE_REQUIRED = ("file", "instrument", "structures", "form")
-SAMPLE_OPTIONAL = ("stage", "temperature_c", "archimedes", "notes")
+SAMPLE_OPTIONAL = ("stage", "temperature_c", "archimedes", "notes", "refine")
+AXES = ("x", "y", "z")
+
+# The refinement modes, in order, the keys of a refine table and the
+# package's defaults for them.
+REFINE_MODES = ("lebail", "fixed_atoms", "coordinates", "occupancies")
+REFINE_KEYS = ("two_theta", "background", "max_passes", "unsettled", "followed")
+BACKGROUND_KEYS = ("function", "terms")
+DEFAULT_BACKGROUND = {"function": "chebyschev-1", "terms": 6}
+DEFAULT_MAX_PASSES = {
+    "lebail": 60,
+    "fixed_atoms": 60,
+    "coordinates": 100,
+    "occupancies": 100,
+}
+DEFAULT_UNSETTLED = dict.fromkeys(REFINE_MODES, "accept")
 
 # A key that names a folder.
 FOLDER_KEY = re.compile(r"[A-Za-z0-9._-]+")
@@ -100,7 +152,15 @@ class Instrument:
 @dataclass(frozen=True)
 class StructureSpec:
     """A structure model: a library entry or a CIF, the composition put on
-    it, and the cell, formula units, exchanges and origin site given."""
+    it, and the cell, formula units, exchanges, origin and atoms given.
+
+    The origin is one of three: the entry's default, ``origin`` None and
+    ``origin_fixed`` true; a site given, ``origin`` its label, with
+    ``origin_axis`` when the file gives one; or none fixed, ``origin_fixed``
+    false. ``atoms`` is None when not given, else its sites as
+    :func:`xrdkit.config.read_sites` gives them; those of a library
+    structure carry their entry ``label`` too, and only the sites named are
+    there."""
 
     key: str
     composition: str
@@ -110,12 +170,16 @@ class StructureSpec:
     z: int | None = None
     exchange: tuple[tuple[str, ...], ...] = ()
     origin: str | None = None
+    origin_axis: str | None = None
+    origin_fixed: bool = True
+    atoms: tuple[dict, ...] | None = None
 
 
 @dataclass(frozen=True)
 class Sample:
     """A sample: its scan, instrument key, structure keys, form, and
-    optionally its stage, temperature, measured density and notes."""
+    optionally its stage, temperature, measured density, notes and the
+    ``[refine]`` keys it overrides, checked, a table given in part."""
 
     key: str
     file: Path
@@ -126,6 +190,23 @@ class Sample:
     temperature_c: float | None = None
     archimedes: float | None = None
     notes: str = ""
+    refine: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Refine:
+    """Refinement settings: the range in degrees, None for the scan's own;
+    the background function and terms; the most passes of a stage and the
+    rule for one not settled, by mode; and the reflections followed, as
+    (h, k, l)."""
+
+    two_theta: tuple[float, float] | None = None
+    background: dict[str, object] = field(
+        default_factory=lambda: dict(DEFAULT_BACKGROUND)
+    )
+    max_passes: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_MAX_PASSES))
+    unsettled: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_UNSETTLED))
+    followed: tuple[tuple[int, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +220,7 @@ class Project:
     instruments: dict[str, Instrument]
     structures: dict[str, StructureSpec]
     samples: dict[str, Sample]
+    refine: Refine = field(default_factory=Refine)
 
 
 def find_project(start: str | os.PathLike | None = None) -> Path:
@@ -221,6 +303,14 @@ class _Checker:
             raise self.fail(where, f"must be a positive whole number, not {value!r}")
         return value
 
+    def config(self, read, *args):
+        """``read(*args)``, a reader of :mod:`xrdkit.config`, its error made
+        one of this file's."""
+        try:
+            return read(*args)
+        except ConfigError as error:
+            raise ValueError(f"{self.source}: {error}") from None
+
     def path(self, value: object, where: str, exists: bool) -> Path:
         path = self.root / self.string(value, where)
         if exists and not path.is_file():
@@ -285,7 +375,7 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
 
     composition = check.string(table["composition"], f"{where}.composition")
     try:
-        parse_formula(composition)
+        formula = parse_formula(composition)
     except ValueError as error:
         raise check.fail(f"{where}.composition", str(error)) from None
 
@@ -345,15 +435,19 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
                     raise check.fail(at, f"{element!r} is not an element symbol")
         exchange = tuple(tuple(group) for group in groups)
 
-    origin = None
-    if "origin" in table:
-        origin = check.string(table["origin"], f"{where}.origin")
-        labels = [site.label for site in entry.sites] if entry else None
-        if labels is not None and origin not in labels:
-            raise check.fail(
-                f"{where}.origin",
-                f"no site {origin!r} in {library}; the sites are {', '.join(labels)}",
+    atoms = None
+    if "atoms" in table:
+        at = f"{where}.atoms"
+        if entry:
+            given, _ = check.config(
+                read_library_atoms, table["atoms"], at, entry, False
             )
+            _check_placed(check, at, entry, given, formula)
+            atoms = tuple(given)
+        else:
+            atoms = tuple(check.config(read_sites, table["atoms"], at))
+
+    origin, origin_axis, origin_fixed = _origin(check, where, table, entry, atoms)
 
     return StructureSpec(
         key=key,
@@ -364,7 +458,105 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
         z=z,
         exchange=exchange,
         origin=origin,
+        origin_axis=origin_axis,
+        origin_fixed=origin_fixed,
+        atoms=atoms,
     )
+
+
+def _plural(elements: list[str], one: str, many: str) -> str:
+    return one if len(elements) == 1 else many
+
+
+def _check_placed(
+    check: _Checker,
+    where: str,
+    entry,
+    given: list[dict],
+    formula: Mapping[str, float],
+) -> None:
+    """Check that every element of ``formula`` is on a site of ``entry`` once
+    the sites ``given`` hold the atoms given for them and the rest the
+    prototype's elements."""
+    by_label = {site["label"]: site for site in given}
+    held = set()
+    for site in entry.sites:
+        if site.label in by_label:
+            held.update(by_label[site.label]["atoms"].values())
+        else:
+            held.update(site.elements)
+    prototype = {element for site in entry.sites for element in site.elements}
+    labels = ", ".join(site.label for site in entry.sites)
+    unplaced = [element for element in formula if element not in held]
+    new = [element for element in unplaced if element not in prototype]
+    if new:
+        raise check.fail(
+            where,
+            f"{', '.join(new)} of the composition {_plural(new, 'is', 'are')} not "
+            f"in the {entry.name} prototype; place {_plural(new, 'it', 'them')} "
+            f"on one of its sites {labels}",
+        )
+    if unplaced:
+        raise check.fail(
+            where,
+            f"{', '.join(unplaced)} of the composition "
+            f"{_plural(unplaced, 'is', 'are')} on none of the sites once atoms "
+            f"replaces the prototype's; keep {_plural(unplaced, 'it', 'them')} on "
+            f"one of the sites {labels}",
+        )
+
+
+def _origin(
+    check: _Checker,
+    where: str,
+    table: Mapping,
+    entry,
+    atoms: tuple[dict, ...] | None,
+) -> tuple[str | None, str | None, bool]:
+    """The origin site given, its axis, and whether an origin is fixed."""
+    if "origin" not in table:
+        return None, None, True
+    value = table["origin"]
+    at = f"{where}.origin"
+    if value is False:
+        return None, None, False
+    axis = None
+    if isinstance(value, str):
+        site = check.string(value, at)
+    elif isinstance(value, Mapping) and entry is None:
+        given = check.keys(value, at, ("site", "axis"))
+        site = check.string(given["site"], f"{at}.site")
+        axis = given["axis"]
+        if axis not in AXES:
+            raise check.fail(f"{at}.axis", f"must be x, y or z, not {axis!r}")
+        at = f"{at}.site"
+    elif isinstance(value, Mapping):
+        raise check.fail(
+            at,
+            "the {site, axis} form goes with cif; with library give one of the "
+            f"sites of {entry.name}: {', '.join(s.label for s in entry.sites)}",
+        )
+    else:
+        raise check.fail(
+            at,
+            f"must be a site label, false, or {{site, axis}} with cif, not {value!r}",
+        )
+    if entry is not None:
+        labels = [s.label for s in entry.sites]
+        if site not in labels:
+            raise check.fail(
+                at,
+                f"no site {site!r} in {entry.name}; the sites are {', '.join(labels)}",
+            )
+    elif atoms is not None:
+        names = [s["name"] for s in atoms]
+        if site not in names:
+            raise check.fail(
+                at,
+                f"no site {site!r} in atoms; sites are named by their first atom: "
+                f"{', '.join(names)}",
+            )
+    return site, axis, True
 
 
 def _sample(
@@ -427,7 +619,114 @@ def _sample(
             else None
         ),
         notes=check.string(table.get("notes", ""), f"{where}.notes", empty=True),
+        refine=(
+            _refine(check, table["refine"], f"{where}.refine")
+            if "refine" in table
+            else {}
+        ),
     )
+
+
+def _refine(check: _Checker, value: object, where: str) -> dict[str, object]:
+    """The keys a ``refine`` table gives, checked; a table given in part."""
+    table = check.keys(value, where, (), REFINE_KEYS)
+    found: dict[str, object] = {}
+
+    if "two_theta" in table:
+        at = f"{where}.two_theta"
+        pair = table["two_theta"]
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise check.fail(at, f"must be [low, high] in degrees, not {pair!r}")
+        low, high = (
+            check.number(item, f"{at}[{index}]") for index, item in enumerate(pair)
+        )
+        if not 0.0 <= low < high <= 180.0:
+            raise check.fail(
+                at, f"must rise from low to high within 0 to 180 degrees, not {pair!r}"
+            )
+        found["two_theta"] = (low, high)
+
+    if "background" in table:
+        at = f"{where}.background"
+        given = check.keys(table["background"], at, (), BACKGROUND_KEYS)
+        background: dict[str, object] = {}
+        if "function" in given:
+            background["function"] = check.string(given["function"], f"{at}.function")
+        if "terms" in given:
+            background["terms"] = check.integer(given["terms"], f"{at}.terms")
+        found["background"] = background
+
+    if "max_passes" in table:
+        at = f"{where}.max_passes"
+        given = check.keys(table["max_passes"], at, (), REFINE_MODES)
+        found["max_passes"] = {
+            mode: check.integer(passes, f"{at}.{mode}")
+            for mode, passes in given.items()
+        }
+
+    if "unsettled" in table:
+        at = f"{where}.unsettled"
+        given = check.keys(table["unsettled"], at, (), REFINE_MODES)
+        for mode, rule in given.items():
+            if rule not in UNSETTLED_RULES:
+                raise check.fail(
+                    f"{at}.{mode}", f"must be accept or reject, not {rule!r}"
+                )
+        found["unsettled"] = dict(given)
+
+    if "followed" in table:
+        at = f"{where}.followed"
+        reflections = table["followed"]
+        if not isinstance(reflections, list):
+            raise check.fail(
+                at, f"must be a list of [h, k, l] triples, not {reflections!r}"
+            )
+        followed = []
+        for index, hkl in enumerate(reflections):
+            if (
+                not isinstance(hkl, list)
+                or len(hkl) != 3
+                or any(isinstance(i, bool) or not isinstance(i, int) for i in hkl)
+                or not any(hkl)
+            ):
+                raise check.fail(
+                    f"{at}[{index}]",
+                    f"must be [h, k, l], three whole numbers not all 0, not {hkl!r}",
+                )
+            followed.append(tuple(hkl))
+        found["followed"] = tuple(followed)
+    return found
+
+
+def _resolved(base: Refine, overrides: Mapping[str, object]) -> Refine:
+    """``base`` with ``overrides`` over it, a table given in part keeping the
+    rest of ``base``'s."""
+    return Refine(
+        two_theta=overrides.get("two_theta", base.two_theta),
+        background={**base.background, **overrides.get("background", {})},
+        max_passes={**base.max_passes, **overrides.get("max_passes", {})},
+        unsettled={**base.unsettled, **overrides.get("unsettled", {})},
+        followed=overrides.get("followed", base.followed),
+    )
+
+
+def refine_settings(project: Project, sample: Sample | str) -> Refine:
+    """The refinement settings of ``sample``, a sample or its key: the
+    package defaults, the project's ``[refine]`` over them, and the sample's
+    own ``refine`` over that.
+
+    Raises
+    ------
+    KeyError
+        If ``project`` has no sample of that key.
+    """
+    key = sample.key if isinstance(sample, Sample) else sample
+    if key not in project.samples:
+        raise KeyError(
+            f"no sample {key!r} in the project; there are "
+            + (", ".join(project.samples) or "none")
+        )
+    return _resolved(project.refine, project.samples[key].refine)
 
 
 def load_project(path: str | os.PathLike | None = None) -> Project:
@@ -495,6 +794,7 @@ def load_project_text(text: str, path: str | os.PathLike) -> Project:
         key: _sample(check, key, value, instruments, structures)
         for key, value in check.table(data.get("samples", {}), "samples").items()
     }
+    overrides = _refine(check, data["refine"], "refine") if "refine" in data else {}
     return Project(
         root=source.parent,
         name=name,
@@ -502,6 +802,7 @@ def load_project_text(text: str, path: str | os.PathLike) -> Project:
         instruments=instruments,
         structures=structures,
         samples=samples,
+        refine=_resolved(Refine(), overrides),
     )
 
 
@@ -594,8 +895,11 @@ version = 1
 # perovskite/P4mm (xrdkit.list_entries() lists them), or cif, a CIF file.
 # composition is the formula put on it. cell is required with library, with
 # exactly the entry's cell parameters, and optional with cif. z, exchange
-# (groups of elements whose occupancies are traded) and origin (the label of
-# the site that fixes the origin) are optional.
+# (groups of elements whose occupancies are traded), origin (the label of the
+# site that fixes the origin, or false for none) and atoms are optional. With
+# library, atoms places the elements the entry's prototype lacks on its
+# sites, A1 = {{ Sr1 = "Sr", La1 = "La" }} say, and must place every such
+# element of the composition.
 #
 # [structures.phase1]
 # library = "ttb/P4bm"
@@ -619,6 +923,23 @@ version = 1
 # temperature_c = 1300
 # archimedes = 5.21
 # notes = ""
+
+# Refinement defaults for every sample, all optional: two_theta, the range in
+# degrees, the scan's own when left out; background; max_passes, the most
+# passes of a stage, and unsettled, accept or reject for a stage still moving
+# after them, by mode; and followed, reflections to follow as [h, k, l]. A
+# sample's own refine table overrides any of them.
+#
+# [refine]
+# two_theta = [15.0, 100.0]
+# background = {{ function = "chebyschev-1", terms = 6 }}
+# max_passes = {{ lebail = 60, fixed_atoms = 60, coordinates = 100, occupancies = 100 }}
+# unsettled = {{ lebail = "accept", fixed_atoms = "accept", coordinates = "accept", occupancies = "accept" }}
+# followed = [[2, 1, 1], [4, 0, 0]]
+#
+# [samples.sample1.refine]
+# two_theta = [17.0, 100.0]
+# background = {{ terms = 8 }}
 """
 
 

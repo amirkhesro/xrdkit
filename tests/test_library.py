@@ -84,7 +84,7 @@ def test_ttb_entry() -> None:
         ("O4", "2b"),
         ("O5", "8d"),
     ]
-    assert entry.sites[1] == Site("A2", "A", "4c", ("x", "z"), "A")
+    assert entry.sites[1] == Site("A2", "A", "4c", ("x", "z"), "A", ("Ba", "Sr"))
     assert {site.uiso_group for site in entry.sites} == {"A", "B", "O"}
 
 
@@ -227,9 +227,9 @@ def test_perovskite_entry() -> None:
     assert entry.origin_site is None
     assert "1577245" in entry.reference
     assert entry.sites == (
-        Site("A1", "A", "1a", (), "A"),
-        Site("B1", "B", "1b", (), "B"),
-        Site("O1", "O", "3c", (), "O"),
+        Site("A1", "A", "1a", (), "A", ("Sr",)),
+        Site("B1", "B", "1b", (), "B", ("Ti",)),
+        Site("O1", "O", "3c", (), "O", ("O",)),
     )
 
 
@@ -309,6 +309,36 @@ def test_free_coordinate_not_xyz(tmp_path) -> None:
 
     with pytest.raises(ValueError, match=r"'test/cubic': sites\[0\]\.free: .*'w'"):
         load_entry("test/cubic", root=tmp_path)
+
+
+def test_site_elements(tmp_path) -> None:
+    write_entry(tmp_path, ENTRY.replace("free = []", 'free = []\nelements = ["Sr"]'))
+
+    entry = load_entry("test/cubic", root=tmp_path)
+    assert entry.sites[0].elements == ("Sr",)
+    assert entry.sites[1].elements == ()
+
+
+@pytest.mark.parametrize(
+    ("elements", "message"),
+    [
+        ('["sr"]', r"sites\[0\]\.elements: must be a list of element symbols"),
+        ('"Sr"', r"sites\[0\]\.elements: must be a list of element symbols"),
+        ('["Sr", "Sr"]', r"sites\[0\]\.elements: names an element twice"),
+    ],
+)
+def test_site_elements_not_element_symbols(tmp_path, elements, message) -> None:
+    write_entry(
+        tmp_path, ENTRY.replace("free = []", f"free = []\nelements = {elements}")
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_entry("test/cubic", root=tmp_path)
+
+
+@pytest.mark.parametrize("name", list_entries())
+def test_every_shipped_site_has_its_prototype_elements(name: str) -> None:
+    assert all(site.elements for site in load_entry(name).sites)
 
 
 @pytest.mark.parametrize(

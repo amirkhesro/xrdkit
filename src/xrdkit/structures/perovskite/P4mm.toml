@@ -26,6 +26,7 @@ reference = "BaTiO3, COD 1559964"
 # A1 is on 1a, (0, 0, z).
 [[sites]]
 label = "A1"
+elements = ["Ba"]
 kind = "A"
 wyckoff = "1a"
 free = ["z"]
@@ -34,6 +35,7 @@ uiso_group = "A"
 # B1 is on 1b, (1/2, 1/2, z).
 [[sites]]
 label = "B1"
+elements = ["Ti"]
 kind = "B"
 wyckoff = "1b"
 free = ["z"]
@@ -42,6 +44,7 @@ uiso_group = "B"
 # O1 is on 1b, (1/2, 1/2, z).
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "1b"
 free = ["z"]
@@ -50,6 +53,7 @@ uiso_group = "O"
 # O2 is on 2c, (1/2, 0, z) and (0, 1/2, z).
 [[sites]]
 label = "O2"
+elements = ["O"]
 kind = "O"
 wyckoff = "2c"
 free = ["z"]

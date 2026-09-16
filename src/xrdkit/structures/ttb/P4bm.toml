@@ -27,6 +27,7 @@ reference = "COD 2100720"
 # A1 is on 2a, (0, 0, z).
 [[sites]]
 label = "A1"
+elements = ["Sr"]
 kind = "A"
 wyckoff = "2a"
 free = ["z"]
@@ -35,6 +36,7 @@ uiso_group = "A"
 # A2 is on 4c, (x, x+1/2, z). y follows x.
 [[sites]]
 label = "A2"
+elements = ["Ba", "Sr"]
 kind = "A"
 wyckoff = "4c"
 free = ["x", "z"]
@@ -43,6 +45,7 @@ uiso_group = "A"
 # B1 is on 2b, (0, 1/2, z). The CIF writes it as (1/2, 0, z).
 [[sites]]
 label = "B1"
+elements = ["Nb"]
 kind = "B"
 wyckoff = "2b"
 free = ["z"]
@@ -51,6 +54,7 @@ uiso_group = "B"
 # B2 is on 8d, the general position.
 [[sites]]
 label = "B2"
+elements = ["Nb"]
 kind = "B"
 wyckoff = "8d"
 free = ["x", "y", "z"]
@@ -59,6 +63,7 @@ uiso_group = "B"
 # O1 is on 4c, (x, x+1/2, z). y follows x.
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "4c"
 free = ["x", "z"]
@@ -66,6 +71,7 @@ uiso_group = "O"
 
 [[sites]]
 label = "O2"
+elements = ["O"]
 kind = "O"
 wyckoff = "8d"
 free = ["x", "y", "z"]
@@ -73,6 +79,7 @@ uiso_group = "O"
 
 [[sites]]
 label = "O3"
+elements = ["O"]
 kind = "O"
 wyckoff = "8d"
 free = ["x", "y", "z"]
@@ -81,6 +88,7 @@ uiso_group = "O"
 # O4 is on 2b, (0, 1/2, z). The CIF writes it as (1/2, 0, z).
 [[sites]]
 label = "O4"
+elements = ["O"]
 kind = "O"
 wyckoff = "2b"
 free = ["z"]
@@ -88,6 +96,7 @@ uiso_group = "O"
 
 [[sites]]
 label = "O5"
+elements = ["O"]
 kind = "O"
 wyckoff = "8d"
 free = ["x", "y", "z"]

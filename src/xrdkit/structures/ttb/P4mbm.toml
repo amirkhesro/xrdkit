@@ -32,6 +32,7 @@ reference = "COD 1563700"
 # A1 is on 2a, (0, 0, 0).
 [[sites]]
 label = "A1"
+elements = ["Ba", "La"]
 kind = "A"
 wyckoff = "2a"
 free = []
@@ -40,6 +41,7 @@ uiso_group = "A"
 # A2 is on 4g, (x, x+1/2, 0). y follows x.
 [[sites]]
 label = "A2"
+elements = ["Ba", "La"]
 kind = "A"
 wyckoff = "4g"
 free = ["x"]
@@ -48,6 +50,7 @@ uiso_group = "A"
 # B1 is on 2c, (0, 1/2, 1/2).
 [[sites]]
 label = "B1"
+elements = ["Nb", "Fe"]
 kind = "B"
 wyckoff = "2c"
 free = []
@@ -56,6 +59,7 @@ uiso_group = "B"
 # B2 is on 8j, (x, y, 1/2).
 [[sites]]
 label = "B2"
+elements = ["Nb", "Fe"]
 kind = "B"
 wyckoff = "8j"
 free = ["x", "y"]
@@ -64,6 +68,7 @@ uiso_group = "B"
 # O1 is on 4h, (x, x+1/2, 1/2). y follows x.
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "4h"
 free = ["x"]
@@ -72,6 +77,7 @@ uiso_group = "O"
 # O2 is on 8j, (x, y, 1/2).
 [[sites]]
 label = "O2"
+elements = ["O"]
 kind = "O"
 wyckoff = "8j"
 free = ["x", "y"]
@@ -80,6 +86,7 @@ uiso_group = "O"
 # O3 is on 8j, (x, y, 1/2).
 [[sites]]
 label = "O3"
+elements = ["O"]
 kind = "O"
 wyckoff = "8j"
 free = ["x", "y"]
@@ -88,6 +95,7 @@ uiso_group = "O"
 # O4 is on 2d, (0, 1/2, 0).
 [[sites]]
 label = "O4"
+elements = ["O"]
 kind = "O"
 wyckoff = "2d"
 free = []
@@ -96,6 +104,7 @@ uiso_group = "O"
 # O5 is on 8i, (x, y, 0).
 [[sites]]
 label = "O5"
+elements = ["O"]
 kind = "O"
 wyckoff = "8i"
 free = ["x", "y"]

@@ -29,6 +29,7 @@ reference = "LaTiO3, COD 1532652"
 # A1 is on 4c, (x, y, 1/4).
 [[sites]]
 label = "A1"
+elements = ["La"]
 kind = "A"
 wyckoff = "4c"
 free = ["x", "y"]
@@ -37,6 +38,7 @@ uiso_group = "A"
 # B1 is on 4b, (1/2, 0, 0).
 [[sites]]
 label = "B1"
+elements = ["Ti"]
 kind = "B"
 wyckoff = "4b"
 free = []
@@ -45,6 +47,7 @@ uiso_group = "B"
 # O1 is on 4c, (x, y, 1/4).
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "4c"
 free = ["x", "y"]
@@ -53,6 +56,7 @@ uiso_group = "O"
 # O2 is on 8d, the general position.
 [[sites]]
 label = "O2"
+elements = ["O"]
 kind = "O"
 wyckoff = "8d"
 free = ["x", "y", "z"]

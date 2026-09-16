@@ -12,11 +12,13 @@ from xrdkit.project import (
     PROJECT_FILE,
     Instrument,
     Project,
+    Refine,
     Sample,
     StructureSpec,
     find_project,
     load_project,
     load_project_text,
+    refine_settings,
     resolved_cell,
     resolved_z,
     results_dir,
@@ -448,6 +450,185 @@ BROKEN = [
         '[structures."cod/2100720"]',
         r"structures\.cod/2100720: key 'cod/2100720' must be letters",
     ),
+    # atoms: a library structure's by the entry's site labels, and every
+    # element of the composition on a site.
+    (
+        "atoms on a site the entry lacks",
+        'origin = "B1"',
+        'origin = "B1"\natoms = { A9 = { Sr1 = "Sr" } }',
+        r"structures\.ttb_x010\.atoms: no site 'A9' in ttb/P4bm; its sites are A1,",
+    ),
+    (
+        "atoms with an element that is not one",
+        'origin = "B1"',
+        'origin = "B1"\natoms = { A1 = { Sr1 = "sr" } }',
+        r"structures\.ttb_x010\.atoms\.A1\.atoms\.Sr1: must be an element symbol",
+    ),
+    (
+        "atoms leaving an element the prototype lacks unplaced",
+        'origin = "B1"',
+        'origin = "B1"\natoms = { A1 = { Sr1 = "Sr", La1 = "La" } }',
+        (
+            r"structures\.ttb_x010\.atoms: Ti of the composition is not in the "
+            r"ttb/P4bm prototype; place it on one of its sites A1, A2, B1, B2, O1, O2, "
+            r"O3, O4, O5$"
+        ),
+    ),
+    (
+        "atoms taking a prototype element off every site",
+        'origin = "B1"',
+        (
+            'origin = "B1"\natoms = { A1 = { La1 = "La" }, A2 = { Ba2 = "Ba" }, '
+            'B1 = { Nb1 = "Nb", Ti1 = "Ti" } }'
+        ),
+        (
+            r"structures\.ttb_x010\.atoms: Sr of the composition is on none of the "
+            r"sites once atoms replaces the prototype's"
+        ),
+    ),
+    (
+        "cif atoms of an unknown kind",
+        "c = 3.9572 }",
+        'c = 3.9572 }\natoms = [{ atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "Q" }]',
+        r"structures\.cod-2100720\.atoms\[0\]\.kind: must be one of A, B, O",
+    ),
+    (
+        "cif atoms not a list",
+        "c = 3.9572 }",
+        'c = 3.9572 }\natoms = { Nb1 = "Nb" }',
+        r"structures\.cod-2100720\.atoms: must be a list of site tables",
+    ),
+    # origin: a site label, false, or {site, axis} with cif.
+    (
+        "origin true",
+        'origin = "B1"',
+        "origin = true",
+        (
+            r"structures\.ttb_x010\.origin: must be a site label, false, or \{site, "
+            r"axis\} with cif, not True"
+        ),
+    ),
+    (
+        "origin table with library",
+        'origin = "B1"',
+        'origin = { site = "B1", axis = "z" }',
+        (
+            r"structures\.ttb_x010\.origin: the \{site, axis\} form goes with cif; "
+            r"with library give one of the sites of ttb/P4bm: A1, A2"
+        ),
+    ),
+    (
+        "cif origin axis not x, y or z",
+        "c = 3.9572 }",
+        'c = 3.9572 }\norigin = { site = "Nb1", axis = "c" }',
+        r"structures\.cod-2100720\.origin\.axis: must be x, y or z, not 'c'",
+    ),
+    (
+        "cif origin without an axis",
+        "c = 3.9572 }",
+        'c = 3.9572 }\norigin = { site = "Nb1" }',
+        r"structures\.cod-2100720\.origin: missing key 'axis'",
+    ),
+    (
+        "cif origin not a site of its atoms",
+        "c = 3.9572 }",
+        (
+            'c = 3.9572 }\natoms = [{ atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "B" }]'
+            '\norigin = { site = "Nb2", axis = "z" }'
+        ),
+        (
+            r"structures\.cod-2100720\.origin\.site: no site 'Nb2' in atoms; sites are "
+            r"named by their first atom: Nb1"
+        ),
+    ),
+    # refine, the project's and a sample's.
+    (
+        "unknown refine key",
+        "[project]",
+        "[refine]\ncycles = 10\n\n[project]",
+        (
+            r"refine: unknown key 'cycles'; the keys are two_theta, background, "
+            r"max_passes, unsettled, followed"
+        ),
+    ),
+    (
+        "unknown sample refine key",
+        'form = "pellet"',
+        'form = "pellet"\nrefine = { range = [10.0, 90.0] }',
+        r"samples\.x0\.10\.pellet\.refine: unknown key 'range'",
+    ),
+    (
+        "two_theta descending",
+        "[project]",
+        "[refine]\ntwo_theta = [100.0, 15.0]\n\n[project]",
+        r"refine\.two_theta: must rise from low to high within 0 to 180 degrees",
+    ),
+    (
+        "two_theta not a pair",
+        "[project]",
+        "[refine]\ntwo_theta = [15.0]\n\n[project]",
+        r"refine\.two_theta: must be \[low, high\] in degrees",
+    ),
+    (
+        "two_theta not numbers",
+        'form = "pellet"',
+        'form = "pellet"\nrefine = { two_theta = ["15", 100.0] }',
+        r"samples\.x0\.10\.pellet\.refine\.two_theta\[0\]: must be a number",
+    ),
+    (
+        "unknown background key",
+        "[project]",
+        '[refine]\nbackground = { function = "chebyschev-1", order = 6 }\n\n[project]',
+        r"refine\.background: unknown key 'order'",
+    ),
+    (
+        "background terms zero",
+        "[project]",
+        "[refine]\nbackground = { terms = 0 }\n\n[project]",
+        r"refine\.background\.terms: must be a positive whole number, not 0",
+    ),
+    (
+        "background function not text",
+        "[project]",
+        "[refine]\nbackground = { function = 1 }\n\n[project]",
+        r"refine\.background\.function: must be a non-empty string",
+    ),
+    (
+        "max_passes zero",
+        'form = "pellet"',
+        'form = "pellet"\nrefine = { max_passes = { coordinates = 0 } }',
+        (
+            r"samples\.x0\.10\.pellet\.refine\.max_passes\.coordinates: must be a "
+            r"positive whole number, not 0"
+        ),
+    ),
+    (
+        "max_passes unknown mode",
+        "[project]",
+        '[refine]\nmax_passes = { "fixed-atoms" = 60 }\n\n[project]',
+        (
+            r"refine\.max_passes: unknown key 'fixed-atoms'; the keys are lebail, "
+            r"fixed_atoms, coordinates, occupancies"
+        ),
+    ),
+    (
+        "unsettled rule not accept or reject",
+        "[project]",
+        '[refine]\nunsettled = { lebail = "keep" }\n\n[project]',
+        r"refine\.unsettled\.lebail: must be accept or reject, not 'keep'",
+    ),
+    (
+        "followed not triples",
+        "[project]",
+        '[refine]\nfollowed = ["211"]\n\n[project]',
+        r"refine\.followed\[0\]: must be \[h, k, l\], three whole numbers",
+    ),
+    (
+        "followed 000",
+        "[project]",
+        "[refine]\nfollowed = [[2, 1, 1], [0, 0, 0]]\n\n[project]",
+        r"refine\.followed\[1\]: must be \[h, k, l\], three whole numbers not all 0",
+    ),
 ]
 
 
@@ -462,6 +643,207 @@ def test_validation(project_dir: Path, old: str, new: str, message: str) -> None
     with pytest.raises(ValueError, match=message) as raised:
         load_project(path)
     assert str(raised.value).startswith(str(path))
+    assert "\n" not in str(raised.value)
+
+
+# atoms, origin and refine
+
+
+def test_the_valid_project_has_no_additions(project_dir: Path) -> None:
+    project = load_project(project_dir)
+    ttb = project.structures["ttb_x010"]
+
+    # La and Ti are not in the prototype, but with atoms left out nothing is
+    # checked, so a file written before atoms loads as it did.
+    assert ttb.atoms is None
+    assert (ttb.origin, ttb.origin_axis, ttb.origin_fixed) == ("B1", None, True)
+    cod = project.structures["cod-2100720"]
+    assert (cod.origin, cod.origin_axis, cod.origin_fixed, cod.atoms) == (
+        None,
+        None,
+        True,
+        None,
+    )
+    assert project.refine == Refine()
+    assert all(sample.refine == {} for sample in project.samples.values())
+
+
+def test_library_atoms_place_the_elements_the_prototype_lacks(
+    project_dir: Path,
+) -> None:
+    rewrite(
+        project_dir,
+        'origin = "B1"',
+        (
+            "origin = false\n"
+            'atoms = { A1 = { Sr1 = "Sr", La1 = "La" }, '
+            'B1 = { Nb1 = "Nb", Ti1 = "Ti" }, B2 = { Nb2 = "Nb", Ti2 = "Ti" } }'
+        ),
+    )
+
+    ttb = load_project(project_dir).structures["ttb_x010"]
+
+    assert [(site["label"], site["name"], site["atoms"]) for site in ttb.atoms] == [
+        ("A1", "Sr1", {"Sr1": "Sr", "La1": "La"}),
+        ("B1", "Nb1", {"Nb1": "Nb", "Ti1": "Ti"}),
+        ("B2", "Nb2", {"Nb2": "Nb", "Ti2": "Ti"}),
+    ]
+    assert [(site["wyckoff"], site["kind"]) for site in ttb.atoms] == [
+        ("2a", "A"),
+        ("2b", "B"),
+        ("8d", "B"),
+    ]
+    # origin = false switches the entry's origin off.
+    assert (ttb.origin, ttb.origin_fixed) == (None, False)
+
+
+def test_library_atoms_may_be_left_out_for_the_prototype_elements(
+    project_dir: Path,
+) -> None:
+    rewrite(project_dir, '"Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"', '"Sr0.5Ba0.5Nb2O6"')
+    rewrite(project_dir, 'origin = "B1"\n', "")
+
+    ttb = load_project(project_dir).structures["ttb_x010"]
+
+    assert ttb.atoms is None
+    # The entry's own origin, neither given nor switched off.
+    assert (ttb.origin, ttb.origin_axis, ttb.origin_fixed) == (None, None, True)
+
+
+def test_cif_atoms_and_origin_site_and_axis(project_dir: Path) -> None:
+    rewrite(
+        project_dir,
+        "c = 3.9572 }",
+        (
+            "c = 3.9572 }\n"
+            "atoms = [\n"
+            '    { atoms = { Ba2 = "Ba", Sr2 = "Sr" }, wyckoff = "4c", kind = "A" },\n'
+            '    { atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "B" },\n'
+            '    { atoms = { O1 = "O" }, wyckoff = "4c", kind = "O" },\n'
+            "]\n"
+            'origin = { site = "Nb1", axis = "z" }'
+        ),
+    )
+
+    cod = load_project(project_dir).structures["cod-2100720"]
+
+    assert cod.atoms == (
+        {
+            "name": "Ba2",
+            "atoms": {"Ba2": "Ba", "Sr2": "Sr"},
+            "wyckoff": "4c",
+            "kind": "A",
+        },
+        {"name": "Nb1", "atoms": {"Nb1": "Nb"}, "wyckoff": "2b", "kind": "B"},
+        {"name": "O1", "atoms": {"O1": "O"}, "wyckoff": "4c", "kind": "O"},
+    )
+    assert (cod.origin, cod.origin_axis, cod.origin_fixed) == ("Nb1", "z", True)
+
+
+def test_cif_origin_label_without_atoms_is_unchecked(project_dir: Path) -> None:
+    rewrite(project_dir, "c = 3.9572 }", 'c = 3.9572 }\norigin = "Nb1"')
+
+    cod = load_project(project_dir).structures["cod-2100720"]
+
+    assert (cod.origin, cod.origin_axis, cod.origin_fixed) == ("Nb1", None, True)
+
+
+REFINE = """
+[refine]
+two_theta = [15.0, 100.0]
+background = { terms = 8 }
+max_passes = { lebail = 30, coordinates = 150 }
+unsettled = { occupancies = "reject" }
+followed = [[2, 1, 1], [4, 0, 0]]
+"""
+
+
+def test_refine_settings_without_a_sample_override(project_dir: Path) -> None:
+    path = project_dir / PROJECT_FILE
+    path.write_text(path.read_text(encoding="utf-8") + REFINE, encoding="utf-8")
+
+    project = load_project(project_dir)
+    expected = Refine(
+        two_theta=(15.0, 100.0),
+        background={"function": "chebyschev-1", "terms": 8},
+        max_passes={
+            "lebail": 30,
+            "fixed_atoms": 60,
+            "coordinates": 150,
+            "occupancies": 100,
+        },
+        unsettled={
+            "lebail": "accept",
+            "fixed_atoms": "accept",
+            "coordinates": "accept",
+            "occupancies": "reject",
+        },
+        followed=((2, 1, 1), (4, 0, 0)),
+    )
+
+    assert project.refine == expected
+    assert refine_settings(project, "x010_calcined") == expected
+    assert refine_settings(project, project.samples["x0.10.pellet"]) == expected
+
+
+def test_refine_settings_with_a_sample_override(project_dir: Path) -> None:
+    path = project_dir / PROJECT_FILE
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n[samples.x010_calcined.refine]\n"
+        + "two_theta = [17.0, 90.0]\n"
+        + 'background = { function = "cosine" }\n'
+        + "max_passes = { lebail = 5 }\n"
+        + "followed = []\n"
+        + REFINE,
+        encoding="utf-8",
+    )
+
+    project = load_project(project_dir)
+    calcined = refine_settings(project, "x010_calcined")
+
+    assert project.samples["x010_calcined"].refine == {
+        "two_theta": (17.0, 90.0),
+        "background": {"function": "cosine"},
+        "max_passes": {"lebail": 5},
+        "followed": (),
+    }
+    assert calcined.two_theta == (17.0, 90.0)
+    assert calcined.background == {"function": "cosine", "terms": 8}
+    assert calcined.max_passes == {
+        "lebail": 5,
+        "fixed_atoms": 60,
+        "coordinates": 150,
+        "occupancies": 100,
+    }
+    assert calcined.unsettled == project.refine.unsettled
+    assert calcined.followed == ()
+    # The other sample keeps the project's settings, and the project's are
+    # untouched by the override.
+    assert refine_settings(project, "x0.10.pellet") == project.refine
+    assert project.refine.max_passes["lebail"] == 30
+
+
+def test_refine_settings_package_defaults(project_dir: Path) -> None:
+    settings = refine_settings(load_project(project_dir), "x010_calcined")
+
+    assert settings.two_theta is None
+    assert settings.background == {"function": "chebyschev-1", "terms": 6}
+    assert settings.max_passes == {
+        "lebail": 60,
+        "fixed_atoms": 60,
+        "coordinates": 100,
+        "occupancies": 100,
+    }
+    assert settings.unsettled == dict.fromkeys(
+        ("lebail", "fixed_atoms", "coordinates", "occupancies"), "accept"
+    )
+    assert settings.followed == ()
+
+
+def test_refine_settings_unknown_sample(project_dir: Path) -> None:
+    with pytest.raises(KeyError, match="no sample 'x9' in the project"):
+        refine_settings(load_project(project_dir), "x9")
 
 
 # load_project_text, resolved_z and resolved_cell
@@ -583,3 +965,9 @@ def test_init_examples_load_once_uncommented(tmp_path: Path, monkeypatch) -> Non
     assert list(project.instruments) == ["diffractometer"]
     assert project.structures["phase1"].library == "ttb/P4bm"
     assert project.samples["sample1"].structures == ("phase1",)
+    assert project.refine.two_theta == (15.0, 100.0)
+    assert project.refine.followed == ((2, 1, 1), (4, 0, 0))
+    assert refine_settings(project, "sample1").background == {
+        "function": "chebyschev-1",
+        "terms": 8,
+    }

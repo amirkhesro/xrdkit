@@ -12,11 +12,13 @@ from xrdkit.config import (
     ConfigError,
     check_composition,
     load_config,
+    read_library_atoms,
     sample_settings,
     validate_config,
     wyckoff_multiplicity,
 )
 from xrdkit.density import theoretical_density
+from xrdkit.library import load_entry
 from xrdkit.structure import bond_lengths, composition_edits, site_setup
 
 # A perovskite-like structure, A on two sites, and one sample on it.
@@ -592,6 +594,14 @@ def test_a_structure_from_the_library() -> None:
         ConfigError, match=re.escape("structures.bronze.atoms: no atoms for site O5")
     ):
         validate_config(data)
+    # The shared reader takes the sites given alone when not asked for all.
+    sites, aliases = read_library_atoms(
+        {"A1": {"Sr1": "Sr", "La1": "La"}}, "atoms", load_entry("ttb/P4bm"), False
+    )
+    assert [(site["label"], site["name"], site["atoms"]) for site in sites] == [
+        ("A1", "Sr1", {"Sr1": "Sr", "La1": "La"})
+    ]
+    assert aliases == {"A1": "Sr1"}
     bronze["library"] = "ttb/P4mm"
     with pytest.raises(
         ConfigError,

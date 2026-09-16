@@ -94,6 +94,8 @@ __all__ = [
     "ConfigError",
     "check_composition",
     "load_config",
+    "read_library_atoms",
+    "read_sites",
     "sample_settings",
     "validate_config",
     "wyckoff_multiplicity",
@@ -259,7 +261,18 @@ def wyckoff_multiplicity(symbol: str) -> int:
 # Structures
 
 
-def _sites(value: object, where: str) -> list[dict]:
+def read_sites(value: object, where: str) -> list[dict]:
+    """A structure's sites, a list of ``{atoms = {label = element, ...},
+    wyckoff, kind}`` tables, each as ``{"name", "atoms", "wyckoff", "kind"}``,
+    named by its first atom; shared with :mod:`xrdkit.project`.
+
+    Raises
+    ------
+    ConfigError
+        If a site table has a key missing or unknown, an atom is on two
+        sites, an element or Wyckoff position is not one, or a kind is not
+        one of :data:`SITE_KINDS`; the message starts with ``where``.
+    """
     if not isinstance(value, list) or not value:
         raise _fail(where, "must be a list of site tables")
     labels: set[str] = set()
@@ -308,9 +321,23 @@ def _library_entry(value: object, where: str):
         raise _fail(where, str(error)) from None
 
 
-def _library_sites(value: object, where: str, entry) -> tuple[list[dict], dict]:
-    """The sites of ``entry`` holding the atoms ``value`` puts on each, by
-    the entry's site label, and the site each label names."""
+def read_library_atoms(
+    value: object, where: str, entry, complete: bool = True
+) -> tuple[list[dict], dict]:
+    """The sites of ``entry``, a structure library entry, holding the atoms
+    ``value`` puts on each by the entry's site label, ``{A1 = {Sr1 = "Sr"},
+    ...}``, each as :func:`read_sites` gives it with its ``label`` too; and
+    the site each label names. Every site of the entry must be given unless
+    ``complete`` is false, when only those given are returned. Shared with
+    :mod:`xrdkit.project`.
+
+    Raises
+    ------
+    ConfigError
+        If a label is not one of the entry's sites, a site is missing when
+        ``complete``, or its atoms do not check out as :func:`read_sites`
+        checks them; the message starts with ``where``.
+    """
     atoms = _table(value, where)
     known = [site.label for site in entry.sites]
     unknown = [label for label in atoms if label not in known]
@@ -321,11 +348,11 @@ def _library_sites(value: object, where: str, entry) -> tuple[list[dict], dict]:
             f"are {', '.join(known)}",
         )
     missing = [label for label in known if label not in atoms]
-    if missing:
+    if missing and complete:
         raise _fail(where, f"no atoms for site {', '.join(missing)} of {entry.name}")
     labels: set[str] = set()
     sites = []
-    for site in entry.sites:
+    for site in (site for site in entry.sites if site.label in atoms):
         table = {"atoms": atoms[site.label], "wyckoff": site.wyckoff, "kind": site.kind}
         sites.append(
             {**_site(table, f"{where}.{site.label}", labels), "label": site.label}
@@ -478,9 +505,9 @@ def _structure(table: object, where: str) -> dict:
     aliases: dict[str, str] = {}
     from_entry = entry is not None and "sites" not in table
     if not from_entry:
-        sites = _sites(table["sites"], f"{where}.sites")
+        sites = read_sites(table["sites"], f"{where}.sites")
     elif "atoms" in table:
-        sites, aliases = _library_sites(table["atoms"], f"{where}.atoms", entry)
+        sites, aliases = read_library_atoms(table["atoms"], f"{where}.atoms", entry)
     else:
         raise _fail(
             where,

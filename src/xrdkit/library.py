@@ -24,13 +24,15 @@ read and checked by :func:`load_entry`:
     One table per site, with ``label``, unique within the entry, ``kind``
     and ``wyckoff``, the Wyckoff position written as ``"4c"``, and
     optionally ``free``, the coordinates the site leaves free, drawn from
-    x, y and z, and ``uiso_group``, the name of the group whose one Uiso
-    the site shares.
+    x, y and z, ``uiso_group``, the name of the group whose one Uiso the
+    site shares, and ``elements``, the elements the prototype structure puts
+    on the site, such as ``["Ba", "Sr"]``.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from importlib.resources import files
@@ -72,21 +74,24 @@ ENTRY_REQUIRED = (
 )
 ENTRY_OPTIONAL = ("setting", "polar_axis", "origin_site")
 SITE_REQUIRED = ("label", "kind", "wyckoff")
-SITE_OPTIONAL = ("free", "uiso_group")
+SITE_OPTIONAL = ("free", "uiso_group", "elements")
 AXES = ("a", "b", "c")
 COORDINATES = ("x", "y", "z")
+ELEMENT = re.compile(r"[A-Z][a-z]?")
 
 
 @dataclass(frozen=True)
 class Site:
     """A site of a structure entry: its label, kind and Wyckoff position,
-    the coordinates it leaves free, and the Uiso group it is in, if any."""
+    the coordinates it leaves free, the Uiso group it is in, if any, and the
+    elements the prototype puts on it."""
 
     label: str
     kind: str
     wyckoff: str
     free: tuple[str, ...] = ()
     uiso_group: str | None = None
+    elements: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -188,7 +193,18 @@ def _site(table: object, name: str, field: str) -> Site:
     group = table.get("uiso_group")
     if group is not None:
         _string(group, name, f"{field}.uiso_group")
-    return Site(label, kind, wyckoff, tuple(free), group)
+    elements = table.get("elements", [])
+    if not isinstance(elements, list) or not all(
+        isinstance(element, str) and ELEMENT.fullmatch(element) for element in elements
+    ):
+        raise _fail(
+            name,
+            f"{field}.elements",
+            f"must be a list of element symbols, not {elements!r}",
+        )
+    if len(set(elements)) != len(elements):
+        raise _fail(name, f"{field}.elements", f"names an element twice: {elements}")
+    return Site(label, kind, wyckoff, tuple(free), group, tuple(elements))
 
 
 def _entry(data: dict, name: str) -> StructureEntry:

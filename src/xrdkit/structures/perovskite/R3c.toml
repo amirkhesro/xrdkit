@@ -27,6 +27,7 @@ reference = "BiFeO3, COD 1001090"
 # A1 is on 6a, (0, 0, z).
 [[sites]]
 label = "A1"
+elements = ["Bi"]
 kind = "A"
 wyckoff = "6a"
 free = ["z"]
@@ -35,6 +36,7 @@ uiso_group = "A"
 # B1 is on 6a, (0, 0, z).
 [[sites]]
 label = "B1"
+elements = ["Fe"]
 kind = "B"
 wyckoff = "6a"
 free = ["z"]
@@ -43,6 +45,7 @@ uiso_group = "B"
 # O1 is on 18b, the general position.
 [[sites]]
 label = "O1"
+elements = ["O"]
 kind = "O"
 wyckoff = "18b"
 free = ["x", "y", "z"]
