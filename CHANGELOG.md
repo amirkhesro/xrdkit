@@ -259,6 +259,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search and match is the authoritative phase identification and the citable
   record, that Route B serves routine screening, and that a CIF exported from
   the licensed database can seed Workflows 3 and 4.
+- `docs/USER_GUIDE.md`: the TTB indexing examples pass `space_group` explicitly,
+  and `lattice_density.py` is updated to the general `cell_volume` signature.
 
 ### Fixed
 

@@ -324,7 +324,12 @@ unindexed = [entry.peak.two_theta for entry in indexed if not entry.is_indexed]
 print(f"{len(unindexed)} peaks unaccounted for: {[round(v, 3) for v in unindexed]}")
 
 tight = index_peaks(
-    clean, fit.cell, scan.wavelength, tolerance=0.02, zero_offset=fit.zero_offset
+    clean,
+    fit.cell,
+    scan.wavelength,
+    tolerance=0.02,
+    zero_offset=fit.zero_offset,
+    space_group="P4bm",
 )
 unindexed = [entry.peak.two_theta for entry in tight if not entry.is_indexed]
 
@@ -370,7 +375,7 @@ print(save_figure(fig, f"figures/stack_{STEM}"))
 top_scan = scans[-1]
 top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
 top_indexed, top_fit = index_and_refine(
-    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
+    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength, space_group="P4bm"
 )
 
 fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt")
@@ -514,7 +519,7 @@ print(indexing_summary(indexed))
 a = 12.4799, c = 3.9323 angstrom
 28 peaks used, rms 0.0076 degrees
 zero offset 0.170 degrees
-{'n_peaks': 35, 'n_indexed': 35, 'n_unindexed': 0, 'n_ambiguous': 7, 'rms_difference': 0.007559815493900485}
+{'n_peaks': 35, 'n_indexed': 35, 'n_unindexed': 0, 'n_ambiguous': 7, 'rms_difference': 0.007559815493901125}
 ```
 
 A cell refined this way is good enough to label reflections with. It is not a
@@ -592,8 +597,8 @@ print(f"{len(unindexed)} peaks unaccounted for: {[round(v, 3) for v in unindexed
 `is_indexed` is a property of each `IndexedPeak`, so the list comprehension
 above is the whole of the selection. To see which peaks the cell really
 accounts for, index again with `index_peaks` against the refined cell at a
-tighter tolerance, passing the zero offset the refinement found, and mark what
-is left over.
+tighter tolerance, passing the zero offset the refinement found and the space
+group `P4bm`, and mark what is left over.
 
 Continues `plot_pattern.py`. Add these lines at the end of the file.
 
@@ -601,7 +606,12 @@ Continues `plot_pattern.py`. Add these lines at the end of the file.
 from xrdkit import index_peaks, mark_peaks
 
 tight = index_peaks(
-    clean, fit.cell, scan.wavelength, tolerance=0.02, zero_offset=fit.zero_offset
+    clean,
+    fit.cell,
+    scan.wavelength,
+    tolerance=0.02,
+    zero_offset=fit.zero_offset,
+    space_group="P4bm",
 )
 unindexed = [entry.peak.two_theta for entry in tight if not entry.is_indexed]
 
@@ -682,7 +692,7 @@ from xrdkit import (
 top_scan = scans[-1]
 top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=(10.0, 80.0)))
 top_indexed, top_fit = index_and_refine(
-    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength
+    top_peaks, start_cell=TTB_CELL, wavelength=top_scan.wavelength, space_group="P4bm"
 )
 
 fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt")
@@ -1439,7 +1449,7 @@ PHASE = "TTB"
 scan = read_xrdml(SCAN_FILE)
 clean = exclude_kalpha2(find_peaks(scan, two_theta_range=(10.0, 80.0)))
 indexed, cell_fit = index_and_refine(
-    clean, start_cell=TTB_CELL, wavelength=scan.wavelength
+    clean, start_cell=TTB_CELL, wavelength=scan.wavelength, space_group="P4bm"
 )
 
 held = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=False)
@@ -1518,7 +1528,7 @@ fig, ax = plot_rietveld(
 print(save_figure(fig, f"figures/lebail_fit_{STEM}"))
 
 cell = TetragonalCell(a=a, c=c)
-volume, esd_volume = cell_volume(cell, esd_a, esd_c)
+volume, esd_volume = cell_volume(cell, esd={"a": esd_a, "c": esd_c})
 mass = formula_mass(COMPOSITION)
 density, esd_density = theoretical_density(
     COMPOSITION, FORMULA_UNITS, volume, esd_volume
@@ -1765,7 +1775,7 @@ PHASE = "TTB"
 scan = read_xrdml(SCAN_FILE)
 clean = exclude_kalpha2(find_peaks(scan, two_theta_range=(10.0, 80.0)))
 indexed, cell_fit = index_and_refine(
-    clean, start_cell=TTB_CELL, wavelength=scan.wavelength
+    clean, start_cell=TTB_CELL, wavelength=scan.wavelength, space_group="P4bm"
 )
 
 held = refine_lattice(indexed, scan.wavelength, TTB_CELL, fit_zero=False)
@@ -1938,9 +1948,9 @@ print(f"crystallite size {size['value'] * 1000:.0f} +/- {size['esd'] * 1000:.0f}
 ```
 
 ```
-a = 12.4743 +/- 0.0004 angstrom
+a = 12.4742 +/- 0.0004 angstrom
 c = 3.9301 +/- 0.0002 angstrom
-V = 611.551 +/- 0.058 cubic angstrom
+V = 611.546 +/- 0.058 cubic angstrom
 crystallite size 181 +/- 4 nm
 ```
 
@@ -2009,7 +2019,7 @@ Continues `lattice_density.py`. Add these lines at the end of the file.
 from xrdkit import TetragonalCell, cell_volume, formula_mass, theoretical_density
 
 cell = TetragonalCell(a=a, c=c)
-volume, esd_volume = cell_volume(cell, esd_a, esd_c)
+volume, esd_volume = cell_volume(cell, esd={"a": esd_a, "c": esd_c})
 mass = formula_mass(COMPOSITION)
 density, esd_density = theoretical_density(
     COMPOSITION, FORMULA_UNITS, volume, esd_volume
@@ -2021,8 +2031,8 @@ print(f"theoretical density {density:.4f} +/- {esd_density:.4f} g/cm3")
 
 ```
 M = 394.905 g/mol per formula unit
-V = 611.551 +/- 0.050 cubic angstrom
-theoretical density 5.3614 +/- 0.0004 g/cm3
+V = 611.546 +/- 0.050 cubic angstrom
+theoretical density 5.3615 +/- 0.0004 g/cm3
 ```
 
 The volume `cell_volume` returns agrees with the volume GSAS-II reports, 611.551
@@ -2059,8 +2069,8 @@ print(f"  esd_rho / rho    {ESD_ARCHIMEDES / ARCHIMEDES:.2e}")
 
 ```
 relative density 96.06 +/- 0.37 per cent
-  2 esd_a / a      7.18e-05
-  esd_c / c        3.93e-05
+  2 esd_a / a      7.14e-05
+  esd_c / c        3.95e-05
   esd_rho / rho    3.88e-03
 ```
 
