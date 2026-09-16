@@ -93,6 +93,7 @@ from xrdkit.phases import (
     write_cif_index,
 )
 from xrdkit.pipeline import (
+    PhaseStart,
     PipelineError,
     StartPoint,
     coordinates_stages,
@@ -168,6 +169,7 @@ __all__ = [
     "IndexedPeak",
     "LatticeFit",
     "Peak",
+    "PhaseStart",
     "PipelineError",
     "ProfileFit",
     "Project",

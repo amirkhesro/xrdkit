@@ -51,6 +51,7 @@ __all__ = [
     "MODES",
     "PASS_TOLERANCE",
     "START_BROADENING",
+    "PhaseStart",
     "PipelineError",
     "StartPoint",
     "coordinates_stages",
@@ -454,26 +455,54 @@ def occupancy_stages(
 
 
 @dataclass(frozen=True)
-class StartPoint:
-    """The values a mode starts from, as a stage of an earlier result left
-    them, for the first phase and histogram: the cell (a, b, c in angstroms,
-    alpha, beta, gamma in degrees), zero shift, specimen displacement (None
-    where the geometry has no single one), crystallite size in microns,
-    microstrain, histogram scale, background (``{function, terms,
-    coefficients}``), two theta limits, the atoms, the result's
-    ``start_model`` if it has one, and the name of the stage taken."""
+class PhaseStart:
+    """A phase as a stage left it: its name, cell (a, b, c in angstroms,
+    alpha, beta, gamma in degrees), crystallite size in microns,
+    microstrain, phase fraction and atoms."""
 
+    name: str
     cell: dict[str, float]
-    zero: float
-    displacement: float | None
     size: float
     microstrain: float
+    fraction: float
+    atoms: list[dict]
+
+
+@dataclass(frozen=True)
+class StartPoint:
+    """The values a mode starts from, as a stage of an earlier result left
+    them: each phase, in the result's order, and the histogram's zero shift,
+    specimen displacement (None where the geometry has no single one), scale,
+    background (``{function, terms, coefficients}``) and two theta limits;
+    the result's ``start_model``, the atoms of each phase as its job found
+    them (None for a result written before it was recorded); and the name
+    of the stage taken. ``cell``, ``size``, ``microstrain`` and ``atoms``
+    are those of the first phase."""
+
+    phases: tuple[PhaseStart, ...]
+    zero: float
+    displacement: float | None
     scale: float
     background: dict
     limits: tuple[float, float]
-    atoms: list[dict]
     start_model: object
     stage: str
+
+    @property
+    def cell(self) -> dict[str, float]:
+        return self.phases[0].cell
+
+    @property
+    def size(self) -> float:
+        return self.phases[0].size
+
+    @property
+    def microstrain(self) -> float:
+        return self.phases[0].microstrain
+
+    @property
+    def atoms(self) -> list[dict]:
+        return self.phases[0].atoms
 
 
 def _cell_terms(cell: Mapping[str, float]) -> list[float]:
@@ -502,12 +531,149 @@ def _cell_from_terms(terms: Sequence[float]) -> dict[str, float]:
     g = np.linalg.inv(reciprocal)
     a, b, c = (math.sqrt(g[i, i]) for i in range(3))
     return {
-        "a": a,
-        "b": b,
-        "c": c,
-        "alpha": math.degrees(math.acos(g[1, 2] / (b * c))),
-        "beta": math.degrees(math.acos(g[0, 2] / (a * c))),
-        "gamma": math.degrees(math.acos(g[0, 1] / (a * b))),
+        "length_a": a,
+        "length_b": b,
+        "length_c": c,
+        "angle_alpha": math.degrees(math.acos(g[1, 2] / (b * c))),
+        "angle_beta": math.degrees(math.acos(g[0, 2] / (a * c))),
+        "angle_gamma": math.degrees(math.acos(g[0, 1] / (a * b))),
+    }
+
+
+def _value(entry: object) -> object:
+    """A value as the driver records it: ``{"value", ...}`` or the value."""
+    return entry["value"] if isinstance(entry, Mapping) else entry
+
+
+class _Reader:
+    """Fields of a result JSON, each missing one a one line PipelineError
+    naming the path."""
+
+    def __init__(self, path: Path, data: object) -> None:
+        self.path = path
+        self.data = data
+
+    def get(self, *keys, within=None):
+        value = self.data if within is None else within
+        for key in keys:
+            try:
+                if isinstance(value, Mapping) and key not in value:
+                    raise KeyError(key)
+                value = value[key]
+            except (KeyError, IndexError, TypeError):
+                raise PipelineError(
+                    f"{self.path}: no {'.'.join(map(str, keys))}"
+                ) from None
+        return value
+
+
+def _earlier_stage_model(read, kept, chosen) -> dict:
+    """The model of an accepted stage of a result written before the driver
+    recorded every value at every stage: what the stage refined from its own
+    record, the rest from the final model, which holds it unchanged unless a
+    later stage refined it."""
+    path, name = read.path, chosen["name"]
+    later = kept[kept.index(chosen) + 1 :]
+    parameters = chosen.get("parameters", {})
+
+    def at_stage(parameter: str, final_value, label: str):
+        if parameter in parameters:
+            return parameters[parameter]["value"]
+        if any(parameter in record.get("parameters", {}) for record in later):
+            raise PipelineError(
+                f"{path}: stage {name!r} did not refine {label}, which a later "
+                "stage did, and the result, written before every value was "
+                "recorded at every stage, does not give it"
+            )
+        return final_value
+
+    final = read.get("final")
+    phases = []
+    for index, phase in enumerate(read.get("final", "phases")):
+        final_cell = read.get("cell", within=phase)
+        final_terms = _cell_terms(final_cell)
+        names = [f"{index}::A{term}" for term in range(6)]
+        refined = [term for term in range(6) if names[term] in parameters]
+        terms = []
+        for term in range(6):
+            if term in refined:
+                terms.append(parameters[names[term]]["value"])
+                continue
+            tied = next(
+                (
+                    other
+                    for other in refined
+                    if final_terms[other] != 0.0
+                    and math.isclose(
+                        final_terms[term], final_terms[other], rel_tol=_TIED
+                    )
+                ),
+                None,
+            )
+            if tied is not None:
+                terms.append(parameters[names[tied]]["value"])
+            else:
+                terms.append(
+                    at_stage(names[term], final_terms[term], f"cell term A{term}")
+                )
+        phase_name = read.get("name", within=phase)
+        atoms = chosen.get("atoms", {}).get(phase_name)
+        if atoms is None:
+            raise PipelineError(
+                f"{path}: stage {name!r} records no atoms of {phase_name}"
+            )
+        phases.append(
+            {
+                "name": phase_name,
+                "cell": _cell_from_terms(terms) if later else final_cell,
+                "size": at_stage(
+                    f"{index}:0:Size;i",
+                    read.get("size", "value", within=phase),
+                    "the size",
+                ),
+                "mustrain": at_stage(
+                    f"{index}:0:Mustrain;i",
+                    read.get("mustrain", "value", within=phase),
+                    "the microstrain",
+                ),
+                "phase_fraction": at_stage(
+                    f"{index}:0:Scale",
+                    _value(phase.get("phase_fraction", 1.0)),
+                    "the phase fraction",
+                ),
+                "atoms": atoms,
+            }
+        )
+    sample = read.get("sample", within=final)
+    shift = sample.get("Shift")
+    return {
+        "instrument": {
+            "Zero": at_stage(
+                _ZERO, read.get("instrument", "Zero", "value", within=final), "the zero"
+            )
+        },
+        "sample": {
+            "Scale": at_stage(
+                _SCALE, read.get("Scale", "value", within=sample), "the scale"
+            ),
+            **(
+                {}
+                if shift is None
+                else {"Shift": at_stage(_SHIFT, _value(shift), "the displacement")}
+            ),
+        },
+        "background": {
+            "type": read.get("background", "type", within=final),
+            "coefficients": [
+                at_stage(
+                    _BACKGROUND.format(index=term), value, f"background term {term}"
+                )
+                for term, value in enumerate(
+                    read.get("background", "coefficients", within=final)
+                )
+            ],
+        },
+        "phases": phases,
     }
 
 
@@ -515,22 +681,19 @@ def start_from_result(path: str | Path, stage: str | None = None) -> StartPoint:
     """The values a mode starts from, read from the result JSON at ``path``
     as its stage ``stage`` left them, by default the last stage accepted.
 
-    The last stage kept is the result's final model. For an earlier stage a
-    parameter it refined is taken from its own record, and one it did not
-    refine from the final model, which holds it unchanged provided no later
-    stage kept refined it; where a later stage did, the value is the job's
-    start, taken from the result's ``start_model`` (a mapping with the
-    :class:`StartPoint` fields) when it has one. A cell term the stage did
-    not refine follows one it did where the final cell ties them by
-    symmetry.
+    The driver records every value at every stage, refined or held
+    (``values`` and ``atoms``), so any accepted stage can be started from.
+    A result written before it did gives the last stage kept from its final
+    model, and an earlier stage from what that stage refined and the final
+    model, which it can do only for a value no later stage refined.
 
     Raises
     ------
     PipelineError
         If there is no such file or it is not JSON, the stage was not
-        accepted, or a value is missing, or was refined only by a later
-        stage with no ``start_model`` to give it; the message names the path
-        and the stage or field.
+        accepted, or a value is missing (or, in a result written before
+        every value was recorded, was refined only by a later stage); the
+        message names the path and the stage or field.
     """
     path = Path(path)
     if not path.is_file():
@@ -541,6 +704,7 @@ def start_from_result(path: str | Path, stage: str | None = None) -> StartPoint:
         raise PipelineError(f"{path}: not a result JSON: {error}") from None
     if not isinstance(result, Mapping):
         raise PipelineError(f"{path}: not a result JSON: not an object")
+    read = _Reader(path, result)
 
     kept = accepted_stages(result)
     if not kept:
@@ -556,158 +720,57 @@ def start_from_result(path: str | Path, stage: str | None = None) -> StartPoint:
             + ", ".join(map(str, names))
         )
     name = chosen["name"]
-    later = kept[kept.index(chosen) + 1 :]
 
-    def field(*keys):
-        value = result
-        for key in keys:
-            if not isinstance(value, Mapping | list) or (
-                isinstance(value, Mapping) and key not in value
-            ):
-                raise PipelineError(f"{path}: no {'.'.join(map(str, keys))}")
-            try:
-                value = value[key]
-            except (IndexError, TypeError):
-                raise PipelineError(f"{path}: no {'.'.join(map(str, keys))}") from None
-        return value
-
-    field("final")
-    parameters = chosen.get("parameters", {})
-
-    start_model = result.get("start_model")
-
-    def at_stage(parameter: str, final_value, label: str, start=None):
-        if parameter in parameters:
-            return parameters[parameter]["value"]
-        if any(parameter in record.get("parameters", {}) for record in later):
-            # Held until this stage, so at the job's start value, if recorded.
-            try:
-                return start(start_model)
-            except (KeyError, IndexError, TypeError):
-                raise PipelineError(
-                    f"{path}: stage {name!r} did not refine {label}, which a later "
-                    "stage did, and the result has no start_model giving it"
-                ) from None
-        return final_value
-
-    final_cell = {
-        key: float(field("final", "phases", 0, "cell", gsas))
-        for key, gsas in _CELL_KEYS
-    }
-    if not later:
-        cell = final_cell
+    recorded = "values" in chosen
+    if recorded:
+        model = chosen["values"]
+    elif chosen is kept[-1]:
+        model = read.get("final")
     else:
-        final_terms = _cell_terms(field("final", "phases", 0, "cell"))
-        refined = {i for i, term in enumerate(_CELL_TERMS) if term in parameters}
-        terms = []
-        for index, term in enumerate(_CELL_TERMS):
-            if index in refined:
-                terms.append(parameters[term]["value"])
-                continue
-            tied = next(
-                (
-                    other
-                    for other in sorted(refined)
-                    if final_terms[other] != 0.0
-                    and math.isclose(
-                        final_terms[index], final_terms[other], rel_tol=_TIED
-                    )
+        model = _earlier_stage_model(read, kept, chosen)
+
+    phases = []
+    for phase in read.get("phases", within=model):
+        cell = read.get("cell", within=phase)
+        phases.append(
+            PhaseStart(
+                name=read.get("name", within=phase),
+                cell={
+                    key: float(read.get(gsas, within=cell)) for key, gsas in _CELL_KEYS
+                },
+                size=float(_value(read.get("size", within=phase))),
+                microstrain=float(_value(read.get("mustrain", within=phase))),
+                fraction=float(_value(phase.get("phase_fraction", 1.0))),
+                atoms=list(
+                    read.get("atoms", phase["name"], within=chosen)
+                    if recorded
+                    # A result from before the driver recorded atoms has none.
+                    else phase.get("atoms", [])
                 ),
-                None,
             )
-            if tied is not None:
-                terms.append(parameters[_CELL_TERMS[tied]]["value"])
-            else:
-                terms.append(
-                    at_stage(
-                        term,
-                        final_terms[index],
-                        f"cell term A{index}",
-                        lambda model, i=index: _cell_terms(
-                            {gsas: model["cell"][key] for key, gsas in _CELL_KEYS}
-                        )[i],
-                    )
-                )
-        cell = _cell_from_terms(terms)
-
-    coefficients = list(field("final", "background", "coefficients"))
-    coefficients = [
-        at_stage(
-            _BACKGROUND.format(index=index),
-            value,
-            f"background term {index}",
-            lambda model, i=index: model["background"]["coefficients"][i],
         )
-        for index, value in enumerate(coefficients)
+    if not phases:
+        raise PipelineError(f"{path}: no phases")
+    shift = read.get("sample", within=model).get("Shift")
+    coefficients = [
+        float(_value(value))
+        for value in read.get("background", "coefficients", within=model)
     ]
-    sample = field("final", "sample")
-    shift = sample.get("Shift")
-    phase_name = field("final", "phases", 0, "name")
-    if later:
-        atoms = chosen.get("atoms", {}).get(phase_name)
-        if atoms is None:
-            raise PipelineError(
-                f"{path}: stage {name!r} records no atoms of {phase_name}"
-            )
-    else:
-        atoms = field("final", "phases", 0, "atoms")
-    limits = field("limits")
+    limits = read.get("limits")
     if not isinstance(limits, list) or len(limits) != 2:
         raise PipelineError(f"{path}: no limits")
 
     return StartPoint(
-        cell=cell,
-        zero=float(
-            at_stage(
-                _ZERO,
-                field("final", "instrument", "Zero", "value"),
-                "the zero",
-                lambda model: model["zero"],
-            )
-        ),
-        displacement=(
-            None
-            if shift is None
-            else float(
-                at_stage(
-                    _SHIFT,
-                    shift["value"],
-                    "the displacement",
-                    lambda model: model["displacement"],
-                )
-            )
-        ),
-        size=float(
-            at_stage(
-                _SIZE,
-                field("final", "phases", 0, "size", "value"),
-                "the size",
-                lambda model: model["size"],
-            )
-        ),
-        microstrain=float(
-            at_stage(
-                _MUSTRAIN,
-                field("final", "phases", 0, "mustrain", "value"),
-                "the microstrain",
-                lambda model: model["microstrain"],
-            )
-        ),
-        scale=float(
-            at_stage(
-                _SCALE,
-                field("final", "sample", "Scale", "value"),
-                "the scale",
-                lambda model: model["scale"],
-            )
-        ),
+        phases=tuple(phases),
+        zero=float(_value(read.get("instrument", "Zero", within=model))),
+        displacement=None if shift is None else float(_value(shift)),
+        scale=float(_value(read.get("sample", "Scale", within=model))),
         background={
-            "function": field("final", "background", "type"),
+            "function": read.get("background", "type", within=model),
             "terms": len(coefficients),
-            "coefficients": [float(value) for value in coefficients],
+            "coefficients": coefficients,
         },
         limits=(float(limits[0]), float(limits[1])),
-        atoms=list(atoms),
         start_model=result.get("start_model"),
         stage=name,
     )

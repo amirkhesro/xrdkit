@@ -10,6 +10,7 @@ import pytest
 
 import xrdkit
 from xrdkit import gsas2_driver as driver
+from xrdkit.library import load_entry
 from xrdkit.pipeline import (
     CYCLES,
     LE_BAIL_CYCLES,
@@ -24,6 +25,7 @@ from xrdkit.pipeline import (
     occupancy_stages,
     start_from_result,
 )
+from xrdkit.structure import site_setup
 
 BACKGROUND = {"function": "chebyschev-1", "terms": 8}
 DRIVER_BACKGROUND = {"type": "chebyschev-1", "terms": 8}
@@ -321,6 +323,90 @@ def test_coordinates_stages_without_origin_off_the_polar_axis() -> None:
     assert all("origin" not in stage for stage in stages)
 
 
+# A polar library entry that fixes no origin, whose F site its symmetry
+# fixes and whose X sites are free only across the polar axis.
+POLAR_ENTRY = """
+[entry]
+name = "test/polar"
+family = "test"
+crystal_system = "tetragonal"
+space_group = "P4mm"
+cell_parameters = ["a", "c"]
+z = 1
+reference = "none"
+polar_axis = "c"
+
+[[sites]]
+label = "F1"
+kind = "F"
+wyckoff = "1a"
+free = []
+
+[[sites]]
+label = "X1"
+kind = "X"
+wyckoff = "4d"
+free = ["x", "y"]
+"""
+
+
+def polar_plan(tmp_path, monkeypatch) -> dict:
+    """The plan site_setup gives for the entry above, the entry read from
+    under tmp_path."""
+    import xrdkit.structure
+
+    folder = tmp_path / "test"
+    folder.mkdir()
+    (folder / "polar.toml").write_text(POLAR_ENTRY, encoding="utf-8")
+    monkeypatch.setattr(
+        xrdkit.structure,
+        "load_entry",
+        lambda name: load_entry(name, root=tmp_path),
+    )
+    structure = {
+        "library": "test/polar",
+        "sites": [
+            {
+                "name": "M1",
+                "label": "F1",
+                "atoms": {"M1": "Mo"},
+                "wyckoff": "1a",
+                "kind": "F",
+            },
+            {
+                "name": "N1",
+                "label": "X1",
+                "atoms": {"N1": "N"},
+                "wyckoff": "4d",
+                "kind": "X",
+            },
+        ],
+        "uiso_groups": [{"name": "all", "sites": ["M1", "N1"]}],
+    }
+    atoms = [
+        {"label": "M1", "type": "Mo", "xyz": [0.0, 0.0, 0.0]},
+        {"label": "N1", "type": "N", "xyz": [0.2, 0.3, 0.0]},
+    ]
+    return {**site_setup(structure, atoms), "phase": "P"}
+
+
+def test_a_site_its_symmetry_fixes_has_no_coordinate_stage(
+    tmp_path, monkeypatch
+) -> None:
+    plan = polar_plan(tmp_path, monkeypatch)
+
+    # The entry's own free lists, "" for the fixed site, not "all".
+    assert [site["free"] for site in plan["sites"]] == ["", "xy"]
+    assert plan["polar_axis"] == "z" and plan["origin"] is None
+
+    stages = coordinates_stages(plan, BACKGROUND)
+
+    # No F stage, and no refusal: nothing freed lies along the polar axis.
+    assert names(stages) == ["profile", "Uiso groups", "X sites"]
+    assert stages[-1]["coordinates"] == {"P": {"N1": "xy"}}
+    assert all("origin" not in stage for stage in stages)
+
+
 def test_coordinates_stages_need_the_phase_name() -> None:
     changed = plan()
     del changed["phase"]
@@ -504,8 +590,12 @@ def test_start_from_result_last_accepted_stage(tmp_path) -> None:
         start.zero = 1.0
 
 
-def test_start_from_result_an_earlier_stage(tmp_path) -> None:
-    data = result(start_model={"microstrain": 0.0})
+def test_start_from_result_an_earlier_stage_of_an_old_result(tmp_path) -> None:
+    # Written before every value was recorded at every stage, and with no
+    # start_model; nothing after "cell" refines what "cell" held.
+    data = result()
+    del data["stages"][3]["parameters"]["0:0:Mustrain;i"]
+    data["final"]["phases"][0]["mustrain"]["value"] = 0.0
 
     start = start_from_result(write(tmp_path, data), stage="cell")
 
@@ -518,15 +608,15 @@ def test_start_from_result_an_earlier_stage(tmp_path) -> None:
     assert (start.zero, start.size, start.scale) == (0.02, 0.3, 2.0)
     assert start.background["coefficients"] == [100.0, -3.0]
     assert start.atoms == [{"label": "M1", "type": "Sr", "xyz": [0.0, 0.0, 0.1]}]
-    # Held until then and refined only later: the job's start.
     assert start.microstrain == 0.0
-    assert start.start_model == {"microstrain": 0.0}
     # Neither this stage nor a later one refined the displacement: the final.
     assert start.displacement == 0.0
+    assert start.start_model is None
 
 
 def test_start_from_result_hexagonal_ties(tmp_path) -> None:
     data = result()
+    del data["stages"][3]["parameters"]["0:0:Mustrain;i"]
     final_cell = data["final"]["phases"][0]["cell"]
     final_cell.update(length_a=4.0, length_b=4.0, length_c=9.0, angle_gamma=120.0)
     a0 = 4.0 / (3.0 * 3.9**2)
@@ -535,7 +625,6 @@ def test_start_from_result_hexagonal_ties(tmp_path) -> None:
         stage["parameters"]["0::A2"] = parameter(1.0 / 8.8**2)
     data["stages"][3]["parameters"]["0::A0"] = parameter(4.0 / (3.0 * 16.0))
     data["stages"][3]["parameters"]["0::A2"] = parameter(1.0 / 81.0)
-    data["start_model"] = {"microstrain": 0.0}
 
     start = start_from_result(write(tmp_path, data), stage="cell")
 
@@ -545,6 +634,121 @@ def test_start_from_result_hexagonal_ties(tmp_path) -> None:
     assert start.cell["c"] == pytest.approx(8.8)
     assert start.cell["gamma"] == pytest.approx(120.0)
     assert math.isclose(start.cell["alpha"], 90.0, abs_tol=1e-9)
+
+
+def recorded(value: float, held: bool = False) -> dict:
+    """A value as the driver records it at a stage."""
+    return {"value": value, "esd": None if held else 0.001, "held": held}
+
+
+def stage_values(
+    cell: tuple[float, float],
+    zero: float,
+    size: float,
+    microstrain: float | None,
+    coefficients: list[float],
+    phases: tuple[str, ...] = ("P",),
+    fractions: tuple[float, ...] = (1.0,),
+) -> dict:
+    """A stage's values as the driver records them: a held microstrain when
+    ``microstrain`` is None, at 0; the phases alike but for name, fraction
+    and a cell 1 A longer in a for each after the first."""
+    return {
+        "instrument": {"Zero": recorded(zero), "U": recorded(2.0, held=True)},
+        "sample": {
+            "Scale": recorded(1.0, held=len(phases) > 1),
+            "Shift": recorded(0.0, held=True),
+        },
+        "background": {
+            "type": "chebyschev-1",
+            "coefficients": [recorded(value) for value in coefficients],
+        },
+        "phases": [
+            {
+                "name": name,
+                "cell": {
+                    "length_a": cell[0] + index,
+                    "length_b": cell[0] + index,
+                    "length_c": cell[1],
+                    "angle_alpha": 90.0,
+                    "angle_beta": 90.0,
+                    "angle_gamma": 90.0,
+                    "volume": (cell[0] + index) ** 2 * cell[1],
+                },
+                "cell_esd": None,
+                "cell_held": False,
+                "phase_fraction": recorded(fraction, held=len(phases) == 1),
+                "size": {"type": "isotropic", **recorded(size)},
+                "mustrain": {
+                    "type": "isotropic",
+                    **(
+                        recorded(0.0, held=True)
+                        if microstrain is None
+                        else recorded(microstrain)
+                    ),
+                },
+            }
+            for index, (name, fraction) in enumerate(zip(phases, fractions))
+        ],
+    }
+
+
+def test_start_from_result_every_value_at_every_stage(tmp_path) -> None:
+    data = result(start_model={"P": [{"label": "M1", "xyz": [0.0, 0.0, 0.0]}]})
+    scale, _, cell, strain = data["stages"]
+    scale["atoms"] = {"P": [{"label": "M1", "type": "Sr", "xyz": [0.0, 0.0, 0.0]}]}
+    scale["values"] = stage_values((5.5, 7.5), 0.0, 1.0, None, [100.0, -3.0])
+    cell["values"] = stage_values((5.0, 7.0), 0.02, 0.3, None, [100.0, -3.0])
+    strain["values"] = stage_values((5.1, 7.1), 0.03, 0.35, 900.0, [110.0, -4.0])
+
+    start = start_from_result(write(tmp_path, data), stage="cell")
+
+    # The microstrain was held at "cell" and refined only by "strain", and is
+    # read as held, where an old result could not give it.
+    assert start.microstrain == 0.0
+    assert start.cell["a"] == 5.0 and start.cell["c"] == 7.0
+    assert (start.zero, start.size, start.scale) == (0.02, 0.3, 1.0)
+    assert start.background["coefficients"] == [100.0, -3.0]
+    assert start.displacement == 0.0
+    assert start.atoms == [{"label": "M1", "type": "Sr", "xyz": [0.0, 0.0, 0.1]}]
+    assert start.start_model == {"P": [{"label": "M1", "xyz": [0.0, 0.0, 0.0]}]}
+    # The first stage too, which held all but the scale and background.
+    first = start_from_result(write(tmp_path, data), stage="scale")
+    assert (first.zero, first.size, first.cell["a"]) == (0.0, 1.0, 5.5)
+    # And the last, from its own values rather than the final model.
+    last = start_from_result(write(tmp_path, data))
+    assert (last.stage, last.microstrain, last.zero) == ("strain", 900.0, 0.03)
+
+
+def test_start_from_result_two_phases(tmp_path) -> None:
+    data = result()
+    atoms_q = [{"label": "Q1", "type": "Ti", "xyz": [0.5, 0.5, 0.5]}]
+    for stage in data["stages"]:
+        stage["atoms"] = {**stage["atoms"], "Q": atoms_q}
+    scale, _, cell, strain = data["stages"]
+    for record, values in (
+        (scale, ((5.5, 7.5), 0.0, 1.0, None, [100.0, -3.0])),
+        (cell, ((5.0, 7.0), 0.02, 0.3, None, [100.0, -3.0])),
+        (strain, ((5.1, 7.1), 0.03, 0.35, 900.0, [110.0, -4.0])),
+    ):
+        record["atoms"] = {"P": [{"label": "M1"}], "Q": atoms_q}
+        record["values"] = stage_values(
+            *values, phases=("P", "Q"), fractions=(0.7, 0.3)
+        )
+
+    start = start_from_result(write(tmp_path, data), stage="cell")
+
+    assert [phase.name for phase in start.phases] == ["P", "Q"]
+    p, q = start.phases
+    assert (p.fraction, q.fraction) == (0.7, 0.3)
+    assert (p.cell["a"], q.cell["a"]) == (5.0, 6.0)
+    assert q.atoms == atoms_q and p.atoms == [{"label": "M1"}]
+    assert (q.size, q.microstrain) == (0.3, 0.0)
+    # The histogram values once, and the first phase's as the single fields.
+    assert start.scale == 1.0 and start.zero == 0.02
+    assert (start.cell, start.size, start.atoms) == (p.cell, p.size, p.atoms)
+    with pytest.raises(AttributeError):
+        start.phases = ()
 
 
 def test_start_from_result_failures(tmp_path) -> None:
@@ -570,13 +774,14 @@ def test_start_from_result_failures(tmp_path) -> None:
         start_from_result(path, stage="wild")
     with pytest.raises(PipelineError, match=r"stage 'nothing' was not accepted"):
         start_from_result(path, stage="nothing")
-    # The microstrain was held at "cell" and refined later, with no
-    # start_model to say where it started.
+    # In a result written before every value was recorded, the microstrain
+    # held at "cell" and refined later cannot be read.
     with pytest.raises(
         PipelineError,
         match=(
             r"mode_result\.json: stage 'cell' did not refine the microstrain, which "
-            r"a later stage did, and the result has no start_model giving it$"
+            r"a later stage did, and the result, written before every value was "
+            r"recorded at every stage, does not give it$"
         ),
     ):
         start_from_result(path, stage="cell")

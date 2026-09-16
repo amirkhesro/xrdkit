@@ -36,6 +36,7 @@ from xrdkit.gsas2 import (
     summary_markdown,
     write_instprm,
 )
+from xrdkit.pipeline import start_from_result
 
 CAGLIOTI = Caglioti(
     u=1.047e-02,
@@ -1136,6 +1137,33 @@ def test_le_bail_with_size_and_mustrain_in_gsas2(tmp_path) -> None:
     )
     f_obs = {tuple(row[:3].astype(int)): row[7] for row in reflections}
     assert f_obs[(1, 1, 1)] / f_obs[(1, 0, 0)] == pytest.approx(6.6, rel=0.2)
+
+    # Every stage records every value, refined or held, and the job's start.
+    assert set(result["start_model"]) == {"LaB6"}
+    values = size["values"]
+    (lab6,) = values["phases"]
+    assert lab6["name"] == "LaB6"
+    assert lab6["size"]["held"] is False
+    assert lab6["size"]["value"] == pytest.approx(
+        size["parameters"]["0:0:Size;i"]["value"]
+    )
+    assert lab6["mustrain"] == {**lab6["mustrain"], "value": 0.0, "esd": None}
+    assert lab6["mustrain"]["held"] is True
+    assert lab6["cell_held"] is True and lab6["cell_esd"] is None
+    assert lab6["cell"]["length_a"] == pytest.approx(4.15683, abs=1e-4)
+    assert lab6["phase_fraction"]["held"] is True
+    assert values["instrument"]["Zero"]["held"] is True
+    assert values["sample"]["Scale"]["held"] is False
+    assert len(values["background"]["coefficients"]) == 3
+    assert not any(c["held"] for c in values["background"]["coefficients"])
+    # So a later job can start from the size stage, before the microstrain.
+    saved = tmp_path / "lab6_result.json"
+    saved.write_text(json.dumps(result), encoding="utf-8")
+    start = start_from_result(saved, stage="size")
+    assert start.microstrain == 0.0
+    assert start.size == pytest.approx(lab6["size"]["value"])
+    assert start.phases[0].name == "LaB6"
+    assert start.start_model == result["start_model"]
 
 
 # A made up P4bm structure with the two A sites of the tungsten bronze, Sr1

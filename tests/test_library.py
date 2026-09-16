@@ -1,6 +1,7 @@
 """Tests for xrdkit.library."""
 
 import re
+from fractions import Fraction
 from importlib.resources import files
 
 import pytest
@@ -14,6 +15,7 @@ from xrdkit.library import (
     list_entries,
     load_entry,
 )
+from xrdkit.symmetry import space_group_operations
 
 # A valid entry, for a library of one under tmp_path; each validation test
 # breaks one thing in it.
@@ -452,6 +454,88 @@ def test_anions_bond_limits_and_kinds_rejected(tmp_path, old, new, message) -> N
     with pytest.raises(ValueError, match=message) as raised:
         load_entry("test/cubic", root=tmp_path)
     assert "\n" not in str(raised.value)
+
+
+# A point on each Wyckoff position the entries use, as the position's own
+# form (International Tables) with x, y and z given values of no symmetry.
+_X, _Y, _Z = Fraction(13, 100), Fraction(29, 100), Fraction(37, 100)
+_H, _Q = Fraction(1, 2), Fraction(1, 4)
+WYCKOFF_POINTS = {
+    ("P4bm", "2a"): (0, 0, _Z),
+    ("P4bm", "2b"): (0, _H, _Z),
+    ("P4bm", "4c"): (_X, _X + _H, _Z),
+    ("P4bm", "8d"): (_X, _Y, _Z),
+    ("P4/mbm", "2a"): (0, 0, 0),
+    ("P4/mbm", "2c"): (0, _H, _H),
+    ("P4/mbm", "2d"): (0, _H, 0),
+    ("P4/mbm", "4g"): (_X, _X + _H, 0),
+    ("P4/mbm", "4h"): (_X, _X + _H, _H),
+    ("P4/mbm", "8i"): (_X, _Y, 0),
+    ("P4/mbm", "8j"): (_X, _Y, _H),
+    ("Amm2", "2a"): (0, 0, _Z),
+    ("Amm2", "2b"): (_H, 0, _Z),
+    ("Amm2", "4e"): (_H, _Y, _Z),
+    ("P4mm", "1a"): (0, 0, _Z),
+    ("P4mm", "1b"): (_H, _H, _Z),
+    ("P4mm", "2c"): (_H, 0, _Z),
+    ("Pbnm", "4b"): (_H, 0, 0),
+    ("Pbnm", "4c"): (_X, _Y, _Q),
+    ("Pbnm", "8d"): (_X, _Y, _Z),
+    ("Pm-3m", "1a"): (0, 0, 0),
+    ("Pm-3m", "1b"): (_H, _H, _H),
+    ("Pm-3m", "3c"): (0, _H, _H),
+    ("R3c", "6a"): (0, 0, _Z),
+    ("R3c", "18b"): (_X, _Y, _Z),
+}
+
+
+def site_symmetry_free(space_group: str, point) -> tuple[tuple[str, ...], int]:
+    """The coordinates a site at ``point`` leaves free, a coordinate tied to
+    an earlier one following it, and the order of its site symmetry group."""
+    point = tuple(Fraction(value) for value in point)
+    stabiliser = []
+    for rotation, translation in space_group_operations(space_group):
+        image = [
+            sum(rotation[i][j] * point[j] for j in range(3)) + translation[i]
+            for i in range(3)
+        ]
+        if all((image[i] - point[i]) % 1 == 0 for i in range(3)):
+            stabiliser.append(rotation)
+    # Row reduce R - I over the site symmetry, the columns taken z, y, x, so
+    # that a coordinate tied to an earlier one is the one determined.
+    order = (2, 1, 0)
+    rows = [
+        [Fraction(rotation[i][c] - (1 if i == c else 0)) for c in order]
+        for rotation in stabiliser
+        for i in range(3)
+    ]
+    determined, rank = [], 0
+    for column in range(3):
+        pivot = next((i for i in range(rank, len(rows)) if rows[i][column] != 0), None)
+        if pivot is None:
+            continue
+        rows[rank], rows[pivot] = rows[pivot], rows[rank]
+        for i in range(len(rows)):
+            if i != rank and rows[i][column] != 0:
+                factor = rows[i][column] / rows[rank][column]
+                rows[i] = [a - factor * b for a, b in zip(rows[i], rows[rank])]
+        determined.append(order[column])
+        rank += 1
+    free = tuple("xyz"[axis] for axis in range(3) if axis not in determined)
+    return free, len(stabiliser)
+
+
+@pytest.mark.parametrize("name", list_entries())
+def test_every_shipped_site_frees_what_its_wyckoff_position_allows(name: str) -> None:
+    entry = load_entry(name)
+    group_order = len(space_group_operations(entry.space_group))
+
+    for site in entry.sites:
+        point = WYCKOFF_POINTS[(entry.space_group, site.wyckoff)]
+        free, site_order = site_symmetry_free(entry.space_group, point)
+        # The point is on the position: its site symmetry has the right order.
+        assert site_order * int(site.wyckoff[:-1]) == group_order, site.label
+        assert site.free == free, site.label
 
 
 @pytest.mark.parametrize("name", list_entries())

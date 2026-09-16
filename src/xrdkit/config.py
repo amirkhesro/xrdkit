@@ -524,9 +524,6 @@ def _structure(table: object, where: str) -> dict:
 
     if "free_coordinates" in table:
         free = _table(table["free_coordinates"], f"{where}.free_coordinates")
-    elif from_entry:
-        # A site the entry leaves nothing free takes "all", which frees nothing.
-        free = {site.wyckoff: "".join(site.free) or "all" for site in entry.sites}
     else:
         free = {}
     for wyckoff, axes in free.items():
@@ -542,6 +539,9 @@ def _structure(table: object, where: str) -> dict:
             and len(set(axes)) == len(axes)
         ):
             raise _fail(at, f"must be 'all' or some of 'xyz', not {axes!r}")
+    if "free_coordinates" not in table and from_entry:
+        # The entry's own, "" for a site its symmetry fixes.
+        free = {site.wyckoff: "".join(site.free) for site in entry.sites}
     structure["free_coordinates"] = dict(free)
 
     if "uiso_groups" in table:

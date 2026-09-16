@@ -137,6 +137,14 @@ parameters, atoms and constraints, and is saved so, and the stage's own
 entries are dropped from the stages, so that what it alone refined is held
 in every stage after it. A failed stage is recorded with its ``error``.
 
+Each stage records, besides the parameters it refined, ``values``: every
+histogram and phase value (zero and the other instrument parameters, scale
+and displacement, background coefficients, and each phase's cell, phase
+fraction, size and microstrain) as it leaves them, refined or held, a held
+one marked ``held`` with no esd, and ``atoms``, every atom's coordinates,
+occupancy and displacement parameters, a held one with no esd. The result's
+``start_model`` gives each phase's atoms as the job found them.
+
 Every run ends with a final model, whatever became of its stages: the values
 and the exports are those of the last stage kept, and where no stage was
 kept they are the model the job started from, computed without refining it.
@@ -2088,6 +2096,70 @@ def _stage_record(name, flags, histogram, covariance):
     }
 
 
+def _stage_values(project, histogram, esds):
+    """Every histogram and phase value a later job may start from, as a
+    stage leaves them, refined or held: each ``{"value", "esd", "held"}``,
+    a held value with no esd; the cell with ``cell_esd`` None and
+    ``cell_held`` true when no cell term was refined. The atoms are the
+    stage's ``atoms``, a held atom parameter with no esd."""
+    hfx = f":{histogram.id}:"
+
+    def entry(value, name):
+        esd = esds.get(name)
+        return {"value": value, "esd": esd, "held": esd is None}
+
+    instrument = histogram.InstrumentParameters
+    sample = histogram.SampleParameters
+    background = histogram.Background[0]
+    phases = []
+    for phase in project.phases():
+        pfx = f"{phase.id}:{histogram.id}:"
+        hap = phase.getHAPvalues(histogram.name)
+        refined = any(f"{phase.id}::A{index}" in esds for index in range(6))
+        cell, cell_esd = phase.get_cell_and_esd()
+        if not refined:
+            cell_esd = None
+        broadening = {}
+        histogram_data = phase.data["Histograms"][histogram.name]
+        for key, name in (("size", "Size"), ("mustrain", "Mustrain")):
+            value = histogram_data[name]
+            broadening[key] = {
+                "type": value[0],
+                **entry(value[1][0], f"{pfx}{name};i"),
+                "lorentzian_fraction": value[1][2],
+            }
+        phases.append(
+            {
+                "name": phase.name,
+                "cell": cell,
+                "cell_esd": cell_esd,
+                "cell_held": not refined,
+                "phase_fraction": entry(float(hap["Scale"][0]), pfx + "Scale"),
+                **broadening,
+            }
+        )
+    return {
+        "instrument": {
+            key: entry(instrument[key][1], hfx + key)
+            for key in REPORTED_INSTRUMENT
+            if key in instrument
+        },
+        "sample": {
+            key: entry(sample[key][0], hfx + key)
+            for key in SAMPLE_KEYS
+            if key in sample
+        },
+        "background": {
+            "type": background[0],
+            "coefficients": [
+                entry(value, f"{hfx}Back;{index}")
+                for index, value in enumerate(background[3:])
+            ],
+        },
+        "phases": phases,
+    }
+
+
 def _final(project, histogram, covariance, xinel=None):
     """Instrument, sample, background and phase values after the last stage,
     with each phase's atoms and symmetry operators."""
@@ -2430,6 +2502,8 @@ def refine(G2sc, job):
         "on_flagged": on_flagged,
         "on_unsettled": on_unsettled,
         "rejected": [],
+        # The atoms of each phase as the job found them, before any stage.
+        "start_model": start_atoms,
     }
     le_bail_cycles = int(job.get("le_bail_cycles") or DEFAULT_LE_BAIL_CYCLES)
     max_passes = int(job.get("max_passes") or 1)
@@ -2507,6 +2581,9 @@ def refine(G2sc, job):
         record["atoms"] = {
             phase.name: _atom_table(phase, esds, xinel) for phase in project.phases()
         }
+        # Every other value as this stage leaves it, refined or held, so that
+        # a later job can start from any stage kept.
+        record["values"] = _stage_values(project, histogram, esds)
         record["sanity"] = sanity_flags(record["atoms"])
         record["undetermined"] = [
             {**entry, "phase": name}

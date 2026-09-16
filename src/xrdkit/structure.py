@@ -412,8 +412,9 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
 
     - ``sites``: in the structure's order, each ``{"name", "kind",
       "wyckoff", "multiplicity", "free", "atoms"}``, ``free`` the
-      coordinates to refine from the table's ``free_coordinates`` ("all"
-      for a position it does not name) and ``atoms`` those on the position,
+      coordinates to refine from the table's ``free_coordinates``, else,
+      for a site of a library entry (``label``), the entry's own, ``""``
+      where its symmetry fixes the site, else "all", and ``atoms`` those on the position,
       in the order of ``atoms``;
     - ``kinds``: the sites of each kind, in that order;
     - ``uiso_groups`` and ``group_names``: the site names of each Uiso
@@ -449,6 +450,11 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
     group_of = {index: number for number, group in enumerate(groups) for index in group}
     index_of = {str(atom["label"]): index for index, atom in enumerate(atoms)}
     free = structure.get("free_coordinates", {})
+    entry = load_entry(structure["library"]) if structure.get("library") else None
+    # A library site's free coordinates, "" for one its symmetry fixes.
+    entry_free = (
+        {site.label: "".join(site.free) for site in entry.sites} if entry else {}
+    )
     sites, used = [], {}
     for site in structure["sites"]:
         name = site["name"]
@@ -483,7 +489,9 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
                 "kind": site["kind"],
                 "wyckoff": site["wyckoff"],
                 "multiplicity": multiplicity,
-                "free": free.get(site["wyckoff"], "all"),
+                "free": free.get(
+                    site["wyckoff"], entry_free.get(site.get("label"), "all")
+                ),
                 "atoms": members,
             }
         )
@@ -502,7 +510,6 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
     held = structure.get("origin")
     origin = by_name[held["site"]] if held else None
     exchange = structure.get("exchange")
-    entry = load_entry(structure["library"]) if structure.get("library") else None
     if entry is not None:
         anions = list(entry.anions)
     else:
