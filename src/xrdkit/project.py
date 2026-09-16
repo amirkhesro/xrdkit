@@ -16,8 +16,10 @@ holds
     parameter file.
 
 ``[structures.<key>]``
-    Exactly one of ``library``, the name of a shipped structure entry (see
-    :func:`xrdkit.library.list_entries`), or ``cif``, a CIF file;
+    ``library``, the name of a shipped structure entry (see
+    :func:`xrdkit.library.list_entries`), or ``cif``, a CIF file, or both, the
+    entry giving the sites, their kinds and free coordinates and the CIF the
+    coordinates a Rietveld refinement starts from;
     ``composition``, a formula :func:`xrdkit.density.parse_formula` reads;
     ``cell``, ``{a = ..., c = ...}`` in angstroms and degrees, required with
     ``library`` and then with exactly the entry's cell parameters, optional
@@ -27,12 +29,14 @@ holds
 
     ``atoms`` takes the shapes :mod:`xrdkit.config` reads, with its readers.
     With ``library`` it is a table of the entry's sites by label, each the
-    atoms on it, ``{A1 = {Sr1 = "Sr", La1 = "La"}, ...}``; a site named
+    atoms on it, ``{A1 = {Sr1 = "Sr", La1 = "La"}, ...}``, by their labels in
+    the CIF when there is one, an atom the CIF lacks being put on the site
+    beside the CIF's; a site named
     holds exactly those atoms, and one not named the prototype's elements.
     When it is given, every element of the composition must be on a site, so
     an element the prototype does not carry must be placed by it; it may be
     left out when the composition holds only the prototype's elements. With
-    ``cif`` it is the list of the CIF's sites, ``[{atoms = {Nb1 = "Nb"},
+    ``cif`` alone it is the list of the CIF's sites, ``[{atoms = {Nb1 = "Nb"},
     wyckoff = "2b", kind = "B"}, ...]``, each named by its first atom.
 
     ``origin`` is the site that fixes the origin: a site label, one of the
@@ -370,8 +374,8 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
     where = f"structures.{key}"
     check.folder_key(key, where)
     table = check.keys(value, where, STRUCTURE_REQUIRED, STRUCTURE_OPTIONAL)
-    if ("library" in table) == ("cif" in table):
-        raise check.fail(where, "must give exactly one of library and cif")
+    if "library" not in table and "cif" not in table:
+        raise check.fail(where, "must give library or cif, or both")
 
     composition = check.string(table["composition"], f"{where}.composition")
     try:
@@ -390,7 +394,7 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
                 + ", ".join(available),
             )
         entry = load_entry(library)
-    else:
+    if "cif" in table:
         cif = check.path(table["cif"], f"{where}.cif", exists=True)
 
     cell = None
@@ -891,8 +895,9 @@ version = 1
 # instprm = "data/standards/diffractometer.instprm"
 
 # A structure model, named by its key, which names its results folders too.
-# Give exactly one of library, a structure library entry such as ttb/P4bm or
-# perovskite/P4mm (xrdkit.list_entries() lists them), or cif, a CIF file.
+# Give library, a structure library entry such as ttb/P4bm or perovskite/P4mm
+# (xrdkit.list_entries() lists them), or cif, a CIF file, or both: a Rietveld
+# refinement needs the CIF's coordinates, Le Bail only the entry.
 # composition is the formula put on it. cell is required with library, with
 # exactly the entry's cell parameters, and optional with cif. z, exchange
 # (groups of elements whose occupancies are traded), origin (the label of the

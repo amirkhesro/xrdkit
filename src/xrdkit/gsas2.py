@@ -312,6 +312,9 @@ def build_refine_job(
     overall_uiso_start: Mapping[str, float] | None = None,
     scale_start: float | None = None,
     sanity: Mapping | None = None,
+    displacement_start: float | None = None,
+    phase_fraction_start: Mapping[str, float] | None = None,
+    start_model: Mapping[str, Sequence[Mapping]] | None = None,
     bonds: bool | Mapping | None = None,
     on_flagged: str | None = None,
     on_unsettled: str | None = None,
@@ -381,6 +384,17 @@ def build_refine_job(
     scale_start
         The histogram scale to start from, such as an earlier refinement's;
         GSAS-II's 1 otherwise.
+    displacement_start
+        The specimen displacement to start from, such as an earlier
+        refinement's; GSAS-II's 0 otherwise.
+    phase_fraction_start
+        ``{phase: fraction}``, the phase fractions to start from; GSAS-II's 1
+        otherwise.
+    start_model
+        ``{phase: [atom, ...]}``, atoms with ``label`` and ``xyz``: the model
+        the refinement's undetermined parameters are judged against, recorded
+        as the result's ``start_model``; the atoms as the job finds them by
+        default.
     sanity
         ``{"max_shift": ..., "reference": {phase: [{"label": ..., "xyz":
         [...]}, ...]}}``, either, for the sanity check after every stage: a
@@ -479,6 +493,21 @@ def build_refine_job(
         )
     if scale_start is not None:
         job["scale_start"] = gsas2_driver.check_scale_start(scale_start)
+    if displacement_start is not None:
+        job["displacement_start"] = gsas2_driver.check_displacement_start(
+            displacement_start
+        )
+    if phase_fraction_start is not None:
+        job["phase_fraction_start"] = gsas2_driver.check_phase_fraction_start(
+            dict(phase_fraction_start)
+        )
+    if start_model is not None:
+        job["start_model"] = gsas2_driver.check_start_model(
+            {
+                str(phase): [dict(atom) for atom in atoms]
+                for phase, atoms in start_model.items()
+            }
+        )
     if sanity is not None:
         checked = gsas2_driver.check_sanity_settings(dict(sanity))
         job["sanity"] = {"max_shift": checked["max_shift"]}

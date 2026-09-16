@@ -1,15 +1,20 @@
 """Tests for xrdkit.pipeline: the stage builders and start_from_result, on
 synthetic plans and result files; no GSAS-II run."""
 
+import copy
 import json
 import math
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import xrdkit
 from xrdkit import gsas2_driver as driver
+from xrdkit import pipeline
+from xrdkit.broadening import Caglioti
+from xrdkit.gsas2 import Gsas2Error, build_refine_job, find_gsas2, write_instprm
 from xrdkit.library import load_entry
 from xrdkit.pipeline import (
     CYCLES,
@@ -17,17 +22,35 @@ from xrdkit.pipeline import (
     MODES,
     PASS_TOLERANCE,
     START_BROADENING,
+    Options,
     PipelineError,
     StartPoint,
     coordinates_stages,
     fixed_atoms_stages,
     lebail_stages,
     occupancy_stages,
+    resolve_inputs,
+    run_mode,
+    run_sequence,
     start_from_result,
 )
+from xrdkit.project import load_project
 from xrdkit.structure import site_setup
+from xrdkit.symmetry import is_absent, space_group_operations
 
 BACKGROUND = {"function": "chebyschev-1", "terms": 8}
+# The instrument the GSAS-II tests use.
+CAGLIOTI = Caglioti(
+    u=1.047e-02,
+    v=-1.184e-02,
+    w=8.359e-03,
+    esd_u=1.714e-03,
+    esd_v=2.049e-03,
+    esd_w=5.663e-04,
+    n_peaks=14,
+    rms=0.00255,
+    covariance=np.zeros((3, 3)),
+)
 DRIVER_BACKGROUND = {"type": "chebyschev-1", "terms": 8}
 
 
@@ -803,3 +826,804 @@ def test_start_from_result_failures(tmp_path) -> None:
         with pytest.raises(PipelineError, match=rf"{name}\.json: no ") as raised:
             start_from_result(write(tmp_path, data, f"{name}.json"))
         assert "\n" not in str(raised.value)
+
+
+# Running the modes, with GSAS-II played by a fake
+
+
+TOY_CIF = """data_toy
+_cell_length_a  6.0
+_cell_length_b  6.0
+_cell_length_c  4.0
+_cell_angle_alpha 90
+_cell_angle_beta  90
+_cell_angle_gamma 90
+_symmetry_space_group_name_H-M 'P 4 b m'
+loop_
+   _atom_site_label
+   _atom_site_type_symbol
+   _atom_site_fract_x
+   _atom_site_fract_y
+   _atom_site_fract_z
+   _atom_site_occupancy
+   _atom_site_U_iso_or_equiv
+Sr1  Sr  0.0  0.0  0.5   0.6  0.01
+Ba2  Ba  0.2  0.7  0.5   0.6  0.01
+Nb1  Nb  0.5  0.0  0.0   1.0  0.01
+O1   O   0.3  0.1  0.1   1.0  0.01
+"""
+
+# The toy's atoms as the driver's create action reports them.
+TOY_ATOMS = [
+    {
+        "label": "Sr1",
+        "type": "Sr",
+        "xyz": [0.0, 0.0, 0.5],
+        "occupancy": 0.6,
+        "multiplicity": 2,
+        "adp": "I",
+        "uiso": 0.01,
+    },
+    {
+        "label": "Ba2",
+        "type": "Ba",
+        "xyz": [0.2, 0.7, 0.5],
+        "occupancy": 0.6,
+        "multiplicity": 4,
+        "adp": "I",
+        "uiso": 0.01,
+    },
+    {
+        "label": "Nb1",
+        "type": "Nb",
+        "xyz": [0.5, 0.0, 0.0],
+        "occupancy": 1.0,
+        "multiplicity": 2,
+        "adp": "I",
+        "uiso": 0.01,
+    },
+    {
+        "label": "O1",
+        "type": "O",
+        "xyz": [0.3, 0.1, 0.1],
+        "occupancy": 1.0,
+        "multiplicity": 8,
+        "adp": "I",
+        "uiso": 0.01,
+    },
+]
+
+INSTPRM = """#GSAS-II instrument parameter file
+Type:PXC
+Lam1:1.540598
+Lam2:1.544426
+I(L2)/I(L1):0.5
+Zero:0.0
+Polariz.:0.7
+Azimuth:0.0
+U:2.0
+V:-1.0
+W:5.0
+X:0.0
+Y:1.0
+Z:0.0
+SH/L:0.002
+"""
+
+XRDML_SCAN = """<?xml version="1.0" encoding="UTF-8"?>
+<xrdMeasurements xmlns="http://www.xrdml.com/XRDMeasurement/2.0">
+  <sample><id>toy</id></sample>
+  <xrdMeasurement>
+    <usedWavelength>
+      <kAlpha1>1.5405980</kAlpha1>
+      <kAlpha2>1.5444260</kAlpha2>
+      <ratioKAlpha2KAlpha1>0.5</ratioKAlpha2KAlpha1>
+    </usedWavelength>
+    <scan>
+      <dataPoints>
+        <positions axis="2Theta" unit="deg">
+          <startPosition>{start}</startPosition>
+          <endPosition>{end}</endPosition>
+        </positions>
+        <commonCountingTime>1.0</commonCountingTime>
+        <counts>{counts}</counts>
+      </dataPoints>
+    </scan>
+  </xrdMeasurement>
+</xrdMeasurements>
+"""
+
+PROJECT = """
+[project]
+name = "fake"
+version = 1
+
+[refine]
+two_theta = [20.5, 59.5]
+background = { function = "chebyschev-1", terms = 3 }
+
+[instruments.lab]
+wavelength = [1.540598, 1.544426]
+ka2 = true
+radius = 240.0
+instprm = "lab.instprm"
+
+[structures.bronze]
+library = "ttb/P4bm"
+cif = "toy.cif"
+composition = "Sr0.24Ba0.48Nb0.4O1.6"
+cell = { a = 6.0, c = 4.0 }
+
+[structures.toy]
+cif = "toy.cif"
+composition = "Sr0.24Ba0.48Nb0.4O1.6"
+z = 5
+exchange = [["Sr", "Ba"]]
+origin = { site = "Nb1", axis = "z" }
+atoms = [
+    { atoms = { Sr1 = "Sr" }, wyckoff = "2a", kind = "A" },
+    { atoms = { Ba2 = "Ba" }, wyckoff = "4c", kind = "A" },
+    { atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "B" },
+    { atoms = { O1 = "O" }, wyckoff = "8d", kind = "O" },
+]
+
+[structures.second]
+cif = "toy.cif"
+composition = "Sr0.24Ba0.48Nb0.4O1.6"
+z = 5
+
+[structures.lanthanum]
+library = "ttb/P4bm"
+cif = "toy.cif"
+composition = "Sr0.2Ba0.48La0.04Nb0.4O1.6"
+cell = { a = 6.0, c = 4.0 }
+
+[samples."x0.10.powder"]
+file = "toy.xrdml"
+instrument = "lab"
+structures = ["bronze"]
+form = "powder"
+
+[samples.pellet]
+file = "toy.xrdml"
+instrument = "lab"
+structures = ["bronze"]
+form = "pellet"
+
+[samples.chain]
+file = "toy.xrdml"
+instrument = "lab"
+structures = ["toy"]
+form = "powder"
+
+[samples.two]
+file = "toy.xrdml"
+instrument = "lab"
+structures = ["toy", "second"]
+form = "powder"
+
+[samples.unplaced]
+file = "toy.xrdml"
+instrument = "lab"
+structures = ["lanthanum"]
+form = "powder"
+"""
+
+
+def fake_project(tmp_path: Path, extra: str = ""):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "toy.cif").write_text(TOY_CIF, encoding="utf-8")
+    (root / "lab.instprm").write_text(INSTPRM, encoding="utf-8")
+    counts = " ".join(["100"] * 401)
+    (root / "toy.xrdml").write_text(
+        XRDML_SCAN.format(start=20.0, end=60.0, counts=counts), encoding="utf-8"
+    )
+    (root / "xrdkit.toml").write_text(PROJECT + extra, encoding="utf-8")
+    return load_project(root)
+
+
+def _edited(atoms: list[dict], edits: list[dict] | None) -> list[dict]:
+    """``atoms`` with the driver's atom edits applied."""
+    atoms = [dict(atom) for atom in atoms]
+    by_label = {atom["label"]: atom for atom in atoms}
+    for edit in edits or ():
+        if edit["label"] in by_label:
+            by_label[edit["label"]]["occupancy"] = edit["occupancy"]
+            for key in ("xyz", "uiso"):
+                if key in edit:
+                    by_label[edit["label"]][key] = edit[key]
+        else:
+            host = by_label[edit["copy"]]
+            atom = {
+                **host,
+                "label": edit["label"],
+                "type": edit["type"],
+                "occupancy": edit["occupancy"],
+            }
+            atoms.append(atom)
+            by_label[atom["label"]] = atom
+    return atoms
+
+
+class FakeGsas2:
+    """Plays run_job: a create job reports the toy's atoms, edits applied; a
+    refine job writes a result of its stages, every one clean unless told
+    otherwise, with exports and a log, and keeps every job it was given."""
+
+    def __init__(
+        self, status="clean", completed=True, final=True, change=None, raises=None
+    ):
+        self.jobs = []
+        self.status = status
+        self.completed = completed
+        self.final = final
+        self.change = change
+        self.raises = raises
+
+    def __call__(self, job, workdir, install=None):
+        self.jobs.append(copy.deepcopy(job))
+        workdir = Path(workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+        phases = job["phases"]
+        if job["action"] == "create":
+            return {
+                "phases": [
+                    {
+                        "name": phase["name"],
+                        "cell": {
+                            "length_a": 6.0,
+                            "length_b": 6.0,
+                            "length_c": 4.0,
+                            "angle_alpha": 90.0,
+                            "angle_beta": 90.0,
+                            "angle_gamma": 90.0,
+                        },
+                        "atoms": _edited(TOY_ATOMS, phase.get("atoms")),
+                    }
+                    for phase in phases
+                ]
+            }
+        (workdir / "refine.log").write_text("fake GSAS-II log line\n", encoding="utf-8")
+        if self.raises is not None:
+            raise self.raises
+        terms = job["stages"][0]["background"]["terms"]
+        atoms = {
+            phase["name"]: _edited(TOY_ATOMS, phase.get("atoms")) for phase in phases
+        }
+        cells = {
+            phase["name"]: dict(
+                zip(
+                    (
+                        "length_a",
+                        "length_b",
+                        "length_c",
+                        "angle_alpha",
+                        "angle_beta",
+                        "angle_gamma",
+                    ),
+                    phase.get("cell") or [6.0, 6.0, 4.0, 90.0, 90.0, 90.0],
+                )
+            )
+            for phase in phases
+        }
+
+        def value(number, held=False):
+            return {"value": number, "esd": None if held else 0.001, "held": held}
+
+        values = {
+            "instrument": {"Zero": value(0.01)},
+            "sample": {"Scale": value(2.0), "Shift": value(0.02)},
+            "background": {
+                "type": "chebyschev-1",
+                "coefficients": [value(10.0)] * terms,
+            },
+            "phases": [
+                {
+                    "name": name,
+                    "cell": cells[name],
+                    "cell_esd": None,
+                    "cell_held": False,
+                    "phase_fraction": value(0.5),
+                    "size": value(0.4),
+                    "mustrain": value(0.0, held=True),
+                }
+                for name in atoms
+            ],
+        }
+        stages = [
+            {
+                "name": stage["name"],
+                "status": self.status,
+                "parameters": {},
+                "rwp": 10.0,
+                "rp": 8.0,
+                "gof": 1.5,
+                "chi_squared": 2.25,
+                "atoms": atoms,
+                "values": values,
+            }
+            for stage in job["stages"]
+        ]
+        if not self.completed:
+            stages[-1] = {
+                "name": stages[-1]["name"],
+                "status": "failed",
+                "error": "RefinementError: singular matrix",
+            }
+        prefix = Path(job["export_prefix"])
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        instprm = Path(job["instprm"]).read_text(encoding="utf-8")
+        if self.change:
+            instprm = instprm.replace(*self.change)
+        exports = {
+            "histogram": str(prefix.with_name(prefix.name + "_histogram.csv")),
+            "reflections": {
+                name: str(prefix.with_name(f"{prefix.name}_reflections_{name}.csv"))
+                for name in atoms
+            },
+            "instprm": str(prefix.with_name(prefix.name + ".instprm")),
+        }
+        Path(exports["histogram"]).write_text("two_theta\n", encoding="utf-8")
+        for path in exports["reflections"].values():
+            Path(path).write_text("h,k,l\n", encoding="utf-8")
+        Path(exports["instprm"]).write_text(instprm, encoding="utf-8")
+        result = {
+            "limits": job["limits"],
+            "stages": stages,
+            "completed": self.completed,
+            "rejected": [s["name"] for s in stages if s.get("status") == "rejected"],
+            "undetermined": [],
+            "start_model": job.get("start_model") or atoms,
+            "final_from": stages[-1]["name"],
+            "exports": exports,
+        }
+        if self.final:
+            result["final"] = {
+                "instrument": {"Zero": {"value": 0.01, "esd": 0.001}},
+                "sample": {
+                    "Scale": {"value": 2.0, "esd": 0.01},
+                    "Shift": {"value": 0.02, "esd": 0.001},
+                },
+                "background": {"type": "chebyschev-1", "coefficients": [10.0] * terms},
+                "phases": [
+                    {
+                        "name": name,
+                        "cell": cells[name],
+                        "size": {"value": 0.4},
+                        "mustrain": {"value": 0.0},
+                        "phase_fraction": {"value": 0.5},
+                        "weight_fraction": {"value": 0.5, "esd": 0.02},
+                        "atoms": atoms[name],
+                    }
+                    for name in atoms
+                ],
+            }
+        Path(job["result"]).write_text(json.dumps(result), encoding="utf-8")
+        return result
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    gsas2 = FakeGsas2()
+    monkeypatch.setattr(pipeline, "run_job", gsas2)
+    return gsas2
+
+
+def refine_jobs(gsas2: FakeGsas2) -> list[dict]:
+    return [job for job in gsas2.jobs if job["action"] == "refine"]
+
+
+def test_run_mode_file_layout_and_a_key_with_a_dot(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+    lines = []
+
+    outcome = run_mode(project, "x0.10.powder", "lebail", reporter=lines.append)
+
+    folder = project.root / "results" / "lebail" / "x0.10.powder"
+    (job,) = refine_jobs(fake)
+    assert job["gpx"] == str(folder / "x0.10.powder_lebail.gpx")
+    assert job["export_prefix"] == str(folder / "x0.10.powder_lebail")
+    assert job["result"] == str(folder / "x0.10.powder_lebail_result.json")
+    assert (folder / "work" / "lebail" / "refine.log").is_file()
+    assert (folder / "work" / "lebail" / "x0.10.powder_lebail_start.instprm").is_file()
+    assert Path(outcome.paths["instprm"]) == folder / "x0.10.powder_lebail.instprm"
+    assert outcome.error is None and outcome.accepted == [
+        "background and scale",
+        "zero",
+        "cell",
+        "size",
+        "microstrain",
+    ]
+    assert outcome.residuals == {"rwp": 10.0, "rp": 8.0, "chi_squared": 2.25}
+    saved = json.loads((folder / "x0.10.powder_lebail_result.json").read_text("utf-8"))
+    assert saved["inputs"]["sample"]["key"] == "x0.10.powder"
+    assert saved["inputs"]["instrument"]["radius"] == 240.0
+    assert saved["inputs"]["limits"] == [20.5, 59.5]
+    assert saved["method"]["stages"][0]["name"] == "background and scale"
+    assert saved["method"]["driver_version"] == driver.DRIVER_VERSION
+    assert "xrdkit_version" in saved["method"] and saved["date"]
+    assert lines and all(isinstance(line, str) for line in lines)
+
+    # The Rietveld modes go to results/rietveld/<key>, from the Le Bail result.
+    run_mode(project, "x0.10.powder", "fixed_atoms")
+    rietveld = project.root / "results" / "rietveld" / "x0.10.powder"
+    assert refine_jobs(fake)[-1]["gpx"] == str(
+        rietveld / "x0.10.powder_fixed_atoms.gpx"
+    )
+    assert (rietveld / "x0.10.powder_fixed_atoms_result.json").is_file()
+
+    # Or all to one folder.
+    out = tmp_path / "elsewhere"
+    run_mode(project, "x0.10.powder", "lebail", Options(out=out))
+    assert (out / "x0.10.powder_lebail_result.json").is_file()
+
+
+def test_run_mode_start_cell_order(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    run_mode(project, "x0.10.powder", "lebail")
+    assert refine_jobs(fake)[-1]["phases"][0]["cell"] == [
+        6.0,
+        6.0,
+        4.0,
+        90.0,
+        90.0,
+        90.0,
+    ]
+    assert resolve_inputs(project, "x0.10.powder").start_cell_source == (
+        "structures.bronze.cell"
+    )
+
+    lattice = project.root / "results" / "lattice" / "x0.10.powder"
+    lattice.mkdir(parents=True)
+    (lattice / "lattice_x0.10.powder.csv").write_text(
+        "a,esd_a,b,esd_b,c,esd_c,alpha,esd_alpha,beta,esd_beta,gamma,esd_gamma\n"
+        "6.2,0.01,6.2,0.01,4.1,0.01,90,0,90,0,90,0\n"
+        "6.1,0.01,6.1,0.01,4.05,0.01,90,0,90,0,90,0\n",
+        encoding="utf-8",
+    )
+    run_mode(project, "x0.10.powder", "lebail")
+    assert refine_jobs(fake)[-1]["phases"][0]["cell"] == [
+        6.1,
+        6.1,
+        4.05,
+        90.0,
+        90.0,
+        90.0,
+    ]
+    saved = json.loads(
+        (
+            project.root / "results/lebail/x0.10.powder/x0.10.powder_lebail_result.json"
+        ).read_text("utf-8")
+    )
+    assert saved["inputs"]["start_cell_source"]["bronze"].startswith("lattice results")
+
+    cell = {"a": 5.9, "b": 5.9, "c": 3.9, "alpha": 90.0, "beta": 90.0, "gamma": 90.0}
+    run_mode(project, "x0.10.powder", "lebail", Options(cell=cell))
+    assert refine_jobs(fake)[-1]["phases"][0]["cell"] == [
+        5.9,
+        5.9,
+        3.9,
+        90.0,
+        90.0,
+        90.0,
+    ]
+    assert resolve_inputs(
+        project, "x0.10.powder", Options(cell=cell)
+    ).start_cell_source == ("options")
+    with pytest.raises(PipelineError, match="options.cell must give exactly a, b, c"):
+        resolve_inputs(project, "x0.10.powder", Options(cell={"a": 5.9}))
+
+
+def test_run_mode_displacement_by_form_and_option(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    run_mode(project, "x0.10.powder", "lebail")
+    run_mode(project, "pellet", "lebail")
+    run_mode(project, "x0.10.powder", "lebail", Options(displacement=True))
+    run_mode(project, "pellet", "lebail", Options(displacement=False))
+
+    second = [job["stages"][1]["name"] for job in refine_jobs(fake)]
+    assert second == ["zero", "displacement", "displacement", "zero"]
+
+
+def test_run_mode_two_phases_free_the_fractions(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    outcome = run_mode(project, "two", "lebail")
+
+    (job,) = refine_jobs(fake)
+    assert [phase["name"] for phase in job["phases"]] == ["toy", "second"]
+    assert (job["stages"][0]["scale"], job["stages"][0]["phase_fractions"]) == (
+        False,
+        True,
+    )
+    assert outcome.residuals["weight_fractions"] == {
+        "toy": {"value": 0.5, "esd": 0.02},
+        "second": {"value": 0.5, "esd": 0.02},
+    }
+
+
+def test_run_mode_passes_the_start_model(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    for mode in ("lebail", "fixed_atoms", "coordinates", "occupancies"):
+        run_mode(project, "chain", mode)
+
+    _, fixed, coordinates, occupancies = refine_jobs(fake)
+    # The structure as fixed atoms set it up, nominal occupancies in place,
+    # is the reference every later mode judges against.
+    set_up = fake.jobs[[j["action"] for j in fake.jobs].index("create") + 1]
+    assert fixed["start_model"] == {
+        "toy": _edited(TOY_ATOMS, set_up["phases"][0].get("atoms"))
+    }
+    assert coordinates["start_model"] == fixed["start_model"]
+    assert occupancies["start_model"] == fixed["start_model"]
+    # Coordinates by kind; the B site, Nb1, fixes the origin and is the only
+    # B site, so B has no stage and the origin is held from the first.
+    assert [stage["name"] for stage in coordinates["stages"]] == [
+        "profile",
+        "Uiso groups",
+        "A sites",
+        "O sites",
+    ]
+    assert coordinates["stages"][2]["origin"] == {"toy": {"site": "Nb1", "axis": "z"}}
+    assert coordinates["stages"][2]["coordinates"] == {
+        "toy": {"Sr1": "all", "Ba2": "all"}
+    }
+    assert [stage["name"] for stage in occupancies["stages"]] == [
+        "profile and Uiso",
+        "A site occupancies",
+    ]
+    added = [edit for edit in occupancies["phases"][0]["atoms"] if "copy" in edit]
+    assert {(edit["label"], edit["copy"]) for edit in added} == {
+        ("Ba1", "Sr1"),
+        ("Sr2", "Ba2"),
+    }
+
+
+def test_run_mode_unplaced_element(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    with pytest.raises(
+        PipelineError,
+        match=(
+            r"^structures\.lanthanum: La of the composition is not in the ttb/P4bm "
+            r"prototype and no atoms place it; place it on one of its sites A1, A2, "
+            r"B1, B2, O1, O2, O3, O4, O5$"
+        ),
+    ):
+        run_mode(project, "unplaced", "lebail")
+    assert fake.jobs == []
+
+
+def test_run_mode_places_an_element_beside_the_cif_atom(tmp_path, fake) -> None:
+    project = fake_project(
+        tmp_path,
+        '\n[structures.lanthanum.atoms]\nA1 = { Sr1 = "Sr", La1 = "La" }\n',
+    )
+
+    run_mode(project, "unplaced", "lebail")
+    run_mode(project, "unplaced", "fixed_atoms")
+
+    fixed = refine_jobs(fake)[-1]
+    (la,) = [edit for edit in fixed["phases"][0]["atoms"] if edit.get("type") == "La"]
+    assert la["copy"] == "Sr1"
+
+
+def test_run_mode_held_instrument_check(tmp_path, monkeypatch) -> None:
+    project = fake_project(tmp_path)
+    monkeypatch.setattr(pipeline, "run_job", FakeGsas2(change=("U:2.0", "U:2.5")))
+
+    with pytest.raises(
+        PipelineError,
+        match=r"^lebail: instrument parameters held by the run came out changed: "
+        r"U 2\.0 -> 2\.5$",
+    ):
+        run_mode(project, "x0.10.powder", "lebail")
+
+
+def old_result(folder: Path) -> Path:
+    """An older result of the Le Bail mode, which no failure may report."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "x0.10.powder_lebail_result.json"
+    path.write_text(
+        json.dumps(
+            {"completed": True, "stages": [{"name": "OLD STAGE", "status": "clean"}]}
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    ("gsas2", "error", "wrote"),
+    [
+        (
+            FakeGsas2(raises=Gsas2Error("GSAS-II crashed")),
+            "Gsas2Error: GSAS-II crashed",
+            False,
+        ),
+        (
+            FakeGsas2(status="rejected"),
+            "PipelineError: lebail: no stage was accepted",
+            True,
+        ),
+        (
+            FakeGsas2(final=False),
+            "PipelineError: lebail: the run left no final model",
+            True,
+        ),
+        (
+            FakeGsas2(completed=False),
+            "PipelineError: lebail: stage 'microstrain' failed",
+            True,
+        ),
+    ],
+    ids=["gsas2 error", "every stage rejected", "no final model", "a stage failed"],
+)
+def test_run_sequence_failures(tmp_path, monkeypatch, gsas2, error, wrote) -> None:
+    project = fake_project(tmp_path)
+    monkeypatch.setattr(pipeline, "run_job", gsas2)
+    folder = project.root / "results" / "lebail" / "x0.10.powder"
+    old_result(folder)
+
+    outcomes = run_sequence(project, "x0.10.powder", ["lebail", "fixed_atoms"])
+
+    (outcome,) = outcomes
+    assert outcome.error.startswith(error)
+    failure = (folder / "failure.md").read_text(encoding="utf-8")
+    assert error in failure
+    assert "OLD STAGE" not in failure
+    assert "fixed_atoms not run" in failure
+    assert "fake GSAS-II log line" in failure
+    assert ("The run wrote no result." in failure) is not wrote
+    summary = (folder / "summary.md").read_text(encoding="utf-8")
+    assert "lebail" in summary and "OLD STAGE" not in summary
+    assert not (project.root / "results" / "rietveld").exists()
+
+
+def test_run_sequence_failure_at_set_up(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    outcomes = run_sequence(project, "unplaced", ["lebail"])
+
+    assert outcomes[0].error.startswith("PipelineError: structures.lanthanum: La")
+    folder = project.root / "results" / "lebail" / "unplaced"
+    failure = (folder / "failure.md").read_text(encoding="utf-8")
+    assert "The run wrote no result." in failure
+    assert "(no log)" in failure
+    assert (folder / "summary.md").is_file()
+
+
+def test_run_sequence_runs_the_modes_in_order(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    outcomes = run_sequence(
+        project, "chain", ["lebail", "fixed_atoms", "coordinates", "occupancies"]
+    )
+
+    assert [outcome.mode for outcome in outcomes] == list(MODES)
+    assert all(outcome.error is None for outcome in outcomes)
+    summary = project.root / "results" / "rietveld" / "chain" / "summary.md"
+    assert summary.is_file() and outcomes[-1].paths["summary"] == str(summary)
+    assert not (summary.parent / "failure.md").exists()
+    with pytest.raises(PipelineError, match="no mode 'rietveld'"):
+        run_sequence(project, "chain", ["rietveld"])
+
+
+def test_build_refine_job_takes_the_start_model_and_starts() -> None:
+    model = {"toy": [{"label": "Sr1", "xyz": [0.0, 0.0, 0.5]}]}
+
+    job = build_refine_job(
+        "toy.gpx",
+        [{"name": "scale", "scale": True}],
+        start_model=model,
+        displacement_start=0.01,
+        phase_fraction_start={"toy": 0.3},
+    )
+
+    assert job["start_model"] == model
+    assert (job["displacement_start"], job["phase_fraction_start"]) == (
+        0.01,
+        {"toy": 0.3},
+    )
+    with pytest.raises(
+        ValueError, match="start_model of 'toy' must be a list of atoms"
+    ):
+        build_refine_job(
+            "toy.gpx", [{"scale": True}], start_model={"toy": [{"label": "X"}]}
+        )
+
+
+def test_run_mode_needs_the_mode_before(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+
+    with pytest.raises(PipelineError, match="run lebail first$") as raised:
+        run_mode(project, "chain", "fixed_atoms")
+    assert raised.value.result is None and raised.value.log is None
+
+
+def test_lebail_then_fixed_atoms_in_gsas2(tmp_path) -> None:
+    try:
+        find_gsas2()
+    except FileNotFoundError as error:
+        pytest.skip(str(error))
+
+    root = tmp_path / "project"
+    root.mkdir()
+    two_theta = np.linspace(20.0, 60.0, 2001)
+    counts = np.full(two_theta.size, 50.0)
+    operations = space_group_operations("P4bm")
+    for h in range(5):
+        for k in range(h + 1):
+            for l in range(4):
+                if h + k + l == 0 or is_absent((h, k, l), operations):
+                    continue
+                d = 1.0 / math.sqrt((h * h + k * k) / 36.0 + l * l / 16.0)
+                if 1.544426 / (2.0 * d) >= 1.0:
+                    continue
+                # K alpha 1 and 2, broader than the instrument alone.
+                for wavelength, weight in ((1.540598, 1.0), (1.544426, 0.5)):
+                    sine = wavelength / (2.0 * d)
+                    centre = 2.0 * math.degrees(math.asin(sine))
+                    height = weight * 2000.0 / (1 + h + k + l)
+                    counts += height / (1.0 + ((two_theta - centre) / 0.06) ** 2)
+    (root / "toy.xrdml").write_text(
+        XRDML_SCAN.format(
+            start=20.0, end=60.0, counts=" ".join(str(round(c)) for c in counts)
+        ),
+        encoding="utf-8",
+    )
+    (root / "toy.cif").write_text(TOY_CIF, encoding="utf-8")
+    write_instprm(root / "cu.instprm", CAGLIOTI)
+    (root / "xrdkit.toml").write_text(
+        """
+[project]
+name = "toy"
+version = 1
+
+[refine]
+two_theta = [20.5, 59.5]
+background = { function = "chebyschev-1", terms = 3 }
+
+[instruments.cu]
+wavelength = [1.540598, 1.544426]
+ka2 = true
+instprm = "cu.instprm"
+
+[structures.bronze]
+library = "ttb/P4bm"
+cif = "toy.cif"
+composition = "Sr0.24Ba0.48Nb0.4O1.6"
+cell = { a = 6.0, c = 4.0 }
+
+[samples.toy]
+file = "toy.xrdml"
+instrument = "cu"
+structures = ["bronze"]
+form = "powder"
+""",
+        encoding="utf-8",
+    )
+    project = load_project(root)
+
+    outcomes = run_sequence(
+        project, "toy", ["lebail", "fixed_atoms"], Options(max_passes=2)
+    )
+
+    assert [outcome.error for outcome in outcomes] == [None, None], outcomes
+    lebail, fixed = outcomes
+    assert lebail.accepted[:3] == ["background and scale", "zero", "cell"]
+    cell = lebail.final["phases"][0]["cell"]
+    assert cell["length_a"] == pytest.approx(6.0, abs=0.01)
+    assert cell["length_c"] == pytest.approx(4.0, abs=0.01)
+    assert fixed.accepted[:3] == ["scale and background", "zero and cell", "size"]
+    saved = json.loads(Path(fixed.paths["result"]).read_text(encoding="utf-8"))
+    # The line heights are not the structure's, so one Uiso may be driven
+    # negative and that stage rejected; it is recorded either way.
+    assert [stage["name"] for stage in saved["stages"]][-1] == "overall Uiso"
+    assert set(saved["start_model"]) == {"bronze"}
+    assert saved["inputs"]["structures"][0]["library"] == "ttb/P4bm"
+    assert (root / "results" / "rietveld" / "toy" / "summary.md").is_file()

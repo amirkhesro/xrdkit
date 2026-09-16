@@ -213,6 +213,10 @@ XRDML_HINT = "Panalytical"
 XY_HINT = "comma/tab/semicolon"
 CIF_HINT = "CIF"
 
+# The version of what this driver writes, recorded by the callers that
+# keep its results; raised when the result gains or changes a field.
+DRIVER_VERSION = 2
+
 DEFAULT_BACKGROUND = {"type": "chebyschev-1", "terms": 6}
 
 # Profile parameters a stage may refine, besides the zero shift.
@@ -990,6 +994,56 @@ def check_scale_start(value):
     if not (math.isfinite(value) and value > 0.0):
         raise ValueError(f"scale_start must be positive, got {value}")
     return value
+
+
+def check_displacement_start(value):
+    """Check ``displacement_start``, the specimen displacement to start
+    from: a finite number, or None if not given."""
+    if value is None:
+        return None
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError(f"displacement_start must be finite, got {value}")
+    return value
+
+
+def check_phase_fraction_start(starts):
+    """Check ``phase_fraction_start``, ``{phase: fraction}``, each positive."""
+    if starts is None:
+        return {}
+    if not isinstance(starts, dict):
+        raise TypeError("phase_fraction_start must map phase names to fractions")
+    checked = {}
+    for phase, value in starts.items():
+        value = float(value)
+        if not (math.isfinite(value) and value > 0.0):
+            raise ValueError(
+                f"phase_fraction_start of {phase!r} must be positive, got {value}"
+            )
+        checked[str(phase)] = value
+    return checked
+
+
+def check_start_model(model):
+    """Check ``start_model``, ``{phase: [atom, ...]}``, each atom with a
+    ``label`` and ``xyz``: the atoms a refinement is judged against."""
+    if model is None:
+        return None
+    if not isinstance(model, dict):
+        raise TypeError("start_model must map phase names to lists of atoms")
+    for phase, atoms in model.items():
+        if not isinstance(atoms, list) or not all(
+            isinstance(atom, dict)
+            and "label" in atom
+            and isinstance(atom.get("xyz"), (list, tuple))
+            and len(atom["xyz"]) == 3
+            for atom in atoms
+        ):
+            raise ValueError(
+                f"start_model of {phase!r} must be a list of atoms, each with a "
+                "label and xyz"
+            )
+    return model
 
 
 def check_sanity_settings(settings):
@@ -2429,6 +2483,11 @@ def refine(G2sc, job):
     Bail extraction on), ``max_passes`` and ``pass_tolerance``
     (refinements of each stage until it settles, see the module notes; one
     by default), ``scale_start`` (the histogram scale to start from),
+    ``displacement_start`` (the specimen displacement to start from),
+    ``phase_fraction_start`` (``{phase: fraction}`` to start from),
+    ``start_model`` (``{phase: atoms}``, the model the refinement is judged
+    against for undetermined parameters and recorded as the result's
+    ``start_model``, by default the atoms as the job finds them),
     ``sanity`` (the sanity check's ``max_shift`` and ``reference``, see the
     module notes) and ``export_prefix`` (the path the exported files are
     named from). With ``data_file``, ``instprm`` and ``phases`` as for
@@ -2456,6 +2515,9 @@ def refine(G2sc, job):
     uiso_start = check_uiso_start(job.get("overall_uiso_start") or {})
     background_start = check_background_start(job.get("background_start"))
     scale_start = check_scale_start(job.get("scale_start"))
+    displacement_start = check_displacement_start(job.get("displacement_start"))
+    fraction_start = check_phase_fraction_start(job.get("phase_fraction_start"))
+    given_model = check_start_model(job.get("start_model"))
     sanity = check_sanity_settings(job.get("sanity"))
     if job.get("data_file"):
         project, histogram, source = _create_project(G2sc, job)
@@ -2483,11 +2545,24 @@ def refine(G2sc, job):
         )
     if scale_start is not None:
         histogram.SampleParameters["Scale"][0] = scale_start
+    if displacement_start is not None:
+        for key in ("Shift", "DisplaceX"):
+            if key in histogram.SampleParameters:
+                histogram.SampleParameters[key][0] = displacement_start
+                break
+    for phase in project.phases():
+        if phase.name in fraction_start:
+            hap = phase.data["Histograms"][histogram.name]
+            hap["Scale"][0] = fraction_start[phase.name]
 
     spc = getattr(G2sc, "G2spc", None)
     xinel = spc.GetCSxinel if spc else None
     start_atoms = {phase.name: _atom_table(phase) for phase in project.phases()}
     reference = sanity["reference"] or start_atoms
+    # What undetermined parameters are judged against: the model given, such
+    # as a structure's CIF start carried from an earlier job, else the atoms
+    # as this job found them.
+    start_model = given_model or start_atoms
     result = {
         "gpx": project.filename,
         "source": source,
@@ -2503,7 +2578,7 @@ def refine(G2sc, job):
         "on_unsettled": on_unsettled,
         "rejected": [],
         # The atoms of each phase as the job found them, before any stage.
-        "start_model": start_atoms,
+        "start_model": start_model,
     }
     le_bail_cycles = int(job.get("le_bail_cycles") or DEFAULT_LE_BAIL_CYCLES)
     max_passes = int(job.get("max_passes") or 1)
@@ -2588,7 +2663,7 @@ def refine(G2sc, job):
         record["undetermined"] = [
             {**entry, "phase": name}
             for name, atoms in record["atoms"].items()
-            for entry in find_undetermined(atoms, start_atoms.get(name))
+            for entry in find_undetermined(atoms, start_model.get(name))
         ]
         for key in ("coordinates", "occupancy_constraints"):
             found = {name: note[key] for name, note in notes.items() if key in note}

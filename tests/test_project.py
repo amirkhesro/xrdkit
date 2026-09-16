@@ -267,16 +267,10 @@ BROKEN = [
     ("version as text", "version = 1", 'version = "1"', r"project\.version: must be 1"),
     # Exactly one of library or cif.
     (
-        "library and cif",
-        'library = "ttb/P4bm"',
-        'library = "ttb/P4bm"\ncif = "cifs/2100720.cif"',
-        r"structures\.ttb_x010: must give exactly one of library and cif",
-    ),
-    (
         "neither library nor cif",
         'cif = "cifs/2100720.cif"\n',
         "",
-        r"structures\.cod-2100720: must give exactly one of library and cif",
+        r"structures\.cod-2100720: must give library or cif, or both",
     ),
     # Library name in list_entries().
     (
@@ -738,6 +732,19 @@ def test_cif_atoms_and_origin_site_and_axis(project_dir: Path) -> None:
         {"name": "O1", "atoms": {"O1": "O"}, "wyckoff": "4c", "kind": "O"},
     )
     assert (cod.origin, cod.origin_axis, cod.origin_fixed) == ("Nb1", "z", True)
+
+
+def test_library_and_cif_together(project_dir: Path) -> None:
+    rewrite(
+        project_dir,
+        'library = "ttb/P4bm"',
+        'library = "ttb/P4bm"\ncif = "cifs/2100720.cif"',
+    )
+
+    ttb = load_project(project_dir).structures["ttb_x010"]
+
+    assert ttb.library == "ttb/P4bm"
+    assert ttb.cif == project_dir / "cifs/2100720.cif"
 
 
 def test_cif_atoms_take_any_kinds(project_dir: Path) -> None:

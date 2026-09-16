@@ -93,6 +93,8 @@ from xrdkit.phases import (
     write_cif_index,
 )
 from xrdkit.pipeline import (
+    Options,
+    Outcome,
     PhaseStart,
     PipelineError,
     StartPoint,
@@ -100,6 +102,8 @@ from xrdkit.pipeline import (
     fixed_atoms_stages,
     lebail_stages,
     occupancy_stages,
+    run_mode,
+    run_sequence,
     start_from_result,
 )
 from xrdkit.plotting import (
@@ -168,6 +172,8 @@ __all__ = [
     "Gsas2Install",
     "IndexedPeak",
     "LatticeFit",
+    "Options",
+    "Outcome",
     "Peak",
     "PhaseStart",
     "PipelineError",
@@ -257,6 +263,8 @@ __all__ = [
     "representative",
     "resolution_limit",
     "run_job",
+    "run_mode",
+    "run_sequence",
     "sample_settings",
     "save_figure",
     "scherrer_size",

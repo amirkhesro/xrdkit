@@ -35,29 +35,68 @@ the values a mode starts from, as a :class:`StartPoint`.
 
 from __future__ import annotations
 
+import csv
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import numpy as np
 
-from xrdkit.gsas2 import accepted_stages
+from xrdkit import gsas2_driver
+from xrdkit.config import AXIS_COORDINATE
+from xrdkit.density import parse_formula
+from xrdkit.gsas2 import (
+    accepted_stages,
+    build_refine_job,
+    failure_markdown,
+    log_tail,
+    run_job,
+    stage_statuses,
+    structure_edits,
+    summary_markdown,
+)
+from xrdkit.io import read_xrdml
+from xrdkit.library import DEFAULT_ANIONS, StructureEntry, load_entry
+from xrdkit.project import (
+    Instrument,
+    Project,
+    Refine,
+    Sample,
+    StructureSpec,
+    refine_settings,
+    resolved_cell,
+    results_dir,
+)
+from xrdkit.structure import composition_edits, site_setup
 
 __all__ = [
     "CYCLES",
+    "HELD_INSTRUMENT",
     "LE_BAIL_CYCLES",
     "MODES",
     "PASS_TOLERANCE",
     "START_BROADENING",
+    "Inputs",
+    "Options",
+    "Outcome",
+    "PhaseInput",
     "PhaseStart",
     "PipelineError",
     "StartPoint",
     "coordinates_stages",
+    "exchange_edits",
     "fixed_atoms_stages",
     "lebail_stages",
+    "mode_paths",
     "occupancy_stages",
+    "resolve_inputs",
+    "run_mode",
+    "run_sequence",
     "start_from_result",
 ]
 
@@ -774,3 +813,1229 @@ def start_from_result(path: str | Path, stage: str | None = None) -> StartPoint:
         start_model=result.get("start_model"),
         stage=name,
     )
+
+
+# Running the modes
+
+
+@dataclass(frozen=True)
+class Options:
+    """What a run takes besides the project file: the start cell of the
+    first phase (``{a, b, c, alpha, beta, gamma}``) and the start zero, over
+    those the project gives; whether the specimen displacement is refined
+    in place of the zero (by default for a pellet and not for a powder);
+    whether the microstrain is refined in the Rietveld modes; the [h, k, l]
+    axis of a March-Dollase preferred orientation for the fixed atoms mode;
+    a cap on the passes of every stage, over the project's by mode; and the
+    folder every file is written to in place of ``results/lebail/<key>`` and
+    ``results/rietveld/<key>``."""
+
+    cell: Mapping[str, float] | None = None
+    zero: float | None = None
+    displacement: bool | None = None
+    mustrain: bool = False
+    preferred_orientation: Sequence[int] | None = None
+    max_passes: int | None = None
+    out: Path | str | None = None
+
+
+@dataclass(frozen=True)
+class PhaseInput:
+    """A phase of a sample as the project gives it: its structure key, which
+    names it in GSAS-II, the structure, its library entry if it names one,
+    the composition in atoms per formula unit, the formula units per cell,
+    and the cell a Le Bail refinement starts from (None for the CIF's), with
+    where it came from."""
+
+    key: str
+    spec: StructureSpec
+    entry: StructureEntry | None
+    composition: dict[str, float]
+    z: int | None
+    cell: dict[str, float] | None
+    cell_source: str
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """Everything a mode takes from the project file for a sample."""
+
+    project: Project
+    sample: Sample
+    instrument: Instrument
+    instprm: Path
+    scan_range: tuple[float, float]
+    limits: tuple[float, float]
+    refine: Refine
+    phases: tuple[PhaseInput, ...]
+    displacement: bool
+    zero: float
+    start_cell_source: str
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """What a mode left: the names of its accepted stages, its final model,
+    its residuals (Rwp, Rp and chi squared of the last stage kept, and the
+    weight fractions with esds when there are two phases or more), the
+    parameters left undetermined, the paths it wrote, and the error that
+    stopped it, None when it finished."""
+
+    mode: str
+    accepted: list[str]
+    final: dict | None
+    residuals: dict
+    undetermined: list
+    paths: dict[str, str]
+    error: str | None = None
+
+
+def _noop(text: str) -> None:
+    """A reporter that reports nothing."""
+
+
+def _sample_of(project: Project, sample: Sample | str) -> Sample:
+    key = sample.key if isinstance(sample, Sample) else sample
+    if key not in project.samples:
+        raise PipelineError(
+            f"no sample {key!r} in the project; there are "
+            + (", ".join(project.samples) or "none")
+        )
+    return project.samples[key]
+
+
+def _plural(items: Sequence, one: str, many: str) -> str:
+    return one if len(items) == 1 else many
+
+
+def _instprm_values(path: Path) -> dict[str, str]:
+    """The ``key:value`` lines of a GSAS-II instrument parameter file."""
+    values = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _six(cell: Mapping[str, float]) -> list[float]:
+    return [float(cell[key]) for key, _ in _CELL_KEYS]
+
+
+def _check_cell(cell: Mapping[str, float], where: str) -> dict[str, float]:
+    names = [key for key, _ in _CELL_KEYS]
+    if not isinstance(cell, Mapping) or set(cell) != set(names):
+        raise PipelineError(f"{where} must give exactly {', '.join(names)}")
+    checked = {}
+    for name in names:
+        value = cell[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise PipelineError(
+                f"{where}.{name} must be a positive number, not {value!r}"
+            )
+        checked[name] = float(value)
+    return checked
+
+
+def _lattice_cell(project: Project, sample: Sample) -> tuple[dict, Path] | None:
+    """The cell of the last row of the sample's lattice results, if any."""
+    folder = results_dir(project, "lattice", sample.key)
+    for path in (folder / f"lattice_{sample.key}.csv", folder / "lattice.csv"):
+        if not path.is_file():
+            continue
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        if not rows:
+            continue
+        try:
+            cell = {key: float(rows[-1][key]) for key, _ in _CELL_KEYS}
+        except (KeyError, TypeError, ValueError):
+            raise PipelineError(f"{path}: its last row gives no whole cell") from None
+        return cell, path
+    return None
+
+
+def _start_cell(
+    project: Project, sample: Sample, spec: StructureSpec, options: Options | None
+) -> tuple[dict[str, float] | None, str]:
+    """The cell a phase starts from and where it came from: the options',
+    then the sample's lattice results (both for the first phase only), then
+    the structure's, else the CIF's."""
+    if options is not None and options.cell is not None:
+        return _check_cell(options.cell, "options.cell"), "options"
+    if options is not None:
+        found = _lattice_cell(project, sample)
+        if found is not None:
+            cell, path = found
+            return cell, f"lattice results {path}"
+    if spec.cell is not None:
+        try:
+            return resolved_cell(spec), f"structures.{spec.key}.cell"
+        except ValueError:
+            pass
+    if spec.cif is not None:
+        return None, f"the CIF {spec.cif}"
+    raise PipelineError(
+        f"structures.{spec.key}: gives no cell and no CIF to start from"
+    )
+
+
+def _check_unplaced(
+    spec: StructureSpec, entry, composition: Mapping[str, float]
+) -> None:
+    """Every element of the composition must be one the entry's prototype
+    carries or one the structure's atoms place."""
+    if entry is None:
+        return
+    held = {element for site in entry.sites for element in site.elements}
+    for site in spec.atoms or ():
+        held.update(site["atoms"].values())
+    unplaced = [element for element in composition if element not in held]
+    if unplaced:
+        labels = ", ".join(site.label for site in entry.sites)
+        raise PipelineError(
+            f"structures.{spec.key}: {', '.join(unplaced)} of the composition "
+            f"{_plural(unplaced, 'is', 'are')} not in the {entry.name} prototype and "
+            f"no atoms place {_plural(unplaced, 'it', 'them')}; place "
+            f"{_plural(unplaced, 'it', 'them')} on one of its sites {labels}"
+        )
+
+
+def resolve_inputs(
+    project: Project, sample: Sample | str, options: Options | None = None
+) -> Inputs:
+    """What a run of ``sample`` takes from the project file: its scan and
+    the scan's range, its instrument and instrument parameter file, its
+    phases in the order of its structures, its refine settings with the two
+    theta range clipped to the scan, the start cell of the first phase and
+    where it came from, whether the displacement is refined and the start
+    zero.
+
+    Raises
+    ------
+    PipelineError
+        If the instrument gives no instrument parameter file, the scan
+        cannot be read or the range lies outside it, a cell given is not a
+        whole one, a structure has no cell or CIF, an element of a
+        composition is on no site, or the start zero is not known.
+    """
+    options = options or Options()
+    sample = _sample_of(project, sample)
+    instrument = project.instruments[sample.instrument]
+    if instrument.instprm is None:
+        raise PipelineError(
+            f"instruments.{instrument.key}: gives no instprm, which a GSAS-II "
+            "refinement needs"
+        )
+    try:
+        scan = read_xrdml(sample.file)
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"{sample.file}: cannot be read: {error}") from None
+    scan_range = (float(np.min(scan.two_theta)), float(np.max(scan.two_theta)))
+    refine = refine_settings(project, sample)
+    if refine.two_theta is None:
+        limits = scan_range
+    else:
+        limits = (
+            max(refine.two_theta[0], scan_range[0]),
+            min(refine.two_theta[1], scan_range[1]),
+        )
+        if not limits[0] < limits[1]:
+            raise PipelineError(
+                f"samples.{sample.key}: two_theta {list(refine.two_theta)} lies "
+                f"outside the scan's {scan_range[0]:.2f} to {scan_range[1]:.2f} degrees"
+            )
+
+    phases = []
+    for index, key in enumerate(sample.structures):
+        spec = project.structures[key]
+        entry = load_entry(spec.library) if spec.library else None
+        composition = parse_formula(spec.composition)
+        _check_unplaced(spec, entry, composition)
+        cell, source = _start_cell(
+            project, sample, spec, options if index == 0 else None
+        )
+        phases.append(
+            PhaseInput(
+                key=key,
+                spec=spec,
+                entry=entry,
+                composition=composition,
+                z=spec.z if spec.z is not None else (entry.z if entry else None),
+                cell=cell,
+                cell_source=source,
+            )
+        )
+
+    if options.zero is not None:
+        zero = float(options.zero)
+    else:
+        try:
+            zero = float(_instprm_values(instrument.instprm)["Zero"])
+        except (KeyError, ValueError):
+            raise PipelineError(
+                f"{instrument.instprm}: gives no Zero to start from"
+            ) from None
+    return Inputs(
+        project=project,
+        sample=sample,
+        instrument=instrument,
+        instprm=instrument.instprm,
+        scan_range=scan_range,
+        limits=(float(limits[0]), float(limits[1])),
+        refine=refine,
+        phases=tuple(phases),
+        displacement=(
+            sample.form == "pellet"
+            if options.displacement is None
+            else bool(options.displacement)
+        ),
+        zero=zero,
+        start_cell_source=phases[0].cell_source,
+    )
+
+
+def mode_paths(
+    project: Project, sample: Sample | str, mode: str, options: Options | None = None
+) -> dict[str, Path]:
+    """Where a mode's files go: ``folder``, ``results/lebail/<key>`` for the
+    Le Bail mode and ``results/rietveld/<key>`` for the others, or
+    ``options.out``; the ``prefix`` ``<folder>/<key>_<mode>`` the exports
+    are named from; the ``gpx`` and ``result`` JSON beside them, named with
+    ``with_name`` so that a dot in the key stays; and the ``work`` folder
+    ``<folder>/work/<mode>`` holding the jobs, the logs and the start
+    instrument parameter file."""
+    if mode not in MODES:
+        raise PipelineError(f"no mode {mode!r}; the modes are {', '.join(MODES)}")
+    options = options or Options()
+    sample = _sample_of(project, sample)
+    if options.out is not None:
+        folder = Path(options.out)
+    else:
+        command = "lebail" if mode == "lebail" else "rietveld"
+        folder = results_dir(project, command, sample)
+    prefix = folder / f"{sample.key}_{mode}"
+    work = folder / "work" / mode
+    return {
+        "folder": folder,
+        "prefix": prefix,
+        "gpx": prefix.with_name(prefix.name + ".gpx"),
+        "result": prefix.with_name(prefix.name + "_result.json"),
+        "work": work,
+        "log": work / "refine.log",
+        "start_instprm": work / f"{sample.key}_{mode}_start.instprm",
+    }
+
+
+def _write_start_instprm(source: Path, zero: float, path: Path) -> Path:
+    """The instrument parameter file with the zero to start from."""
+    lines = Path(source).read_text(encoding="utf-8").splitlines()
+    written = False
+    for index, line in enumerate(lines):
+        if line.startswith("Zero:"):
+            lines[index] = f"Zero:{zero!r}"
+            written = True
+    if not written:
+        lines.append(f"Zero:{zero!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+_SYMBOL_PART = re.compile(r"-?\d(?:_\d)?(?:/[a-z])?|[a-z]")
+
+
+def _spaced_symbol(symbol: str) -> str:
+    """A Hermann-Mauguin symbol with its parts spaced, as CIFs write it:
+    P4/mbm as P 4/m b m."""
+    return " ".join([symbol[0], *_SYMBOL_PART.findall(symbol[1:])])
+
+
+def _entry_cif(phase: PhaseInput, folder: Path) -> Path:
+    """A CIF for a Le Bail refinement of a library entry that has none: its
+    space group and cell, and one atom of the first site's element at the
+    origin, since Le Bail extraction needs no structure."""
+    entry = phase.entry
+    cell = phase.cell
+    element = next((site.elements[0] for site in entry.sites if site.elements), "C")
+    text = "\n".join(
+        [
+            f"data_{re.sub(r'[^A-Za-z0-9_]', '_', phase.key)}",
+            *(f"_cell_{gsas} {cell[key]!r}" for key, gsas in _CELL_KEYS),
+            f"_symmetry_space_group_name_H-M '{_spaced_symbol(entry.space_group)}'",
+            "loop_",
+            "_atom_site_label",
+            "_atom_site_type_symbol",
+            "_atom_site_fract_x",
+            "_atom_site_fract_y",
+            "_atom_site_fract_z",
+            "_atom_site_occupancy",
+            "_atom_site_U_iso_or_equiv",
+            f"{element}1 {element} 0.0 0.0 0.0 1.0 0.01",
+            "",
+        ]
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{phase.key}_entry.cif"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _need_cifs(inputs: Inputs, mode: str) -> None:
+    lacking = [phase.key for phase in inputs.phases if phase.spec.cif is None]
+    if lacking:
+        raise PipelineError(
+            f"the {mode} mode needs the coordinates of a CIF; structures "
+            f"{', '.join(lacking)} give none (add cif beside library)"
+        )
+
+
+def _create(inputs: Inputs, instprm: Path, work: Path, edits=None) -> dict:
+    """The phases as GSAS-II reads them from their CIFs, with ``edits`` by
+    phase name, by name."""
+    phases = []
+    for phase in inputs.phases:
+        entry = {"cif": phase.spec.cif, "name": phase.key}
+        if edits and edits.get(phase.key):
+            entry["atoms"] = edits[phase.key]
+        phases.append(entry)
+    job = build_refine_job(
+        work / "structure.gpx",
+        [{"name": "scale", "scale": True}],
+        data_file=inputs.sample.file,
+        instprm=instprm,
+        phases=phases,
+    )
+    job["action"] = "create"
+    created = run_job(job, work)
+    return {phase["name"]: phase for phase in created.get("phases", [])}
+
+
+def _element_of(atom_type: object) -> str:
+    match = re.match(r"[A-Z][a-z]?", str(atom_type))
+    return match.group(0) if match else str(atom_type)
+
+
+def _added_rule(phase: PhaseInput, cif_atoms: Sequence[Mapping]) -> dict[str, str]:
+    """The composition rule of a structure's atoms placement: an element a
+    site names by a label the CIF lacks goes on every atom of the element
+    the CIF has on that site."""
+    labels = {str(atom["label"]): _element_of(atom["type"]) for atom in cif_atoms}
+    held = set(labels.values())
+    rule: dict[str, str] = {}
+    for site in phase.spec.atoms or ():
+        name = site.get("label") or site["name"]
+        present = [labels[label] for label in site["atoms"] if label in labels]
+        absent = [
+            element
+            for label, element in site["atoms"].items()
+            if label not in labels and element not in held
+        ]
+        if not absent:
+            continue
+        if not present:
+            raise PipelineError(
+                f"structures.{phase.key}.atoms: site {name} names no atom of the CIF, "
+                f"so {', '.join(absent)} has nothing to go beside"
+            )
+        for element in absent:
+            if rule.get(element, present[0]) != present[0]:
+                raise PipelineError(
+                    f"structures.{phase.key}.atoms: {element} would go beside "
+                    f"{rule[element]} on one site and {present[0]} on another; "
+                    "one host per element"
+                )
+            rule[element] = present[0]
+    return rule
+
+
+def _nominal_edits(phase: PhaseInput, cif_atoms: Sequence[Mapping]) -> list[dict]:
+    """Atom edits that put the nominal composition on the CIF's sites."""
+    if phase.z is None:
+        raise PipelineError(
+            f"structures.{phase.key}: gives no z, which putting its composition on "
+            "the sites needs; add z"
+        )
+    structure = {
+        "name": phase.key,
+        "formula_units": phase.z,
+        "composition": {"added": _added_rule(phase, cif_atoms)},
+    }
+    try:
+        return composition_edits(cif_atoms, phase.composition, structure)
+    except ValueError as error:
+        raise PipelineError(f"structures.{phase.key}: {error}") from None
+
+
+def _mean_ueq(atoms: Sequence[Mapping], cell: Mapping[str, float]) -> float:
+    """The mean equivalent isotropic displacement parameter of ``atoms``,
+    weighted by multiplicity times occupancy, Ueq from the Uij on the
+    crystal axes of ``cell`` (GSAS-II's cell keys)."""
+    metric = _metric(cell)
+    reciprocal = np.linalg.inv(metric)
+    lengths = np.sqrt(np.diag(reciprocal))
+    total = weight_sum = 0.0
+    for atom in atoms:
+        weight = float(atom.get("multiplicity", 1)) * float(atom.get("occupancy", 1.0))
+        if atom.get("adp", "I") == "I" and atom.get("uiso") is not None:
+            ueq = float(atom["uiso"])
+        elif atom.get("uij"):
+            u11, u22, u33, u12, u13, u23 = (float(value) for value in atom["uij"])
+            u = np.array([[u11, u12, u13], [u12, u22, u23], [u13, u23, u33]])
+            scaled = u * np.outer(lengths, lengths)
+            ueq = float(np.sum(scaled * metric)) / 3.0
+        else:
+            continue
+        total += weight * ueq
+        weight_sum += weight
+    return total / weight_sum if weight_sum else 0.01
+
+
+def _metric(cell: Mapping[str, float]) -> np.ndarray:
+    a, b, c, alpha, beta, gamma = (float(cell[gsas]) for _, gsas in _CELL_KEYS)
+    ca, cb, cg = (math.cos(math.radians(angle)) for angle in (alpha, beta, gamma))
+    return np.array(
+        [
+            [a * a, a * b * cg, a * c * cb],
+            [a * b * cg, b * b, b * c * ca],
+            [a * c * cb, b * c * ca, c * c],
+        ]
+    )
+
+
+def _structure_table(phase: PhaseInput, atoms: Sequence[Mapping]) -> dict:
+    """The structure table :func:`xrdkit.structure.site_setup` takes for a
+    phase: its sites with the atoms on each, from its library entry and its
+    atoms placement or from its CIF sites; its Uiso groups; its origin."""
+    spec, entry = phase.spec, phase.entry
+    present = {str(atom["label"]): _element_of(atom["type"]) for atom in atoms}
+    given = {site.get("label") or site["name"]: site for site in spec.atoms or ()}
+
+    def site_atoms(name: str, placed: Mapping[str, str] | None) -> dict[str, str]:
+        if placed:
+            found = {label: el for label, el in placed.items() if label in present}
+        elif name in present:
+            found = {name: present[name]}
+        else:
+            found = {}
+        if not found:
+            raise PipelineError(
+                f"structures.{spec.key}: site {name} has no atom in the structure; "
+                "name its atoms, by their CIF labels, in atoms"
+            )
+        return found
+
+    if entry is not None:
+        sites = []
+        for site in entry.sites:
+            placed = given[site.label]["atoms"] if site.label in given else None
+            found = site_atoms(site.label, placed)
+            sites.append(
+                {
+                    "name": next(iter(found)),
+                    "label": site.label,
+                    "atoms": found,
+                    "wyckoff": site.wyckoff,
+                    "kind": site.kind,
+                }
+            )
+        by_label = {site["label"]: site["name"] for site in sites}
+        groups: dict[str, list[str]] = {}
+        for site in entry.sites:
+            groups.setdefault(site.uiso_group or site.label, []).append(
+                by_label[site.label]
+            )
+        label = spec.origin or entry.origin_site
+        axis = spec.origin_axis or (
+            AXIS_COORDINATE[entry.polar_axis] if entry.polar_axis else None
+        )
+        library = entry.name
+    else:
+        if spec.atoms is None:
+            raise PipelineError(
+                f"structures.{spec.key}: the coordinates and occupancies modes need "
+                "its sites; give atoms, the CIF's sites with their kinds"
+            )
+        sites = []
+        for site in spec.atoms:
+            found = site_atoms(site["name"], site["atoms"])
+            sites.append({**site, "name": next(iter(found)), "atoms": found})
+        by_label = {site["name"]: site["name"] for site in sites}
+        groups = {}
+        for site in sites:
+            groups.setdefault(site["kind"], []).append(site["name"])
+        label, axis = spec.origin, spec.origin_axis
+        library = None
+    origin = None
+    if spec.origin_fixed and label is not None:
+        if label not in by_label:
+            raise PipelineError(
+                f"structures.{spec.key}: the origin site {label} is not one of its "
+                f"sites {', '.join(by_label)}"
+            )
+        if axis is None:
+            raise PipelineError(
+                f"structures.{spec.key}: the origin site {label} needs an axis; "
+                "give origin = {site, axis}"
+            )
+        origin = {"site": by_label[label], "axis": axis}
+    return {
+        "name": spec.key,
+        "library": library,
+        "sites": sites,
+        "free_coordinates": {},
+        "uiso_groups": [
+            {"name": name, "sites": members} for name, members in groups.items()
+        ],
+        "origin": origin,
+        "exchange": None,
+    }
+
+
+def _plan(phase: PhaseInput, atoms: Sequence[Mapping]) -> dict:
+    """The site plan of a phase, with its name and its exchange groups, each
+    over the sites of one kind that hold any of its elements."""
+    table = _structure_table(phase, atoms)
+    try:
+        plan = site_setup(table, atoms)
+    except ValueError as error:
+        raise PipelineError(f"structures.{phase.key}: {error}") from None
+    plan["phase"] = phase.key
+    groups = []
+    for elements in phase.spec.exchange:
+        sites = [
+            site
+            for site in plan["sites"]
+            if {_element_of(atom["type"]) for atom in site["atoms"]} & set(elements)
+        ]
+        kinds = {site["kind"] for site in sites}
+        if len(sites) < 2 or len(kinds) != 1:
+            raise PipelineError(
+                f"structures.{phase.key}: the exchange of {', '.join(elements)} needs "
+                "two or more sites of one kind holding them, not "
+                + (", ".join(f"{s['name']} ({s['kind']})" for s in sites) or "none")
+            )
+        groups.append({"elements": list(elements), "sites": [s["name"] for s in sites]})
+    plan["exchange"] = groups
+    return plan
+
+
+def exchange_edits(atoms: Sequence[Mapping], plan: Mapping) -> list[dict]:
+    """Atoms at occupancy 0 for each exchanged element a site of an exchange
+    group lacks, so that the element can move there, each labelled by the
+    element and the digits of the site's name."""
+    labels = {str(atom["label"]) for atom in atoms}
+    by_name = {site["name"]: site for site in plan["sites"]}
+    edits = []
+    for group in _exchange_groups(plan):
+        for name in group["sites"]:
+            site = by_name[name]
+            present = {_element_of(atom["type"]) for atom in site["atoms"]}
+            for element in group["elements"]:
+                if element in present:
+                    continue
+                label = element + re.sub(r"^[A-Za-z]+", "", name)
+                while label in labels:
+                    label += "x"
+                labels.add(label)
+                present.add(element)
+                edits.append(
+                    {"label": label, "type": element, "copy": name, "occupancy": 0.0}
+                )
+    return edits
+
+
+def _joined_stages(builder, plans, background, phases, displacement, mustrain):
+    """One phase's stages as ``builder`` gives them, or, with several, the
+    first phase's profile and every phase's own stages after it, named by
+    the phase."""
+    lists = [
+        builder(
+            plan,
+            background,
+            phases=phases,
+            displacement=displacement,
+            mustrain=mustrain,
+        )
+        for plan in plans
+    ]
+    if len(lists) == 1:
+        return lists[0]
+    first = dict(lists[0][0])
+    if "uiso_groups" in first:
+        first["uiso_groups"] = {
+            key: groups
+            for stage_list in lists
+            for key, groups in stage_list[0]["uiso_groups"].items()
+        }
+    stages = [first]
+    for plan, stage_list in zip(plans, lists, strict=True):
+        stages += [
+            {**stage, "name": f"{plan['phase']}: {stage['name']}"}
+            for stage in stage_list[1:]
+        ]
+    return stages
+
+
+# The instrument parameters a run never refines, whatever its stages.
+HELD_INSTRUMENT = ("U", "V", "W", "X", "Y", "Z", "SH/L")
+
+
+def _held_changes(start: Path, used: Path, zero_held: bool) -> list[str]:
+    before, after = _instprm_values(start), _instprm_values(used)
+    changed = []
+    for key in (*HELD_INSTRUMENT, *(("Zero",) if zero_held else ())):
+        if key not in before or key not in after:
+            continue
+        try:
+            same = math.isclose(
+                float(before[key]), float(after[key]), rel_tol=1e-9, abs_tol=1e-12
+            )
+        except ValueError:
+            same = before[key] == after[key]
+        if not same:
+            changed.append(f"{key} {before[key]} -> {after[key]}")
+    return changed
+
+
+def _xrdkit_version() -> str:
+    try:
+        return version("xrdkit")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+def _plain(value):
+    """``value`` with paths as text, for the result JSON."""
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _inputs_record(inputs: Inputs, options: Options, cells: Mapping) -> dict:
+    instrument = inputs.instrument
+    return _plain(
+        {
+            "sample": {
+                "key": inputs.sample.key,
+                "file": inputs.sample.file,
+                "form": inputs.sample.form,
+                "structures": list(inputs.sample.structures),
+            },
+            "instrument": {
+                "key": instrument.key,
+                "wavelength": list(instrument.wavelength),
+                "ka2": instrument.ka2,
+                "radius": instrument.radius,
+                "instprm": instrument.instprm,
+            },
+            "structures": [
+                {
+                    "key": phase.key,
+                    "library": phase.spec.library,
+                    "cif": phase.spec.cif,
+                    "composition": phase.spec.composition,
+                    "z": phase.z,
+                    "cell": phase.spec.cell,
+                    "exchange": [list(group) for group in phase.spec.exchange],
+                    "origin": phase.spec.origin,
+                    "origin_axis": phase.spec.origin_axis,
+                    "origin_fixed": phase.spec.origin_fixed,
+                    "atoms": list(phase.spec.atoms) if phase.spec.atoms else None,
+                }
+                for phase in inputs.phases
+            ],
+            "refine": asdict(inputs.refine),
+            "scan_range": list(inputs.scan_range),
+            "limits": list(inputs.limits),
+            "start_cell": cells,
+            "start_cell_source": {
+                phase.key: phase.cell_source for phase in inputs.phases
+            },
+            "displacement": inputs.displacement,
+            "zero": inputs.zero,
+            "options": asdict(options),
+        }
+    )
+
+
+def _residuals(result: Mapping, phases: int) -> dict:
+    kept = accepted_stages(result)
+    last = kept[-1] if kept else {}
+    residuals = {
+        "rwp": last.get("rwp"),
+        "rp": last.get("rp"),
+        "chi_squared": last.get("chi_squared"),
+    }
+    if phases > 1:
+        residuals["weight_fractions"] = {
+            phase["name"]: phase.get("weight_fraction")
+            for phase in (result.get("final") or {}).get("phases", [])
+        }
+    return residuals
+
+
+def run_mode(
+    project: Project,
+    sample: Sample | str,
+    mode: str,
+    options: Options | None = None,
+    reporter=None,
+) -> Outcome:
+    """Run one mode of a sample's refinement, every input from the project
+    file, and write its result JSON, GSAS-II project and exports.
+
+    ``lebail`` extracts every phase from the start cell; ``fixed_atoms``
+    starts from the Le Bail result's size stage (its microstrain stage with
+    ``options.mustrain``), with each phase's CIF atoms at the nominal
+    composition; ``coordinates`` and ``occupancies`` start from the result
+    of the mode before, its atoms carried over, and ``occupancies`` adds
+    every exchanged element a site lacks at occupancy 0. The job's
+    ``start_model``, the structure as the Rietveld modes first set it up, is
+    what undetermined parameters are judged against. ``reporter``, a
+    callable taking a line of text, hears what the run does.
+
+    Raises
+    ------
+    PipelineError
+        If an input is missing or does not fit, the mode before left no
+        result, a stage failed, no stage was accepted, the run left no final
+        model, or an instrument parameter the run holds came out changed.
+        The error carries the run's ``result`` and ``log`` when it got that
+        far, else None.
+    xrdkit.gsas2.Gsas2Error
+        If GSAS-II itself failed, carrying ``result`` None and the ``log``.
+    """
+    context: dict = {"result": None, "log": None}
+    try:
+        return _run_mode(
+            project, sample, mode, options or Options(), reporter or _noop, context
+        )
+    except Exception as error:
+        error.result = context["result"]
+        error.log = context["log"]
+        raise
+
+
+def _run_mode(project, sample, mode, options, report, context) -> Outcome:
+    paths = mode_paths(project, sample, mode, options)
+    inputs = resolve_inputs(project, sample, options)
+    sample = inputs.sample
+    work = paths["work"]
+    work.mkdir(parents=True, exist_ok=True)
+    count = len(inputs.phases)
+    max_passes = options.max_passes or inputs.refine.max_passes[mode]
+    on_unsettled = inputs.refine.unsettled[mode]
+    common = {
+        "data_file": sample.file,
+        "cycles": CYCLES,
+        "export_prefix": paths["prefix"],
+        "max_passes": max_passes,
+        "pass_tolerance": PASS_TOLERANCE,
+        "on_unsettled": on_unsettled,
+    }
+
+    if mode == "lebail":
+        report(f"{sample.key}: lebail from {inputs.start_cell_source}")
+        instprm = _write_start_instprm(
+            inputs.instprm, inputs.zero, paths["start_instprm"]
+        )
+        phases = []
+        cells = {}
+        for phase in inputs.phases:
+            if phase.spec.cif is not None:
+                cif = phase.spec.cif
+            elif phase.entry is not None and phase.cell is not None:
+                cif = _entry_cif(phase, work)
+            else:
+                raise PipelineError(
+                    f"structures.{phase.key}: gives no CIF and no cell to write one"
+                )
+            entry = {"cif": cif, "name": phase.key}
+            if phase.cell is not None:
+                entry["cell"] = _six(phase.cell)
+            cells[phase.key] = phase.cell
+            phases.append(entry)
+        stages = lebail_stages(
+            inputs.refine.background,
+            phases=count,
+            displacement=inputs.displacement,
+            mustrain_test=True,
+        )
+        job = build_refine_job(
+            paths["gpx"],
+            stages,
+            instprm=instprm,
+            phases=phases,
+            limits=inputs.limits,
+            broadening={"*": START_BROADENING},
+            le_bail_cycles=LE_BAIL_CYCLES,
+            **common,
+        )
+    else:
+        _need_cifs(inputs, mode)
+        before = MODES[MODES.index(mode) - 1]
+        before_result = mode_paths(project, sample, before, options)["result"]
+        if not before_result.is_file():
+            raise PipelineError(
+                f"the {mode} mode starts from the {before} result {before_result}, "
+                f"which is missing; run {before} first"
+            )
+        if mode == "fixed_atoms":
+            start = start_from_result(
+                before_result, MICROSTRAIN if options.mustrain else SIZE
+            )
+        else:
+            start = start_from_result(before_result)
+        by_name = {phase.name: phase for phase in start.phases}
+        missing = [phase.key for phase in inputs.phases if phase.key not in by_name]
+        if missing:
+            raise PipelineError(
+                f"{before_result}: has no phase {', '.join(missing)} of the sample"
+            )
+        report(f"{sample.key}: {mode} from {before_result.name}, stage {start.stage}")
+        instprm = _write_start_instprm(
+            inputs.instprm, start.zero, paths["start_instprm"]
+        )
+        cells = {key: dict(phase.cell) for key, phase in by_name.items()}
+        base = _create(inputs, instprm, work / "cif")
+        if mode == "fixed_atoms":
+            edits = {
+                phase.key: _nominal_edits(phase, base[phase.key]["atoms"])
+                for phase in inputs.phases
+            }
+            set_up = _create(inputs, instprm, work / "set_up", edits)
+            start_model = {key: set_up[key]["atoms"] for key in edits}
+            uiso = {
+                key: _mean_ueq(set_up[key]["atoms"], set_up[key]["cell"])
+                for key in edits
+            }
+            stages = fixed_atoms_stages(
+                {
+                    "function": start.background["function"],
+                    "terms": start.background["terms"],
+                },
+                phases=count,
+                displacement=inputs.displacement,
+                mustrain=options.mustrain,
+                preferred_orientation=options.preferred_orientation,
+            )
+            scale_start = None
+        else:
+            edits, plans = {}, []
+            for phase in inputs.phases:
+                atoms = by_name[phase.key].atoms
+                plan = _plan(phase, atoms)
+                plans.append(plan)
+                try:
+                    edits[phase.key] = structure_edits(atoms, base[phase.key]["atoms"])
+                except ValueError as error:
+                    raise PipelineError(f"structures.{phase.key}: {error}") from None
+                if mode == "occupancies":
+                    edits[phase.key] += exchange_edits(atoms, plan)
+            builder = coordinates_stages if mode == "coordinates" else occupancy_stages
+            stages = _joined_stages(
+                builder,
+                plans,
+                {
+                    "function": start.background["function"],
+                    "terms": start.background["terms"],
+                },
+                count,
+                inputs.displacement,
+                options.mustrain,
+            )
+            earlier = (
+                start.start_model if isinstance(start.start_model, Mapping) else {}
+            )
+            start_model = {key: earlier.get(key) or by_name[key].atoms for key in edits}
+            uiso = {
+                key: _mean_ueq(by_name[key].atoms, _gsas_cell(by_name[key].cell))
+                for key in edits
+            }
+            scale_start = start.scale
+        anions = sorted(
+            {
+                anion
+                for phase in inputs.phases
+                for anion in (phase.entry.anions if phase.entry else DEFAULT_ANIONS)
+            }
+        )
+        job = build_refine_job(
+            paths["gpx"],
+            stages,
+            instprm=instprm,
+            phases=[
+                {
+                    "cif": phase.spec.cif,
+                    "name": phase.key,
+                    "cell": _six(by_name[phase.key].cell),
+                    "atoms": edits[phase.key],
+                }
+                for phase in inputs.phases
+            ],
+            limits=start.limits,
+            broadening={
+                key: {
+                    "size": phase.size,
+                    "mustrain": phase.microstrain if options.mustrain else 0.0,
+                    "lgmix": START_BROADENING["lgmix"],
+                }
+                for key, phase in by_name.items()
+                if key in edits
+            },
+            background_start={
+                "type": start.background["function"],
+                "coefficients": start.background["coefficients"],
+            },
+            overall_uiso_start=uiso,
+            scale_start=scale_start,
+            displacement_start=(
+                start.displacement
+                if inputs.displacement and start.displacement is not None
+                else None
+            ),
+            phase_fraction_start=(
+                {key: by_name[key].fraction for key in edits} if count > 1 else None
+            ),
+            start_model=start_model,
+            bonds={"anions": anions},
+            **common,
+        )
+
+    job["result"] = str(paths["result"])
+    context["log"] = paths["log"]
+    report(
+        f"{sample.key}: {mode}, {len(stages)} stages, at most {max_passes} passes each"
+    )
+    result = run_job(job, work)
+    result["inputs"] = _inputs_record(inputs, options, cells)
+    result["method"] = {
+        "mode": mode,
+        "stages": _plain(stages),
+        "cycles": CYCLES,
+        "le_bail_cycles": LE_BAIL_CYCLES if mode == "lebail" else None,
+        "max_passes": max_passes,
+        "pass_tolerance": PASS_TOLERANCE,
+        "driver_version": gsas2_driver.DRIVER_VERSION,
+        "xrdkit_version": _xrdkit_version(),
+    }
+    result["date"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    paths["result"].parent.mkdir(parents=True, exist_ok=True)
+    paths["result"].write_text(json.dumps(_plain(result), indent=2), encoding="utf-8")
+    context["result"] = result
+
+    if not result.get("completed"):
+        failed = (result.get("stages") or [{}])[-1]
+        raise PipelineError(
+            f"{mode}: stage {failed.get('name')!r} failed: {failed.get('error')}"
+        )
+    kept = accepted_stages(result)
+    if not kept:
+        raise PipelineError(
+            f"{mode}: no stage was accepted; "
+            + "; ".join(
+                f"{row['name']} {row['status']}" for row in stage_statuses(result)
+            )
+        )
+    if not result.get("final"):
+        raise PipelineError(
+            f"{mode}: the run left no final model: "
+            + str(result.get("final_error") or result.get("compute_error") or "")
+        )
+    exports = result.get("exports") or {}
+    if not exports.get("instprm"):
+        raise PipelineError(f"{mode}: the run exported no instrument parameter file")
+    changed = _held_changes(instprm, Path(exports["instprm"]), inputs.displacement)
+    if changed:
+        raise PipelineError(
+            f"{mode}: instrument parameters held by the run came out changed: "
+            + ", ".join(changed)
+        )
+    report(f"{sample.key}: {mode} done, final model from {result.get('final_from')}")
+    return Outcome(
+        mode=mode,
+        accepted=[stage["name"] for stage in kept],
+        final=result["final"],
+        residuals=_residuals(result, count),
+        undetermined=list(result.get("undetermined") or []),
+        paths=_plain(
+            {
+                "folder": paths["folder"],
+                "result": paths["result"],
+                "gpx": paths["gpx"],
+                "work": work,
+                "log": paths["log"],
+                "start_instprm": instprm,
+                **{key: value for key, value in exports.items()},
+            }
+        ),
+    )
+
+
+def _gsas_cell(cell: Mapping[str, float]) -> dict[str, float]:
+    return {gsas: float(cell[key]) for key, gsas in _CELL_KEYS}
+
+
+def _summary_values(result: Mapping | None) -> dict[str, str]:
+    final = (result or {}).get("final") or {}
+    phases = final.get("phases") or []
+    if not phases:
+        return {}
+    cell = phases[0].get("cell") or {}
+    zero = (final.get("instrument") or {}).get("Zero") or {}
+    values = {
+        column: f"{cell[key]:.5f}"
+        for column, key in (
+            ("a (Å)", "length_a"),
+            ("b (Å)", "length_b"),
+            ("c (Å)", "length_c"),
+        )
+        if key in cell
+    }
+    if "value" in zero:
+        values["zero (°)"] = f"{zero['value']:.5f}"
+    return values
+
+
+SUMMARY_COLUMNS = ("a (Å)", "b (Å)", "c (Å)", "zero (°)")
+
+
+def run_sequence(
+    project: Project,
+    sample: Sample | str,
+    modes: Sequence[str],
+    options: Options | None = None,
+    reporter=None,
+) -> list[Outcome]:
+    """Run ``modes`` of a sample's refinement in order, each from the one
+    before, and stop at the first that fails.
+
+    A mode that raises, whatever the error, is written up as ``failure.md``
+    in its folder from the error, the stages its own run got through (none
+    when it wrote no result, never an older result) and the tail of its
+    GSAS-II log; the modes after it are not run. ``summary.md`` is written
+    in the folder of the last mode run, over the modes run, whatever became
+    of them. Returns the outcome of every mode run, the failed one last
+    with its ``error``.
+
+    Raises
+    ------
+    PipelineError
+        If a mode is not one of :data:`MODES`, before any is run.
+    """
+    options = options or Options()
+    report = reporter or _noop
+    sample = _sample_of(project, sample)
+    unknown = [mode for mode in modes if mode not in MODES]
+    if unknown:
+        raise PipelineError(
+            f"no mode {', '.join(map(repr, unknown))}; the modes are {', '.join(MODES)}"
+        )
+    for mode in modes:
+        (mode_paths(project, sample, mode, options)["folder"] / "failure.md").unlink(
+            missing_ok=True
+        )
+    outcomes, entries = [], []
+    last_folder = None
+    for mode in modes:
+        paths = mode_paths(project, sample, mode, options)
+        last_folder = paths["folder"]
+        run = datetime.now().astimezone().isoformat(timespec="minutes")
+        try:
+            outcome = run_mode(project, sample, mode, options, report)
+        except Exception as error:  # noqa: BLE001
+            result = getattr(error, "result", None)
+            log = getattr(error, "log", None)
+            message = f"{type(error).__name__}: {error}"
+            report(f"{sample.key}: {mode} failed: {message}")
+            later = list(modes[modes.index(mode) + 1 :])
+            intro = [
+                f"The {mode} mode of {sample.key} did not finish, so this is what "
+                "its run got through rather than a reading of a fit."
+                + (f" {', '.join(later)} not run." if later else "")
+            ]
+            intro.append(
+                "The run wrote no result."
+                if result is None
+                else f"Its stages are in `{paths['result']}`."
+            )
+            failure = paths["folder"] / "failure.md"
+            failure.parent.mkdir(parents=True, exist_ok=True)
+            failure.write_text(
+                failure_markdown(
+                    f"{sample.key}: {mode}",
+                    result,
+                    message,
+                    log_tail(log) if log else "",
+                    intro=intro,
+                ),
+                encoding="utf-8",
+            )
+            outcomes.append(
+                Outcome(
+                    mode=mode,
+                    accepted=[s["name"] for s in accepted_stages(result)]
+                    if result
+                    else [],
+                    final=(result or {}).get("final"),
+                    residuals=_residuals(result, len(sample.structures))
+                    if result
+                    else {},
+                    undetermined=list((result or {}).get("undetermined") or []),
+                    paths=_plain(
+                        {
+                            "folder": paths["folder"],
+                            "failure": failure,
+                            **({"result": paths["result"]} if result else {}),
+                            **({"log": log} if log else {}),
+                        }
+                    ),
+                    error=message,
+                )
+            )
+            entries.append(
+                {
+                    "name": mode,
+                    "run": run,
+                    "result": result,
+                    "values": _summary_values(result),
+                }
+            )
+            break
+        outcomes.append(outcome)
+        result = json.loads(Path(outcome.paths["result"]).read_text(encoding="utf-8"))
+        entries.append(
+            {
+                "name": mode,
+                "run": run,
+                "result": result,
+                "values": _summary_values(result),
+            }
+        )
+    if last_folder is not None:
+        summary = last_folder / "summary.md"
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text(
+            summary_markdown(
+                f"{sample.key}: refinement summary",
+                entries,
+                columns=SUMMARY_COLUMNS,
+                intro=[
+                    (
+                        f"The modes run for {sample.key} in this sequence, "
+                        f"{', '.join(entry['name'] for entry in entries)}, as their "
+                        "results leave them."
+                    )
+                ],
+            ),
+            encoding="utf-8",
+        )
+        for outcome in outcomes:
+            outcome.paths["summary"] = str(summary)
+    return outcomes
