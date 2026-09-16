@@ -130,7 +130,10 @@ def test_structure_markdown_occupancies() -> None:
 
     assert text.startswith("# s1: Rietveld refinement, occupancies\n")
     assert "Sr and Ba traded between the M sites M1 and N1" in text
-    assert "| P | Sr | M1, N1 | M1, Sr2 | 1.20000 | 1.24000 |" in text
+    assert (
+        "| M site occupancies | clean | P | Sr | M1, N1 | M1 0.6000, Sr2 0.0000 | "
+        "1.20000 | 1.20000 |"
+    ) in text
 
 
 def test_coordinate_shift_in_angstroms() -> None:
@@ -197,3 +200,28 @@ def test_a_write_up_that_fails_keeps_the_result(tmp_path, monkeypatch) -> None:
     assert "The result was written to" in failure
     assert "RuntimeError: the write up broke" in failure
     assert (folder / "summary.md").is_file()
+
+
+def test_a_negative_microstrain_is_not_physical() -> None:
+    result = load("lebail_result.json")
+    for stage in result["stages"]:
+        if stage["name"] == "microstrain":
+            stage["values"]["phases"][0]["mustrain"] = {
+                "value": -180.0,
+                "esd": 15.0,
+                "held": False,
+            }
+
+    text = lebail_markdown(result)
+
+    assert "The microstrain test gives a negative microstrain, 12.0 esds" in text
+    assert "which is not physical" in text
+
+
+def test_a_held_bond_prints_its_distance_to_four_places() -> None:
+    result = load("coordinates_result.json")
+    result["bonds"]["P"][0]["esd"] = None
+
+    text = structure_markdown(result, plan=plan())
+
+    assert "| M1 | M | X1 | 4 | 2.7100 (held) | 2.4 to 3 |  |" in text

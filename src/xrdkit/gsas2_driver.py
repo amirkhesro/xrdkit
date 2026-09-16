@@ -2010,6 +2010,36 @@ def _refine(project):
     return covariance["data"]
 
 
+def _stale(histogram, covariance):
+    """Whether the histogram's residuals, and with them its calculated
+    pattern, are not those of the refinement's accepted parameters.
+
+    GSAS-II keeps in the histogram the pattern of the last function
+    evaluation, which in a refinement of constrained coordinates can be a
+    trial step it then refused (its Rwp capped at 100), while the Rwp of the
+    covariance comes from the accepted chi squared."""
+    accepted = (covariance.get("Rvals") or {}).get("Rwp")
+    stored = histogram.residuals.get("wR")
+    if accepted is None or stored is None:
+        return False
+    return abs(float(stored) - float(accepted)) > 1.0e-3 * max(float(accepted), 1.0)
+
+
+def _refresh_pattern(project, histogram, covariance):
+    """The refinement's covariance, the pattern computed again at the
+    accepted parameters first when the one the histogram holds is stale.
+
+    Only after the last stage: computing the pattern between stages upsets
+    GSAS-II's constraints for the next, and in a stage with Le Bail
+    extraction on it would extract the intensities again."""
+    if not _stale(histogram, covariance):
+        return covariance
+    kept = copy.deepcopy(covariance)
+    _compute(project)
+    project.data["Covariance"]["data"] = kept
+    return kept
+
+
 def _compute(project):
     """Compute the project's pattern without refining it, so that a run
     that kept no stage still has a model to report and export.
@@ -2649,6 +2679,15 @@ def refine(G2sc, job):
             covariance, (le_bail, uiso_schemes, managed) = _restore(project, clean)
             break
         record = _stage_record(stage["name"], stage["flags"], histogram, covariance)
+        if not le_bail and _stale(histogram, covariance):
+            # The histogram holds a trial step's pattern: the Rwp is taken
+            # from the accepted chi squared, and the Rp, which that does not
+            # give, is left out; the pattern is computed again for the
+            # exports at the end.
+            record["rwp"] = float(covariance["Rvals"]["Rwp"])
+            record["rp"] = None
+            record["residuals"] = {}
+            record["residuals_stale"] = True
         # The atoms as this stage leaves them: GSAS-II refines coordinate
         # shifts, set back to zero after each refinement, so the parameters
         # alone do not give the positions.
@@ -2717,6 +2756,17 @@ def refine(G2sc, job):
         # model the run leaves behind can still be reported and exported.
         try:
             covariance = _compute(project)
+        except Exception as error:  # noqa: BLE001
+            result["compute_error"] = f"{type(error).__name__}: {error}"
+    elif (
+        kept is not None
+        and not kept["flags"].get("le_bail")
+        and _stale(histogram, covariance)
+    ):
+        # The pattern the exports and the figure take is the model's own,
+        # not a trial step's.
+        try:
+            covariance = _refresh_pattern(project, histogram, covariance)
         except Exception as error:  # noqa: BLE001
             result["compute_error"] = f"{type(error).__name__}: {error}"
     try:

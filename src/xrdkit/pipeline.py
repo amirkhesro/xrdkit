@@ -1518,7 +1518,9 @@ def _plain(value):
     return value
 
 
-def _inputs_record(inputs: Inputs, options: Options, cells: Mapping) -> dict:
+def _inputs_record(
+    inputs: Inputs, options: Options, cells: Mapping, sources: Mapping
+) -> dict:
     instrument = inputs.instrument
     return _plain(
         {
@@ -1556,14 +1558,20 @@ def _inputs_record(inputs: Inputs, options: Options, cells: Mapping) -> dict:
             "scan_range": list(inputs.scan_range),
             "limits": list(inputs.limits),
             "start_cell": cells,
-            "start_cell_source": {
-                phase.key: phase.cell_source for phase in inputs.phases
-            },
+            "start_cell_source": dict(sources),
             "displacement": inputs.displacement,
             "zero": inputs.zero,
             "options": asdict(options),
         }
     )
+
+
+def _reduced_chi_squared(stage: Mapping) -> float | None:
+    """A stage's reduced chi squared, or GOF squared for a record without it."""
+    if stage.get("reduced_chi_squared") is not None:
+        return stage["reduced_chi_squared"]
+    gof = stage.get("gof")
+    return None if gof is None else gof**2
 
 
 def _residuals(result: Mapping, phases: int) -> dict:
@@ -1573,6 +1581,7 @@ def _residuals(result: Mapping, phases: int) -> dict:
         "rwp": last.get("rwp"),
         "rp": last.get("rp"),
         "chi_squared": last.get("chi_squared"),
+        "reduced_chi_squared": _reduced_chi_squared(last),
     }
     if phases > 1:
         residuals["weight_fractions"] = {
@@ -1643,6 +1652,7 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
     }
 
     plans: list[dict] = []
+    sources: dict[str, str] = {}
     if mode == "lebail":
         instprm = _write_start_instprm(
             inputs.instprm, inputs.zero, paths["start_instprm"]
@@ -1662,6 +1672,7 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             if phase.cell is not None:
                 entry["cell"] = _six(phase.cell)
             cells[phase.key] = phase.cell
+            sources[phase.key] = phase.cell_source
             phases.append(entry)
         stages = lebail_stages(
             inputs.refine.background,
@@ -1704,6 +1715,10 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             inputs.instprm, start.zero, paths["start_instprm"]
         )
         cells = {key: dict(phase.cell) for key, phase in by_name.items()}
+        sources = {
+            key: f"the {before} result {before_result.name}, stage {start.stage}"
+            for key in cells
+        }
         base = _create(inputs, instprm, work / "cif")
         if mode == "fixed_atoms":
             edits = {
@@ -1821,7 +1836,7 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             f"{sample.key}: {mode}: {row['name']} {row['status']}"
             + (f" ({row['reason']})" if row.get("reason") else "")
         )
-    result["inputs"] = _inputs_record(inputs, options, cells)
+    result["inputs"] = _inputs_record(inputs, options, cells, sources)
     result["method"] = {
         "mode": mode,
         "stages": _plain(stages),

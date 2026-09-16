@@ -1713,7 +1713,7 @@ def test_lebail_prints_its_files_and_the_fit(refinement, capsys) -> None:
     assert "bronze: tetragonal cell a = 6.0000, c = 4.0000 angstrom" in lines
     assert "size 0.4000 micron, microstrain 0" in lines
     assert "zero 0.0100 +/- 0.0010 degrees" in lines
-    assert "Rwp 10.000 per cent, chi squared 2.250" in lines
+    assert "Rwp 10.000 per cent, reduced chi squared 2.250" in lines
     assert "start cell of bronze from structures.bronze.cell" in lines
 
 
@@ -1726,11 +1726,11 @@ def test_rietveld_from_coordinates(refinement, capsys) -> None:
 
     lines = capsys.readouterr().out.splitlines()
     assert (
-        "coordinates: profile, Uiso groups, A sites, O sites; Rwp 10.000 per cent, chi squared 2.250"
+        "coordinates: profile, Uiso groups, A sites, O sites; Rwp 10.000 per cent, reduced chi squared 2.250"
         in lines
     )
     assert (
-        "occupancies: profile and Uiso, A site occupancies; Rwp 10.000 per cent, chi squared 2.250"
+        "occupancies: profile and Uiso, A site occupancies; Rwp 10.000 per cent, reduced chi squared 2.250"
         in lines
     )
     folder = refinement.root / "results" / "rietveld" / "chain"

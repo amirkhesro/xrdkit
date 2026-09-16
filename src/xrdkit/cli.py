@@ -1718,9 +1718,9 @@ def _lebail_lines(project: Project, outcome) -> list[str]:
 
 def _residual_text(outcome) -> str:
     residuals = outcome.residuals
-    rwp, chi = residuals.get("rwp"), residuals.get("chi_squared")
+    rwp, chi = residuals.get("rwp"), residuals.get("reduced_chi_squared")
     text = (
-        f"Rwp {'—' if rwp is None else f'{rwp:.3f}'} per cent, chi squared "
+        f"Rwp {'—' if rwp is None else f'{rwp:.3f}'} per cent, reduced chi squared "
         f"{'—' if chi is None else f'{chi:.3f}'}"
     )
     fractions = residuals.get("weight_fractions")

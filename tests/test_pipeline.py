@@ -1247,7 +1247,12 @@ def test_run_mode_file_layout_and_a_key_with_a_dot(tmp_path, fake) -> None:
         "size",
         "microstrain",
     ]
-    assert outcome.residuals == {"rwp": 10.0, "rp": 8.0, "chi_squared": 2.25}
+    assert outcome.residuals == {
+        "rwp": 10.0,
+        "rp": 8.0,
+        "chi_squared": 2.25,
+        "reduced_chi_squared": 2.25,
+    }
     saved = json.loads((folder / "x0.10.powder_lebail_result.json").read_text("utf-8"))
     assert saved["inputs"]["sample"]["key"] == "x0.10.powder"
     assert saved["inputs"]["instrument"]["radius"] == 240.0

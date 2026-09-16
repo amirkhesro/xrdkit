@@ -253,14 +253,21 @@ def stage_outcome_lines(result: Mapping) -> list[str]:
                 count,
                 _figure(stage.get("rwp")),
                 _figure(stage.get("rp")),
-                _figure(stage.get("chi_squared")),
+                _figure(
+                    stage.get("reduced_chi_squared")
+                    if stage.get("reduced_chi_squared") is not None
+                    else (None if stage.get("gof") is None else stage["gof"] ** 2)
+                ),
                 reason,
             ]
         )
     lines = [
         "## Stage outcomes",
         "",
-        *_table(["Stage", "Status", "Passes", "Rwp (%)", "Rp (%)", "χ²", "Why"], rows),
+        *_table(
+            ["Stage", "Status", "Passes", "Rwp (%)", "Rp (%)", "Reduced χ²", "Why"],
+            rows,
+        ),
         "",
         final_model_line(result),
     ]
@@ -399,6 +406,13 @@ def microstrain_verdict(result: Mapping) -> str:
         and strain_stage.get("rwp") is not None
         else ""
     )
+    if value < 0:
+        return (
+            f"The microstrain test gives a negative microstrain, {sigmas:.1f} esds "
+            f"from zero{rwp}, which is not physical: the Lorentzian breadth the "
+            "size alone leaves falls with angle faster than a size gives, and the "
+            "size refined alone is the better estimate."
+        )
     if sigmas >= MICROSTRAIN_SIGNIFICANCE and lowered:
         return (
             f"The microstrain test finds a microstrain: {sigmas:.1f} esds from "
@@ -870,41 +884,38 @@ def coordinate_lines(result: Mapping) -> list[str]:
 
 
 def occupancy_lines(result: Mapping) -> list[str]:
-    """Each exchange group's constraint: the element, its atoms, the content
-    over the sites held, and the content the final atoms give."""
-    final = result.get("final") or {}
-    atoms = {
-        phase.get("name"): {atom["label"]: atom for atom in phase.get("atoms") or []}
-        for phase in final.get("phases") or []
-    }
+    """Each exchange group's constraint, stage by stage whatever became of
+    the stage: the element, its atoms, the content over the sites held, and
+    the content the stage's own atoms give, which differs from it only if
+    the constraint did not hold."""
     rows = []
-    seen = set()
-    for stage in accepted_stages(result):
+    for stage in result.get("stages", []):
+        status = stage_status(stage)
         for name, constraints in (stage.get("occupancy_constraints") or {}).items():
+            atoms = {
+                atom["label"]: atom
+                for atom in (stage.get("atoms") or {}).get(name) or []
+            }
             for constraint in constraints:
-                key = (
-                    name,
-                    constraint.get("element"),
-                    tuple(constraint.get("atoms", [])),
-                )
-                if key in seen:
-                    continue
-                seen.add(key)
-                refined = sum(
-                    float(m)
-                    * float(atoms.get(name, {}).get(label, {}).get("occupancy", 0.0))
+                total = sum(
+                    float(m) * float(atoms.get(label, {}).get("occupancy", 0.0))
                     for m, label in zip(
                         constraint.get("multipliers", []), constraint.get("atoms", [])
                     )
                 )
                 rows.append(
                     [
+                        stage.get("name"),
+                        status,
                         name,
                         constraint.get("element"),
                         ", ".join(constraint.get("sites", [])),
-                        ", ".join(constraint.get("atoms", [])),
+                        ", ".join(
+                            f"{label} {float(atoms.get(label, {}).get('occupancy', 0.0)):.4f}"
+                            for label in constraint.get("atoms", [])
+                        ),
                         f"{float(constraint.get('total', 0.0)):.5f}",
-                        f"{refined:.5f}",
+                        f"{total:.5f}",
                     ]
                 )
     lines = ["## Occupancies", ""]
@@ -914,17 +925,20 @@ def occupancy_lines(result: Mapping) -> list[str]:
         (
             "Each exchanged element's content over its group's sites, the sum of "
             "multiplicity times occupancy, held at its start while the element is "
-            "traded between the sites:"
+            "traded between the sites, and the occupancies the stage left, whether "
+            "it was kept or rejected:"
         ),
         "",
         *_table(
             [
+                "Stage",
+                "Status",
                 "Phase",
                 "Element",
                 "Sites",
-                "Atoms",
+                "Occupancies",
                 "Held total per cell",
-                "Final total",
+                "Stage total",
             ],
             rows,
         ),
@@ -963,7 +977,11 @@ def bond_lines(result: Mapping, plans: Mapping[str, Mapping]) -> list[str]:
                     kind or "—",
                     bond["target"],
                     bond["count"],
-                    with_esd(bond["distance"], bond.get("esd"), 4),
+                    (
+                        with_esd(bond["distance"], bond["esd"])
+                        if bond.get("esd")
+                        else f"{bond['distance']:.4f} (held)"
+                    ),
                     "—" if low is None else f"{low:g} to {high:g}",
                     "**outside**" if outside else "",
                 ]

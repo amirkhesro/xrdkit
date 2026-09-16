@@ -1929,3 +1929,48 @@ def test_a_cap_of_one_pass_still_records_it() -> None:
         "parameter": None,
         "shift_over_esd": None,
     }
+
+
+class StalePatternProject(FakeProject):
+    """Refines as GSAS-II does a stage of constrained coordinates whose last
+    function evaluation was a trial step it refused: the covariance's Rwp is
+    the model's, the histogram's residuals the trial's, until the pattern is
+    computed again with no cycles."""
+
+    def refine(self):
+        super().refine()
+        covariance = self.data["Covariance"]["data"]
+        if self.controls.get("cycles") == 0:
+            self.histogram_.residuals = {"wR": 4.0, "R": 3.0}
+        elif "Rvals" in covariance:
+            covariance["Rvals"]["Rwp"] = 4.0
+            self.histogram_.residuals = {"wR": 100.0, "R": 56.0}
+
+
+def test_a_stale_pattern_is_recorded_from_the_accepted_fit_and_computed_again() -> None:
+    project = StalePatternProject()
+    G2sc = SimpleNamespace(G2Project=lambda gpx: project)
+    job = {
+        "gpx": "fake.gpx",
+        "cycles": 5,
+        "stages": [{"name": "zero", "zero": True}],
+    }
+
+    result = driver.refine(G2sc, job)
+
+    (stage,) = result["stages"]
+    # The Rwp of the accepted chi squared, and no Rp, which that does not give.
+    assert (stage["rwp"], stage["rp"]) == (4.0, None)
+    assert stage["residuals_stale"] is True
+    # The pattern was computed again before the exports, and the refinement's
+    # covariance kept.
+    assert project.histogram_.residuals == {"wR": 4.0, "R": 3.0}
+    assert result["final"]["instrument"]["Zero"]["esd"] == pytest.approx(1.0e-3)
+
+
+def test_stale_compares_the_histogram_with_the_accepted_rwp() -> None:
+    histogram = FakeHistogram()
+
+    assert not driver._stale(histogram, {"Rvals": {"GOF": 1.5}})
+    assert not driver._stale(histogram, {"Rvals": {"Rwp": 12.5001}})
+    assert driver._stale(histogram, {"Rvals": {"Rwp": 4.0}})
