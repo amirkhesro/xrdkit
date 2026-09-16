@@ -34,7 +34,8 @@ A settings file holds two tables of tables, read and checked by
       GSAS-II project;
     - ``space_group``;
     - ``sites``: a list of ``{atoms = {label = element, ...}, wyckoff,
-      kind}``, one per site, named by its first atom, of kind A, B or O;
+      kind}``, one per site, named by its first atom, its kind a short
+      label of the caller's choosing (:data:`SITE_KIND`), such as A, B or O;
     - ``uiso_groups``: a list of ``{name, sites}``, every site in one;
     - ``composition``: ``{added = {element = host element, ...}}``, how a
       nominal composition goes on the sites: every element the sites hold
@@ -90,7 +91,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 __all__ = [
-    "SITE_KINDS",
+    "SITE_KIND",
     "ConfigError",
     "check_composition",
     "load_config",
@@ -101,8 +102,10 @@ __all__ = [
     "wyckoff_multiplicity",
 ]
 
-# The kinds of site a structure's sites are sorted into.
-SITE_KINDS = ("A", "B", "O")
+# A kind of site: a short label, letters, digits and underscores starting with
+# a letter, at most eight. The kinds are whatever a structure's sites, or its
+# library entry's, declare.
+SITE_KIND = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,7}")
 
 SAMPLE_REQUIRED = (
     "id",
@@ -271,7 +274,7 @@ def read_sites(value: object, where: str) -> list[dict]:
     ConfigError
         If a site table has a key missing or unknown, an atom is on two
         sites, an element or Wyckoff position is not one, or a kind is not
-        one of :data:`SITE_KINDS`; the message starts with ``where``.
+        a short label (:data:`SITE_KIND`); the message starts with ``where``.
     """
     if not isinstance(value, list) or not value:
         raise _fail(where, "must be a list of site tables")
@@ -297,10 +300,11 @@ def _site(value: object, at: str, labels: set[str]) -> dict:
         wyckoff_multiplicity(wyckoff)
     except ValueError as error:
         raise _fail(f"{at}.wyckoff", str(error)) from None
-    if table["kind"] not in SITE_KINDS:
+    if not isinstance(table["kind"], str) or not SITE_KIND.fullmatch(table["kind"]):
         raise _fail(
             f"{at}.kind",
-            f"must be one of {', '.join(SITE_KINDS)}, not {table['kind']!r}",
+            "must be a short label, letters, digits and underscores starting with "
+            f"a letter, at most eight, not {table['kind']!r}",
         )
     return {
         "name": next(iter(atoms)),
@@ -600,11 +604,13 @@ def _structure(table: object, where: str) -> dict:
 
     limits = _table(table.get("bond_limits", {}), f"{where}.bond_limits")
     structure["bond_limits"] = {}
+    kinds = list(dict.fromkeys(site["kind"] for site in sites))
     for kind, bounds in limits.items():
         at = f"{where}.bond_limits.{kind}"
-        if kind not in SITE_KINDS:
+        if kind not in kinds:
             raise _fail(
-                at, f"not a kind of site; the kinds are {', '.join(SITE_KINDS)}"
+                at,
+                f"not a kind of the structure's sites; its kinds are {', '.join(kinds)}",
             )
         _keys(bounds, at, (), ("min", "max"))
         checked = {

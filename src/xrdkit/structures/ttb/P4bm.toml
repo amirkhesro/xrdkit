@@ -24,6 +24,13 @@ polar_axis = "c"
 origin_site = "B1"
 reference = "COD 2100720"
 
+# The range of a bond to O from a site of each kind: B-O 1.8 to 2.2 A,
+# and A-O from 2.45 A, some 0.2 A under the shortest in the tungsten bronze,
+# to the 3.0 A that bonds are measured to.
+[entry.bond_limits]
+A = [2.45, 3.0]
+B = [1.8, 2.2]
+
 # A1 is on 2a, (0, 0, z).
 [[sites]]
 label = "A1"

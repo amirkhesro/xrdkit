@@ -91,8 +91,9 @@ atoms as it left them, the coordinates it refined and held by site, its
 occupancy constraints, and a sanity check: negative Uiso, occupancies outside
 0 to 1 (and site totals above 1), and sites moved more than `max_shift`
 (fractional) from the reference. With `bonds`, `run_job` adds the final
-model's cation to anion distances (`xrdkit.structure.bond_lengths`, to oxygen
-up to 3 Å by default) to the result.
+model's cation to anion distances (`xrdkit.structure.bond_lengths`, to the
+anions given, the library default O when none are, up to 3 Å by default) to
+the result.
 
 ### What becomes of a stage that goes wrong
 
@@ -170,14 +171,18 @@ structure.
 | --- | --- |
 | `samples.<name>` | `id`, `scan`, `composition` (atoms per formula unit), `structure`, `start_cell` (`{file, model}` or `{a, c}`), `two_theta`, `background` (`{function, terms}`), `refine_microstrain`, `notes`; optionally `followed_reflections`, `trials` (`{runs = [{low, terms}], followed}`), `write_up` (text by mode and section), `unsettled` (the rule for each mode, over the top level one) |
 | `unsettled` | at the top level, the default rule for a stage of each mode that has not settled, `"accept"` (the pipeline's default) or `"reject"`, by the caller's own mode names; each sample carries it merged with its own as its `unsettled` |
-| `structures.<name>` | `cif`, `label`, `phase_name`, `space_group`, `formula_units`, `sites` (`{atoms = {label = element}, wyckoff, kind}`, kind A, B or O), `uiso_groups` (`{name, sites}`), `origin` (`{site, axis}`), `exchange` (`{elements, sites}`), `composition` (`{added = {element = host}}`); optionally `free_coordinates` (by Wyckoff position), `bond_limits` (`{kind = {min, max}}`) |
+| `structures.<name>` | `cif`, `label`, `phase_name`, `space_group`, `formula_units`, `sites` (`{atoms = {label = element}, wyckoff, kind}`, kind a short label such as A, B or O), `uiso_groups` (`{name, sites}`), `origin` (`{site, axis}`), `exchange` (`{elements, sites}`), `composition` (`{added = {element = host}}`); optionally `free_coordinates` (by Wyckoff position), `bond_limits` (`{kind = {min, max}}`) |
 
 From a structure table, `xrdkit.structure.site_setup` finds the sites among a
 phase's atoms as the driver reports them, checking that each site's atoms
 share one position, are of the elements given and have the multiplicity of
 its Wyckoff position, and that no atom is left over. It returns the sites by
 kind, the Uiso groups, the coordinates to refine on each site, the origin site
-and the exchange, in the forms the stage keys above take.
+and the exchange, in the forms the stage keys above take, with the anions and
+the bond limits of each kind: the library entry's when the structure names
+one (`anions`, and `[entry.bond_limits]`, `[min, max]` by kind, read with
+`xrdkit.library.bond_limits`), else O and 1.6 to 3.0 Å, under the structure's
+own `bond_limits`.
 `composition_edits` gives the atom edits that put a nominal composition on
 the sites by the table's rule: each element the CIF holds is scaled by one
 factor over its sites, which keeps its distribution, and each added element

@@ -6,7 +6,14 @@ from importlib.resources import files
 import pytest
 
 import xrdkit
-from xrdkit.library import Site, StructureEntry, list_entries, load_entry
+from xrdkit.library import (
+    DEFAULT_BOND_LIMITS,
+    Site,
+    StructureEntry,
+    bond_limits,
+    list_entries,
+    load_entry,
+)
 
 # A valid entry, for a library of one under tmp_path; each validation test
 # breaks one thing in it.
@@ -259,6 +266,15 @@ def test_every_shipped_entry_loads(name: str) -> None:
 
     assert entry.name == name
     assert entry.sites
+    assert entry.anions == ("O",)
+    assert set(entry.bond_limits) <= set(entry.kinds)
+    for kind in entry.kinds:
+        low, high = bond_limits(entry, kind)
+        assert 0 < low < high
+    # The tungsten bronzes carry their own limits for bonds to O from the A
+    # and B sites; the rest take the package default for every kind.
+    expected = {"A": (2.45, 3.0), "B": (1.8, 2.2)} if name.startswith("ttb/") else {}
+    assert entry.bond_limits == expected
 
 
 def test_entry_files_are_package_data() -> None:
@@ -334,6 +350,108 @@ def test_site_elements_not_element_symbols(tmp_path, elements, message) -> None:
 
     with pytest.raises(ValueError, match=message):
         load_entry("test/cubic", root=tmp_path)
+
+
+def test_anions_and_bond_limits(tmp_path) -> None:
+    write_entry(
+        tmp_path,
+        ENTRY.replace(
+            'reference = "none"\n',
+            'reference = "none"\nanions = ["F", "Cl"]\n\n'
+            "[entry.bond_limits]\nA = [2.2, 2.9]\n",
+        ),
+    )
+
+    entry = load_entry("test/cubic", root=tmp_path)
+
+    assert entry.anions == ("F", "Cl")
+    assert entry.bond_limits == {"A": (2.2, 2.9)}
+    assert bond_limits(entry, "A") == (2.2, 2.9)
+    assert bond_limits(entry, "O") == DEFAULT_BOND_LIMITS == (1.6, 3.0)
+    with pytest.raises(
+        ValueError,
+        match=r"^'B' is not a kind of site of test/cubic; its kinds are A, O$",
+    ):
+        bond_limits(entry, "B")
+
+
+def test_anions_and_bond_limits_default(tmp_path) -> None:
+    write_entry(tmp_path, ENTRY)
+
+    entry = load_entry("test/cubic", root=tmp_path)
+
+    assert entry.anions == ("O",)
+    assert entry.bond_limits == {}
+    assert bond_limits(entry, "A") == (1.6, 3.0)
+
+
+def test_kinds_are_the_entry_own(tmp_path) -> None:
+    text = (
+        ENTRY.replace('kind = "A"', 'kind = "M"')
+        .replace('kind = "O"', 'kind = "X_2"')
+        .replace(
+            'reference = "none"\n',
+            'reference = "none"\n\n[entry.bond_limits]\nM = [1.9, 2.4]\n',
+        )
+    )
+    write_entry(tmp_path, text)
+
+    entry = load_entry("test/cubic", root=tmp_path)
+
+    assert entry.kinds == ("M", "X_2")
+    assert bond_limits(entry, "M") == (1.9, 2.4)
+    assert bond_limits(entry, "X_2") == (1.6, 3.0)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            'reference = "none"\n',
+            'reference = "none"\nanions = "O"\n',
+            r"entry\.anions: must be a list of one or more element symbols",
+        ),
+        (
+            'reference = "none"\n',
+            'reference = "none"\nanions = []\n',
+            r"entry\.anions: must be a list of one or more element symbols",
+        ),
+        (
+            'reference = "none"\n',
+            'reference = "none"\nanions = ["O", "O"]\n',
+            r"entry\.anions: names an element twice",
+        ),
+        (
+            'reference = "none"\n',
+            'reference = "none"\n\n[entry.bond_limits]\nB = [1.8, 2.2]\n',
+            (
+                r"entry\.bond_limits\.B: not a kind of the entry's sites; its kinds "
+                r"are A, O$"
+            ),
+        ),
+        (
+            'reference = "none"\n',
+            'reference = "none"\n\n[entry.bond_limits]\nA = [2.2, 1.8]\n',
+            r"entry\.bond_limits\.A: must be \[min, max\] in angstroms",
+        ),
+        (
+            'reference = "none"\n',
+            'reference = "none"\n\n[entry.bond_limits]\nA = [2.2]\n',
+            r"entry\.bond_limits\.A: must be \[min, max\] in angstroms",
+        ),
+        (
+            'kind = "A"',
+            'kind = "A site"',
+            r"sites\[0\]\.kind: must be a short label",
+        ),
+    ],
+)
+def test_anions_bond_limits_and_kinds_rejected(tmp_path, old, new, message) -> None:
+    write_entry(tmp_path, ENTRY.replace(old, new))
+
+    with pytest.raises(ValueError, match=message) as raised:
+        load_entry("test/cubic", root=tmp_path)
+    assert "\n" not in str(raised.value)
 
 
 @pytest.mark.parametrize("name", list_entries())

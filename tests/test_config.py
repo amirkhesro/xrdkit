@@ -171,8 +171,8 @@ def test_load_config_rejects_bad_toml(tmp_path) -> None:
             "'10' is the id of samples.x10_powder too",
         ),
         (
-            lambda d: d["structures"]["abo"]["sites"][0].update(kind="C"),
-            "kind: must be one of A, B, O",
+            lambda d: d["structures"]["abo"]["sites"][0].update(kind="A site"),
+            "kind: must be a short label, letters, digits and underscores",
         ),
         (
             lambda d: d["structures"]["abo"]["sites"][0].update(wyckoff="a1"),
@@ -359,6 +359,65 @@ ABO_ATOMS = [
 ]
 
 
+def test_kinds_are_the_structure_own() -> None:
+    data = settings()
+    abo = data["structures"]["abo"]
+    renamed = {"A": "Cat1", "B": "Cat2", "O": "An"}
+    for site in abo["sites"]:
+        site["kind"] = renamed[site["kind"]]
+    abo["bond_limits"] = {"Cat2": {"min": 1.8, "max": 2.2}}
+
+    structure = validate_config(data)["structures"]["abo"]
+
+    assert [site["kind"] for site in structure["sites"]] == [
+        "Cat1",
+        "Cat1",
+        "Cat2",
+        "An",
+        "An",
+    ]
+    plan = site_setup(structure, ABO_ATOMS)
+    assert list(plan["kinds"]) == ["Cat1", "Cat2", "An"]
+    assert plan["bond_limits"] == {
+        "Cat1": (1.6, 3.0),
+        "Cat2": (1.8, 2.2),
+        "An": (1.6, 3.0),
+    }
+
+    # A bond limit is keyed by a kind the sites have.
+    abo["bond_limits"] = {"B": {"min": 1.8}}
+    with pytest.raises(
+        ConfigError,
+        match=(
+            r"^settings: structures\.abo\.bond_limits\.B: not a kind of the structure's "
+            r"sites; its kinds are Cat1, Cat2, An$"
+        ),
+    ):
+        validate_config(data)
+
+
+def test_site_setup_carries_anions_and_bond_limits() -> None:
+    structure = validate_config(settings())["structures"]["abo"]
+
+    plan = site_setup(structure, ABO_ATOMS)
+
+    # A CIF structure: O, and its own B limits over the package default.
+    assert plan["anions"] == ["O"]
+    assert plan["bond_limits"] == {"A": (1.6, 3.0), "B": (1.8, 2.2), "O": (1.6, 3.0)}
+    # Named by a library entry, its anions and limits come from the entry, and
+    # the structure's own still override them.
+    from_entry = site_setup(
+        {**structure, "library": "ttb/P4bm", "bond_limits": {"B": {"max": 2.3}}},
+        ABO_ATOMS,
+    )
+    assert from_entry["anions"] == ["O"]
+    assert from_entry["bond_limits"] == {
+        "A": (2.45, 3.0),
+        "B": (1.8, 2.3),
+        "O": (1.6, 3.0),
+    }
+
+
 def test_exchange_is_optional() -> None:
     data = settings()
     del data["structures"]["abo"]["exchange"]
@@ -416,7 +475,7 @@ def test_the_sites_need_not_hold_every_kind() -> None:
         ],
     }
     with pytest.warns(UserWarning, match="no site of an anion, O"):
-        assert bond_lengths(phase) == []
+        assert bond_lengths(phase, ["O"]) == []
 
 
 def test_start_cell_by_crystal_system() -> None:

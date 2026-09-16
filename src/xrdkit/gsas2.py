@@ -392,8 +392,9 @@ def build_refine_job(
         True, or ``{"anions": [...], "dmax": ..., "dmin": ...}``, any of them,
         for :func:`run_job` to add to the result, as ``bonds``, the cation to
         anion distances of each phase's final structure, as
-        :func:`xrdkit.structure.bond_lengths` gives them: to oxygen, from 0.5
-        to 3 angstroms, by default.
+        :func:`xrdkit.structure.bond_lengths` gives them: to the anions given,
+        else :data:`xrdkit.library.DEFAULT_ANIONS`, from 0.5 to 3 angstroms,
+        by default.
     on_flagged, on_unsettled
         "accept" or "reject": what becomes of a stage whose sanity check
         raises a flag the last stage kept did not have, and of one not
@@ -595,8 +596,10 @@ def structure_edits(refined: Sequence[Mapping], base: Sequence[Mapping]) -> list
 def _add_bonds(result: dict, options: Mapping) -> None:
     """Add the cation to anion distances of each phase's final structure to
     ``result``, as ``bonds`` by phase name, or the error as ``bonds_error``."""
+    from xrdkit.library import DEFAULT_ANIONS
     from xrdkit.structure import bond_lengths
 
+    options = {"anions": DEFAULT_ANIONS, **options}
     try:
         result["bonds"] = {
             phase["name"]: bond_lengths(phase, **options)

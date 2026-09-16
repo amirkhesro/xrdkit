@@ -121,7 +121,7 @@ PEROVSKITE = {
 
 
 def test_bond_lengths_by_site_to_the_anions() -> None:
-    bonds = bond_lengths(PEROVSKITE)
+    bonds = bond_lengths(PEROVSKITE, ["O"])
 
     # Twelve A-O bonds of a / sqrt(2) and six B-O of a / 2, each oxygen
     # counted by its images; Sr shares the A site and counts once, and no
@@ -149,7 +149,9 @@ def test_bond_lengths_by_site_to_the_anions() -> None:
 def test_bond_lengths_range_anions_and_a_plain_cell() -> None:
     plain = {**PEROVSKITE, "cell": [4.0, 4.0, 4.0, 90.0, 90.0, 90.0]}
 
-    assert [bond["centre"] for bond in bond_lengths(plain, dmax=2.5)] == ["Ti"] * 3
+    assert [bond["centre"] for bond in bond_lengths(plain, ["O"], dmax=2.5)] == [
+        "Ti"
+    ] * 3
     # With Ti as the anion, the oxygens count as cations, and the A site's
     # nearest Ti are a sqrt(3) / 2 away.
     to_ti = bond_lengths(plain, anions=["Ti"], dmax=3.5)
@@ -158,7 +160,38 @@ def test_bond_lengths_range_anions_and_a_plain_cell() -> None:
     assert to_ti["centre"] == "Ba" and to_ti["count"] == 8
     assert to_ti["distance"] == pytest.approx(2.0 * math.sqrt(3.0))
     with pytest.raises(ValueError, match="dmax must exceed"):
-        bond_lengths(plain, dmax=0.4)
+        bond_lengths(plain, ["O"], dmax=0.4)
+
+
+def test_bond_lengths_to_an_anion_other_than_oxygen() -> None:
+    # KMgF3, a fluoride perovskite in P1.
+    fluoride = {
+        "cell": [4.0, 4.0, 4.0, 90.0, 90.0, 90.0],
+        "atoms": [
+            {"label": "K1", "type": "K", "xyz": [0.0, 0.0, 0.0]},
+            {"label": "Mg1", "type": "Mg", "xyz": [0.5, 0.5, 0.5]},
+            {"label": "F1", "type": "F", "xyz": [0.5, 0.5, 0.0]},
+            {"label": "F2", "type": "F-", "xyz": [0.5, 0.0, 0.5]},
+            {"label": "F3", "type": "F", "xyz": [0.0, 0.5, 0.5]},
+        ],
+        "operators": [IDENTITY],
+    }
+
+    bonds = bond_lengths(fluoride, ["F"], dmax=2.5)
+
+    assert [(bond["centre"], bond["target"], bond["count"]) for bond in bonds] == [
+        ("Mg1", "F1", 2),
+        ("Mg1", "F2", 2),
+        ("Mg1", "F3", 2),
+    ]
+    assert [bond["distance"] for bond in bonds] == pytest.approx([2.0] * 3)
+
+
+def test_bond_lengths_without_anions_is_deprecated() -> None:
+    with pytest.warns(DeprecationWarning, match="bond_lengths without anions"):
+        bonds = bond_lengths(PEROVSKITE)
+
+    assert bonds == bond_lengths(PEROVSKITE, ["O"])
 
 
 # A structure table as xrdkit.config.load_config gives it: two A sites, Sr

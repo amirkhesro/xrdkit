@@ -27,6 +27,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from xrdkit.config import wyckoff_multiplicity
+from xrdkit.library import DEFAULT_ANIONS, DEFAULT_BOND_LIMITS, load_entry
+from xrdkit.library import bond_limits as entry_bond_limits
 
 __all__ = [
     "Distance",
@@ -213,12 +215,17 @@ def _sites(atoms: Sequence[Mapping]) -> list[list[int]]:
 
 def bond_lengths(
     phase: Mapping,
-    anions: Iterable[str] = ("O",),
+    anions: Iterable[str] | None = None,
     dmax: float = 3.0,
     dmin: float = 0.5,
 ) -> list[dict]:
     """Every distance from a cation site of ``phase`` to an anion site
     between ``dmin`` and ``dmax`` angstroms.
+
+    ``anions`` is required: the anions of the structure's library entry,
+    as :func:`site_setup` gives them. Left out, it warns that it is
+    deprecated and takes :data:`xrdkit.library.DEFAULT_ANIONS`, for callers
+    written before it was required.
 
     ``phase`` is a phase as the GSAS-II driver reports it: ``cell``, a
     mapping with GSAS-II's ``length_a`` to ``angle_gamma`` or the six values
@@ -245,6 +252,14 @@ def bond_lengths(
     if isinstance(cell, Mapping):
         cell = [cell[key] for key in CELL_KEYS]
     atoms = list(phase["atoms"])
+    if anions is None:
+        warnings.warn(
+            "bond_lengths without anions is deprecated; pass the anions of the "
+            f"structure's library entry, taken as {', '.join(DEFAULT_ANIONS)} here",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        anions = DEFAULT_ANIONS
     anions = set(anions)
     site_labels, centres, targets = {}, [], []
     for group in _sites(atoms):
@@ -409,7 +424,15 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
       the origin's (on every site when there is no origin), ``{kind: {site
       name: free}}``;
     - ``exchange``: ``{"elements", "sites"}``, or None for a structure with
-      no exchange.
+      no exchange;
+    - ``anions``: the elements bonds are measured to, the library entry's
+      for a structure that names one (``library``), else the structure's
+      own ``anions`` or :data:`xrdkit.library.DEFAULT_ANIONS`;
+    - ``bond_limits``: ``{kind: (min, max)}`` in angstroms for every kind,
+      in the order of the sites: the structure's own ``bond_limits``
+      (``{kind: {min, max}}``, either) over the entry's (see
+      :func:`xrdkit.library.bond_limits`) over
+      :data:`xrdkit.library.DEFAULT_BOND_LIMITS`.
 
     Raises
     ------
@@ -476,6 +499,20 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
     held = structure.get("origin")
     origin = by_name[held["site"]] if held else None
     exchange = structure.get("exchange")
+    entry = load_entry(structure["library"]) if structure.get("library") else None
+    if entry is not None:
+        anions = list(entry.anions)
+    else:
+        anions = list(structure.get("anions") or DEFAULT_ANIONS)
+    limits = {}
+    for kind in kinds:
+        low, high = (
+            entry_bond_limits(entry, kind)
+            if entry is not None and kind in entry.kinds
+            else DEFAULT_BOND_LIMITS
+        )
+        given = structure.get("bond_limits", {}).get(kind, {})
+        limits[kind] = (given.get("min", low), given.get("max", high))
     return {
         "sites": sites,
         "kinds": kinds,
@@ -495,4 +532,6 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
             if exchange
             else None
         ),
+        "anions": anions,
+        "bond_limits": limits,
     }

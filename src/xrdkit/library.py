@@ -17,12 +17,19 @@ read and checked by :func:`load_entry`:
 
     and optionally ``setting``, the setting or origin choice (``""`` for the
     standard one); ``polar_axis``, ``"a"``, ``"b"`` or ``"c"``, the axis along
-    which symmetry leaves the origin free; and ``origin_site``, the label of
-    the site whose coordinate along that axis is held to fix the origin.
+    which symmetry leaves the origin free; ``origin_site``, the label of
+    the site whose coordinate along that axis is held to fix the origin;
+    ``anions``, the elements bonds are measured to, :data:`DEFAULT_ANIONS`
+    when left out; and ``bond_limits``, a table by kind of site of
+    ``[min, max]`` in angstroms, the range of a bond from a site of that
+    kind to an anion, :data:`DEFAULT_BOND_LIMITS` for a kind not listed
+    (see :func:`bond_limits`).
 
 ``[[sites]]``
-    One table per site, with ``label``, unique within the entry, ``kind``
-    and ``wyckoff``, the Wyckoff position written as ``"4c"``, and
+    One table per site, with ``label``, unique within the entry, ``kind``,
+    a short label of the entry's own (letters, digits and underscores,
+    starting with a letter, at most eight), and ``wyckoff``, the Wyckoff
+    position written as ``"4c"``, and
     optionally ``free``, the coordinates the site leaves free, drawn from
     x, y and z, ``uiso_group``, the name of the group whose one Uiso the
     site shares, and ``elements``, the elements the prototype structure puts
@@ -31,24 +38,33 @@ read and checked by :func:`load_entry`:
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
 
-from xrdkit.config import wyckoff_multiplicity
+from xrdkit.config import SITE_KIND, wyckoff_multiplicity
 
 __all__ = [
     "CELL_PARAMETERS",
     "CRYSTAL_SYSTEMS",
+    "DEFAULT_ANIONS",
+    "DEFAULT_BOND_LIMITS",
     "Site",
     "StructureEntry",
+    "bond_limits",
     "list_entries",
     "load_entry",
 ]
+
+# The anions of an entry that names none, and the range in angstroms of a
+# bond from a site of a kind its bond_limits do not list.
+DEFAULT_ANIONS = ("O",)
+DEFAULT_BOND_LIMITS = (1.6, 3.0)
 
 # The cell parameters each crystal system leaves free; hexagonal and trigonal
 # in the hexagonal setting.
@@ -72,7 +88,7 @@ ENTRY_REQUIRED = (
     "z",
     "reference",
 )
-ENTRY_OPTIONAL = ("setting", "polar_axis", "origin_site")
+ENTRY_OPTIONAL = ("setting", "polar_axis", "origin_site", "anions", "bond_limits")
 SITE_REQUIRED = ("label", "kind", "wyckoff")
 SITE_OPTIONAL = ("free", "uiso_group", "elements")
 AXES = ("a", "b", "c")
@@ -109,6 +125,30 @@ class StructureEntry:
     setting: str = ""
     polar_axis: str | None = None
     origin_site: str | None = None
+    anions: tuple[str, ...] = DEFAULT_ANIONS
+    bond_limits: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        """The kinds of site the entry declares, in the order of its sites."""
+        return tuple(dict.fromkeys(site.kind for site in self.sites))
+
+
+def bond_limits(entry: StructureEntry, kind: str) -> tuple[float, float]:
+    """The range in angstroms, ``(min, max)``, of a bond from a site of
+    ``kind`` to an anion: the entry's own, else :data:`DEFAULT_BOND_LIMITS`.
+
+    Raises
+    ------
+    ValueError
+        If ``kind`` is not a kind of the entry's sites.
+    """
+    if kind not in entry.kinds:
+        raise ValueError(
+            f"{kind!r} is not a kind of site of {entry.name}; its kinds are "
+            + ", ".join(entry.kinds)
+        )
+    return entry.bond_limits.get(kind, DEFAULT_BOND_LIMITS)
 
 
 def _base(root: Traversable | str | os.PathLike | None) -> Traversable:
@@ -173,6 +213,13 @@ def _site(table: object, name: str, field: str) -> Site:
     _keys(table, name, field, SITE_REQUIRED, SITE_OPTIONAL)
     label = _string(table["label"], name, f"{field}.label")
     kind = _string(table["kind"], name, f"{field}.kind")
+    if not SITE_KIND.fullmatch(kind):
+        raise _fail(
+            name,
+            f"{field}.kind",
+            "must be a short label, letters, digits and underscores starting with "
+            f"a letter, at most eight, not {kind!r}",
+        )
     wyckoff = _string(table["wyckoff"], name, f"{field}.wyckoff")
     try:
         wyckoff_multiplicity(wyckoff)
@@ -270,6 +317,55 @@ def _entry(data: dict, name: str) -> StructureEntry:
             f"no site labelled {origin_site!r}; the sites are {', '.join(labels)}",
         )
 
+    anions = table.get("anions", list(DEFAULT_ANIONS))
+    if (
+        not isinstance(anions, list)
+        or not anions
+        or not all(
+            isinstance(anion, str) and ELEMENT.fullmatch(anion) for anion in anions
+        )
+    ):
+        raise _fail(
+            name,
+            "entry.anions",
+            f"must be a list of one or more element symbols, not {anions!r}",
+        )
+    if len(set(anions)) != len(anions):
+        raise _fail(name, "entry.anions", f"names an element twice: {anions}")
+
+    kinds = list(dict.fromkeys(site.kind for site in checked))
+    limits = table.get("bond_limits", {})
+    if not isinstance(limits, dict):
+        raise _fail(
+            name, "entry.bond_limits", f"must be a table, not {type(limits).__name__}"
+        )
+    checked_limits = {}
+    for kind, pair in limits.items():
+        at = f"entry.bond_limits.{kind}"
+        if kind not in kinds:
+            raise _fail(
+                name,
+                at,
+                f"not a kind of the entry's sites; its kinds are {', '.join(kinds)}",
+            )
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or not all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in pair
+            )
+            or not 0 < pair[0] < pair[1]
+        ):
+            raise _fail(
+                name,
+                at,
+                "must be [min, max] in angstroms, 0 < min < max, not " + repr(pair),
+            )
+        checked_limits[kind] = (float(pair[0]), float(pair[1]))
+
     return StructureEntry(
         name=name,
         family=text["family"],
@@ -282,6 +378,8 @@ def _entry(data: dict, name: str) -> StructureEntry:
         setting=setting,
         polar_axis=polar_axis,
         origin_site=origin_site,
+        anions=tuple(anions),
+        bond_limits=checked_limits,
     )
 
 

@@ -487,10 +487,10 @@ BROKEN = [
         ),
     ),
     (
-        "cif atoms of an unknown kind",
+        "cif atoms with a kind that is not a label",
         "c = 3.9572 }",
-        'c = 3.9572 }\natoms = [{ atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "Q" }]',
-        r"structures\.cod-2100720\.atoms\[0\]\.kind: must be one of A, B, O",
+        'c = 3.9572 }\natoms = [{ atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "Q site" }]',
+        r"structures\.cod-2100720\.atoms\[0\]\.kind: must be a short label",
     ),
     (
         "cif atoms not a list",
@@ -738,6 +738,25 @@ def test_cif_atoms_and_origin_site_and_axis(project_dir: Path) -> None:
         {"name": "O1", "atoms": {"O1": "O"}, "wyckoff": "4c", "kind": "O"},
     )
     assert (cod.origin, cod.origin_axis, cod.origin_fixed) == ("Nb1", "z", True)
+
+
+def test_cif_atoms_take_any_kinds(project_dir: Path) -> None:
+    rewrite(
+        project_dir,
+        "c = 3.9572 }",
+        "c = 3.9572 }\n"
+        "atoms = [\n"
+        '    { atoms = { Nb1 = "Nb" }, wyckoff = "2b", kind = "M" },\n'
+        '    { atoms = { F1 = "F" }, wyckoff = "4c", kind = "X_1" },\n'
+        "]",
+    )
+
+    cod = load_project(project_dir).structures["cod-2100720"]
+
+    assert [(site["name"], site["kind"]) for site in cod.atoms] == [
+        ("Nb1", "M"),
+        ("F1", "X_1"),
+    ]
 
 
 def test_cif_origin_label_without_atoms_is_unchecked(project_dir: Path) -> None:
