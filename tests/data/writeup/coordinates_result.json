@@ -1,0 +1,950 @@
+{
+  "limits": [
+    20.5,
+    59.5
+  ],
+  "stages": [
+    {
+      "name": "profile",
+      "status": "clean",
+      "rwp": 9.0,
+      "rp": 7.2,
+      "gof": 1.2,
+      "chi_squared": 1.44,
+      "passes": [
+        {
+          "settled": true
+        },
+        {
+          "settled": true
+        }
+      ],
+      "passes_converged": true,
+      "parameters": {},
+      "sanity": [],
+      "atoms": {
+        "P": [
+          {
+            "label": "M1",
+            "type": "Sr",
+            "xyz": [
+              0.0,
+              0.0,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 2,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "N1",
+            "type": "Ba",
+            "xyz": [
+              0.2,
+              0.7,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 4,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "X1",
+            "type": "F",
+            "xyz": [
+              0.3,
+              0.1,
+              0.1
+            ],
+            "occupancy": 1.0,
+            "multiplicity": 8,
+            "adp": "I",
+            "uiso": 0.01
+          }
+        ]
+      },
+      "values": {
+        "instrument": {
+          "Zero": {
+            "value": 0.012,
+            "esd": 0.002,
+            "held": false
+          }
+        },
+        "sample": {
+          "Scale": {
+            "value": 2.0,
+            "esd": 0.01,
+            "held": false
+          },
+          "Shift": {
+            "value": 0.0,
+            "esd": null,
+            "held": true
+          }
+        },
+        "background": {
+          "type": "cosine",
+          "coefficients": [
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            }
+          ]
+        },
+        "phases": [
+          {
+            "name": "P",
+            "cell": {
+              "length_a": 6.01,
+              "length_b": 6.01,
+              "length_c": 4.002,
+              "angle_alpha": 90.0,
+              "angle_beta": 90.0,
+              "angle_gamma": 90.0,
+              "volume": 144.55264019999998
+            },
+            "cell_esd": {
+              "length_a": 0.001,
+              "length_b": 0.001,
+              "length_c": 0.001,
+              "angle_alpha": 0.0,
+              "angle_beta": 0.0,
+              "angle_gamma": 0.0,
+              "volume": 0.01
+            },
+            "cell_held": false,
+            "phase_fraction": {
+              "value": 1.0,
+              "esd": null,
+              "held": true
+            },
+            "size": {
+              "value": 0.4,
+              "esd": 0.02,
+              "held": false
+            },
+            "mustrain": {
+              "value": 0.0,
+              "esd": null,
+              "held": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Uiso groups",
+      "status": "clean",
+      "rwp": 8.8,
+      "rp": 7.040000000000001,
+      "gof": 1.2,
+      "chi_squared": 1.44,
+      "passes": [
+        {
+          "settled": true
+        },
+        {
+          "settled": true
+        }
+      ],
+      "passes_converged": true,
+      "parameters": {},
+      "sanity": [],
+      "atoms": {
+        "P": [
+          {
+            "label": "M1",
+            "type": "Sr",
+            "xyz": [
+              0.0,
+              0.0,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 2,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "N1",
+            "type": "Ba",
+            "xyz": [
+              0.2,
+              0.7,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 4,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "X1",
+            "type": "F",
+            "xyz": [
+              0.3,
+              0.1,
+              0.1
+            ],
+            "occupancy": 1.0,
+            "multiplicity": 8,
+            "adp": "I",
+            "uiso": 0.01
+          }
+        ]
+      },
+      "values": {
+        "instrument": {
+          "Zero": {
+            "value": 0.012,
+            "esd": 0.002,
+            "held": false
+          }
+        },
+        "sample": {
+          "Scale": {
+            "value": 2.0,
+            "esd": 0.01,
+            "held": false
+          },
+          "Shift": {
+            "value": 0.0,
+            "esd": null,
+            "held": true
+          }
+        },
+        "background": {
+          "type": "cosine",
+          "coefficients": [
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            }
+          ]
+        },
+        "phases": [
+          {
+            "name": "P",
+            "cell": {
+              "length_a": 6.01,
+              "length_b": 6.01,
+              "length_c": 4.002,
+              "angle_alpha": 90.0,
+              "angle_beta": 90.0,
+              "angle_gamma": 90.0,
+              "volume": 144.55264019999998
+            },
+            "cell_esd": {
+              "length_a": 0.001,
+              "length_b": 0.001,
+              "length_c": 0.001,
+              "angle_alpha": 0.0,
+              "angle_beta": 0.0,
+              "angle_gamma": 0.0,
+              "volume": 0.01
+            },
+            "cell_held": false,
+            "phase_fraction": {
+              "value": 1.0,
+              "esd": null,
+              "held": true
+            },
+            "size": {
+              "value": 0.4,
+              "esd": 0.02,
+              "held": false
+            },
+            "mustrain": {
+              "value": 0.0,
+              "esd": null,
+              "held": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "M sites",
+      "status": "clean",
+      "rwp": 8.5,
+      "rp": 6.800000000000001,
+      "gof": 1.2,
+      "chi_squared": 1.44,
+      "passes": [
+        {
+          "settled": true
+        },
+        {
+          "settled": true
+        }
+      ],
+      "passes_converged": true,
+      "parameters": {},
+      "sanity": [],
+      "atoms": {
+        "P": [
+          {
+            "label": "M1",
+            "type": "Sr",
+            "xyz": [
+              0.0,
+              0.0,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 2,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "N1",
+            "type": "Ba",
+            "xyz": [
+              0.2,
+              0.7,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 4,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "X1",
+            "type": "F",
+            "xyz": [
+              0.3,
+              0.1,
+              0.1
+            ],
+            "occupancy": 1.0,
+            "multiplicity": 8,
+            "adp": "I",
+            "uiso": 0.01
+          }
+        ]
+      },
+      "values": {
+        "instrument": {
+          "Zero": {
+            "value": 0.012,
+            "esd": 0.002,
+            "held": false
+          }
+        },
+        "sample": {
+          "Scale": {
+            "value": 2.0,
+            "esd": 0.01,
+            "held": false
+          },
+          "Shift": {
+            "value": 0.0,
+            "esd": null,
+            "held": true
+          }
+        },
+        "background": {
+          "type": "cosine",
+          "coefficients": [
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            }
+          ]
+        },
+        "phases": [
+          {
+            "name": "P",
+            "cell": {
+              "length_a": 6.01,
+              "length_b": 6.01,
+              "length_c": 4.002,
+              "angle_alpha": 90.0,
+              "angle_beta": 90.0,
+              "angle_gamma": 90.0,
+              "volume": 144.55264019999998
+            },
+            "cell_esd": {
+              "length_a": 0.001,
+              "length_b": 0.001,
+              "length_c": 0.001,
+              "angle_alpha": 0.0,
+              "angle_beta": 0.0,
+              "angle_gamma": 0.0,
+              "volume": 0.01
+            },
+            "cell_held": false,
+            "phase_fraction": {
+              "value": 1.0,
+              "esd": null,
+              "held": true
+            },
+            "size": {
+              "value": 0.4,
+              "esd": 0.02,
+              "held": false
+            },
+            "mustrain": {
+              "value": 0.0,
+              "esd": null,
+              "held": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "X sites",
+      "status": "clean",
+      "rwp": 8.4,
+      "rp": 6.720000000000001,
+      "gof": 1.2,
+      "chi_squared": 1.44,
+      "passes": [
+        {
+          "settled": true
+        },
+        {
+          "settled": true
+        }
+      ],
+      "passes_converged": true,
+      "parameters": {},
+      "sanity": [],
+      "atoms": {
+        "P": [
+          {
+            "label": "M1",
+            "type": "Sr",
+            "xyz": [
+              0.0,
+              0.0,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 2,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "N1",
+            "type": "Ba",
+            "xyz": [
+              0.2,
+              0.7,
+              0.5
+            ],
+            "occupancy": 0.6,
+            "multiplicity": 4,
+            "adp": "I",
+            "uiso": 0.01
+          },
+          {
+            "label": "X1",
+            "type": "F",
+            "xyz": [
+              0.3,
+              0.1,
+              0.1
+            ],
+            "occupancy": 1.0,
+            "multiplicity": 8,
+            "adp": "I",
+            "uiso": 0.01
+          }
+        ]
+      },
+      "values": {
+        "instrument": {
+          "Zero": {
+            "value": 0.012,
+            "esd": 0.002,
+            "held": false
+          }
+        },
+        "sample": {
+          "Scale": {
+            "value": 2.0,
+            "esd": 0.01,
+            "held": false
+          },
+          "Shift": {
+            "value": 0.0,
+            "esd": null,
+            "held": true
+          }
+        },
+        "background": {
+          "type": "cosine",
+          "coefficients": [
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            },
+            {
+              "value": 10.0,
+              "esd": 0.001,
+              "held": false
+            }
+          ]
+        },
+        "phases": [
+          {
+            "name": "P",
+            "cell": {
+              "length_a": 6.01,
+              "length_b": 6.01,
+              "length_c": 4.002,
+              "angle_alpha": 90.0,
+              "angle_beta": 90.0,
+              "angle_gamma": 90.0,
+              "volume": 144.55264019999998
+            },
+            "cell_esd": {
+              "length_a": 0.001,
+              "length_b": 0.001,
+              "length_c": 0.001,
+              "angle_alpha": 0.0,
+              "angle_beta": 0.0,
+              "angle_gamma": 0.0,
+              "volume": 0.01
+            },
+            "cell_held": false,
+            "phase_fraction": {
+              "value": 1.0,
+              "esd": null,
+              "held": true
+            },
+            "size": {
+              "value": 0.4,
+              "esd": 0.02,
+              "held": false
+            },
+            "mustrain": {
+              "value": 0.0,
+              "esd": null,
+              "held": true
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "completed": true,
+  "rejected": [],
+  "undetermined": [
+    {
+      "atom": "M1",
+      "parameter": "occupancy",
+      "value": 0.62,
+      "esd": 0.6,
+      "message": "M1 occupancy 0.620, esd 0.600 more than half its range",
+      "phase": "P"
+    }
+  ],
+  "sanity": {
+    "max_shift": 0.05,
+    "reference": "job start"
+  },
+  "start_model": {
+    "P": [
+      {
+        "label": "M1",
+        "type": "Sr",
+        "xyz": [
+          0.0,
+          0.0,
+          0.5
+        ],
+        "occupancy": 0.6,
+        "multiplicity": 2,
+        "adp": "I",
+        "uiso": 0.01
+      },
+      {
+        "label": "N1",
+        "type": "Ba",
+        "xyz": [
+          0.2,
+          0.7,
+          0.5
+        ],
+        "occupancy": 0.6,
+        "multiplicity": 4,
+        "adp": "I",
+        "uiso": 0.01
+      },
+      {
+        "label": "X1",
+        "type": "F",
+        "xyz": [
+          0.3,
+          0.1,
+          0.1
+        ],
+        "occupancy": 1.0,
+        "multiplicity": 8,
+        "adp": "I",
+        "uiso": 0.01
+      }
+    ]
+  },
+  "final_from": "X sites",
+  "final": {
+    "instrument": {
+      "Zero": {
+        "value": 0.012,
+        "esd": 0.002
+      }
+    },
+    "sample": {
+      "Scale": {
+        "value": 2.0,
+        "esd": 0.01
+      },
+      "Shift": {
+        "value": 0.0,
+        "esd": null
+      }
+    },
+    "background": {
+      "type": "cosine",
+      "coefficients": [
+        10.0,
+        1.0,
+        0.5,
+        0.1
+      ]
+    },
+    "phases": [
+      {
+        "name": "P",
+        "cell": {
+          "length_a": 6.01,
+          "length_b": 6.01,
+          "length_c": 4.002,
+          "angle_alpha": 90.0,
+          "angle_beta": 90.0,
+          "angle_gamma": 90.0,
+          "volume": 144.55264019999998
+        },
+        "cell_esd": {
+          "length_a": 0.001,
+          "length_b": 0.001,
+          "length_c": 0.001,
+          "angle_alpha": 0.0,
+          "angle_beta": 0.0,
+          "angle_gamma": 0.0,
+          "volume": 0.01
+        },
+        "phase_fraction": {
+          "value": 1.0,
+          "esd": 0.01
+        },
+        "weight_fraction": {
+          "value": 1.0,
+          "esd": 0.02
+        },
+        "size": {
+          "value": 0.4,
+          "esd": 0.02
+        },
+        "mustrain": {
+          "value": 0.0,
+          "esd": null
+        },
+        "atoms": [
+          {
+            "label": "M1",
+            "type": "Sr",
+            "xyz": [
+              0.0,
+              0.0,
+              0.52
+            ],
+            "occupancy": 0.62,
+            "multiplicity": 2,
+            "adp": "I",
+            "uiso": 0.01,
+            "xyz_esd": [
+              null,
+              null,
+              0.002
+            ],
+            "occupancy_esd": 0.6,
+            "uiso_esd": 0.001
+          },
+          {
+            "label": "N1",
+            "type": "Ba",
+            "xyz": [
+              0.21,
+              0.71,
+              0.5
+            ],
+            "occupancy": 0.59,
+            "multiplicity": 4,
+            "adp": "I",
+            "uiso": 0.01,
+            "xyz_esd": [
+              0.001,
+              null,
+              null
+            ],
+            "occupancy_esd": 0.01,
+            "uiso_esd": 0.001
+          },
+          {
+            "label": "X1",
+            "type": "F",
+            "xyz": [
+              0.31,
+              0.1,
+              0.12
+            ],
+            "occupancy": 1.0,
+            "multiplicity": 8,
+            "adp": "I",
+            "uiso": 0.01,
+            "xyz_esd": [
+              0.003,
+              0.004,
+              0.005
+            ],
+            "uiso_esd": 0.002
+          }
+        ]
+      }
+    ]
+  },
+  "bonds": {
+    "P": [
+      {
+        "centre": "M1",
+        "centre_site": "M1",
+        "target": "X1",
+        "target_site": "X1",
+        "distance": 2.71,
+        "esd": 0.004,
+        "count": 4
+      },
+      {
+        "centre": "N1",
+        "centre_site": "N1",
+        "target": "X1",
+        "target_site": "X1",
+        "distance": 1.52,
+        "esd": 0.003,
+        "count": 2
+      }
+    ]
+  },
+  "exports": {
+    "histogram": "coordinates_histogram.csv",
+    "reflections": {
+      "P": "fit_reflections_P.csv"
+    },
+    "instprm": "coordinates.instprm"
+  },
+  "inputs": {
+    "sample": {
+      "key": "s1",
+      "file": "data/raw/s1.xrdml",
+      "form": "powder",
+      "structures": [
+        "P"
+      ]
+    },
+    "instrument": {
+      "key": "lab",
+      "wavelength": [
+        1.540598,
+        1.544426
+      ],
+      "ka2": true,
+      "radius": 240.0,
+      "instprm": "data/lab.instprm"
+    },
+    "structures": [
+      {
+        "key": "P",
+        "library": null,
+        "cif": "cifs/p.cif",
+        "composition": "Sr0.24Ba0.48F1.6",
+        "z": 5,
+        "cell": {
+          "a": 6.0,
+          "c": 4.0
+        },
+        "exchange": [
+          [
+            "Sr",
+            "Ba"
+          ]
+        ],
+        "origin": "M1",
+        "origin_axis": "z",
+        "origin_fixed": true,
+        "atoms": null
+      }
+    ],
+    "refine": {
+      "two_theta": [
+        20.5,
+        59.5
+      ],
+      "background": {
+        "function": "cosine",
+        "terms": 4
+      },
+      "max_passes": {
+        "lebail": 60,
+        "fixed_atoms": 60,
+        "coordinates": 100,
+        "occupancies": 100
+      },
+      "unsettled": {
+        "lebail": "accept",
+        "fixed_atoms": "accept",
+        "coordinates": "accept",
+        "occupancies": "accept"
+      },
+      "followed": [
+        [
+          1,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ]
+    },
+    "scan_range": [
+      20.0,
+      60.0
+    ],
+    "limits": [
+      20.5,
+      59.5
+    ],
+    "start_cell": {
+      "P": {
+        "a": 6.0,
+        "b": 6.0,
+        "c": 4.0,
+        "alpha": 90.0,
+        "beta": 90.0,
+        "gamma": 90.0
+      }
+    },
+    "start_cell_source": {
+      "P": "structures.P.cell"
+    },
+    "displacement": false,
+    "zero": 0.0,
+    "options": {
+      "cell": null,
+      "zero": null,
+      "displacement": null,
+      "mustrain": false,
+      "preferred_orientation": null,
+      "max_passes": null,
+      "out": null
+    }
+  },
+  "method": {
+    "mode": "coordinates",
+    "stages": [
+      {
+        "name": "profile",
+        "background": {
+          "type": "cosine",
+          "terms": 4
+        },
+        "scale": true
+      },
+      {
+        "name": "Uiso groups"
+      },
+      {
+        "name": "M sites"
+      },
+      {
+        "name": "X sites"
+      }
+    ],
+    "cycles": 10,
+    "le_bail_cycles": null,
+    "max_passes": 60,
+    "pass_tolerance": 0.1,
+    "driver_version": 2,
+    "xrdkit_version": "0.1.0"
+  },
+  "date": "2026-09-16T12:20:00+01:00"
+}

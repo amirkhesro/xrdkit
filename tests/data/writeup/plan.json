@@ -1,0 +1,132 @@
+{
+  "phase": "P",
+  "sites": [
+    {
+      "name": "M1",
+      "kind": "M",
+      "wyckoff": "2a",
+      "multiplicity": 2,
+      "free": "z",
+      "atoms": [
+        {
+          "label": "M1",
+          "type": "Sr",
+          "xyz": [
+            0.0,
+            0.0,
+            0.5
+          ],
+          "occupancy": 0.6,
+          "multiplicity": 2,
+          "adp": "I",
+          "uiso": 0.01
+        }
+      ]
+    },
+    {
+      "name": "N1",
+      "kind": "M",
+      "wyckoff": "4c",
+      "multiplicity": 4,
+      "free": "xz",
+      "atoms": [
+        {
+          "label": "N1",
+          "type": "Ba",
+          "xyz": [
+            0.2,
+            0.7,
+            0.5
+          ],
+          "occupancy": 0.6,
+          "multiplicity": 4,
+          "adp": "I",
+          "uiso": 0.01
+        }
+      ]
+    },
+    {
+      "name": "X1",
+      "kind": "X",
+      "wyckoff": "8d",
+      "multiplicity": 8,
+      "free": "xyz",
+      "atoms": [
+        {
+          "label": "X1",
+          "type": "F",
+          "xyz": [
+            0.3,
+            0.1,
+            0.1
+          ],
+          "occupancy": 1.0,
+          "multiplicity": 8,
+          "adp": "I",
+          "uiso": 0.01
+        }
+      ]
+    }
+  ],
+  "kinds": {
+    "M": [
+      "M1",
+      "N1"
+    ],
+    "X": [
+      "X1"
+    ]
+  },
+  "uiso_groups": [
+    [
+      "M1",
+      "N1"
+    ],
+    [
+      "X1"
+    ]
+  ],
+  "group_names": [
+    "M",
+    "X"
+  ],
+  "origin": {
+    "name": "M1",
+    "kind": "M"
+  },
+  "origin_axis": "z",
+  "coordinates": {
+    "M": {
+      "N1": "xz"
+    },
+    "X": {
+      "X1": "xyz"
+    }
+  },
+  "exchange": [
+    {
+      "elements": [
+        "Sr",
+        "Ba"
+      ],
+      "sites": [
+        "M1",
+        "N1"
+      ]
+    }
+  ],
+  "polar_axis": "z",
+  "anions": [
+    "F"
+  ],
+  "bond_limits": {
+    "M": [
+      2.4,
+      3.0
+    ],
+    "X": [
+      1.6,
+      3.0
+    ]
+  }
+}
