@@ -1046,6 +1046,18 @@ def _edited(atoms: list[dict], edits: list[dict] | None) -> list[dict]:
     return atoms
 
 
+FAKE_HISTOGRAM = "two_theta,observed,calculated,background,difference\n" + "".join(
+    f"{20.5 + 0.5 * i:.2f},{100 + 50 * (i % 7 == 0)},{98 + 50 * (i % 7 == 0)},90,2\n"
+    for i in range(78)
+)
+FAKE_REFLECTIONS = (
+    "h,k,l,multiplicity,d,two_theta,fwhm,f_obs_squared,f_calc_squared,i_corr\n"
+    "1,1,0,4,4.24,20.92,0.1,80,100,1.0\n"
+    "0,0,1,2,4.0,22.20,0.1,210,200,1.0\n"
+    "2,0,1,8,2.4,37.4,0.1,50,60,1.0\n"
+)
+
+
 class FakeGsas2:
     """Plays run_job: a create job reports the toy's atoms, edits applied; a
     refine job writes a result of its stages, every one clean unless told
@@ -1164,9 +1176,9 @@ class FakeGsas2:
             },
             "instprm": str(prefix.with_name(prefix.name + ".instprm")),
         }
-        Path(exports["histogram"]).write_text("two_theta\n", encoding="utf-8")
+        Path(exports["histogram"]).write_text(FAKE_HISTOGRAM, encoding="utf-8")
         for path in exports["reflections"].values():
-            Path(path).write_text("h,k,l\n", encoding="utf-8")
+            Path(path).write_text(FAKE_REFLECTIONS, encoding="utf-8")
         Path(exports["instprm"]).write_text(instprm, encoding="utf-8")
         result = {
             "limits": job["limits"],

@@ -47,7 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
-from xrdkit import gsas2_driver
+from xrdkit import gsas2_driver, writeup
 from xrdkit.config import AXIS_COORDINATE
 from xrdkit.density import parse_formula
 from xrdkit.gsas2 import (
@@ -62,6 +62,7 @@ from xrdkit.gsas2 import (
 )
 from xrdkit.io import read_xrdml
 from xrdkit.library import DEFAULT_ANIONS, StructureEntry, load_entry
+from xrdkit.plotting import plot_rietveld, save_figure
 from xrdkit.project import (
     Instrument,
     Project,
@@ -1521,6 +1522,7 @@ def _inputs_record(inputs: Inputs, options: Options, cells: Mapping) -> dict:
     instrument = inputs.instrument
     return _plain(
         {
+            "project": {"name": inputs.project.name, "root": inputs.project.root},
             "sample": {
                 "key": inputs.sample.key,
                 "file": inputs.sample.file,
@@ -1640,6 +1642,7 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
         "on_unsettled": on_unsettled,
     }
 
+    plans: list[dict] = []
     if mode == "lebail":
         report(f"{sample.key}: lebail from {inputs.start_cell_source}")
         instprm = _write_start_instprm(
@@ -1727,7 +1730,7 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             )
             scale_start = None
         else:
-            edits, plans = {}, []
+            edits = {}
             for phase in inputs.phases:
                 atoms = by_name[phase.key].atoms
                 plan = _plan(phase, atoms)
@@ -1857,6 +1860,25 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             f"{mode}: instrument parameters held by the run came out changed: "
             + ", ".join(changed)
         )
+    # The figure and the write up, after the result is safely written.
+    figures = _figures(result, paths, sample.key, mode)
+    earlier = {}
+    for before in MODES[: MODES.index(mode)]:
+        path = mode_paths(project, sample, before, options)["result"]
+        try:
+            earlier[before] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    markdown = paths["folder"] / f"{mode}.md"
+    markdown.write_text(
+        writeup.MARKDOWN[mode](
+            result,
+            result["inputs"],
+            {plan["phase"]: plan for plan in plans},
+            earlier,
+        ),
+        encoding="utf-8",
+    )
     report(f"{sample.key}: {mode} done, final model from {result.get('final_from')}")
     return Outcome(
         mode=mode,
@@ -1872,10 +1894,28 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
                 "work": work,
                 "log": paths["log"],
                 "start_instprm": instprm,
+                "figures": figures,
+                "markdown": markdown,
                 **{key: value for key, value in exports.items()},
             }
         ),
     )
+
+
+def _figures(result: Mapping, paths: Mapping, key: str, mode: str) -> list[Path]:
+    """The fit drawn with plot_rietveld and saved as PNG and PDF beside the
+    result."""
+    exports = result.get("exports") or {}
+    if not exports.get("histogram"):
+        raise PipelineError(f"{mode}: the run exported no pattern to draw")
+    fig, _ = plot_rietveld(
+        exports["histogram"],
+        exports.get("reflections") or None,
+        title=f"{key}: {mode}",
+        sqrt_scale=True,
+        result=result,
+    )
+    return save_figure(fig, paths["prefix"])
 
 
 def _gsas_cell(cell: Mapping[str, float]) -> dict[str, float]:
@@ -1963,7 +2003,7 @@ def run_sequence(
             intro.append(
                 "The run wrote no result."
                 if result is None
-                else f"Its stages are in `{paths['result']}`."
+                else f"The result was written to `{paths['result']}`, with its stages."
             )
             failure = paths["folder"] / "failure.md"
             failure.parent.mkdir(parents=True, exist_ok=True)
