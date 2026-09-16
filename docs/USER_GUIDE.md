@@ -3007,41 +3007,738 @@ PHASE = "TTB"
 # and there is a failure to write up.
 INSTPRM = "data/standards/missing.instprm"
 
-job = build_refine_job(
-    Path(f"results/broken/{STEM}.gpx").resolve(),
-    [{"name": "profile", "scale": True}],
-    data_file=Path(SCAN_FILE).resolve(),
-    instprm=Path(INSTPRM).resolve(),
-    phases=[{"cif": Path(PHASE_CIF).resolve(), "name": PHASE}],
-)
 work = Path(f"results/broken/gsas2_work/{STEM}")
 try:
+    job = build_refine_job(
+        Path(f"results/broken/{STEM}.gpx").resolve(),
+        [{"name": "profile", "scale": True}],
+        data_file=Path(SCAN_FILE).resolve(),
+        instprm=Path(INSTPRM).resolve(),
+        phases=[{"cif": Path(PHASE_CIF).resolve(), "name": PHASE}],
+    )
     run_job(job, work)
 except Gsas2Error as error:
     report = failure_markdown(
         f"{STEM}, profile", None, str(error), log_tail(work / "refine.log")
     )
+    Path("results/broken").mkdir(parents=True, exist_ok=True)
     Path(f"results/broken/{STEM}_failure.md").write_text(report, encoding="utf-8")
     headings = [line for line in report.splitlines() if line.startswith("## ")]
     print(f"{len(report.splitlines())} lines written, sections {headings}")
-    print(next(line for line in report.splitlines() if "failed with exit code" in line))
+    print(str(error).split(": ")[0])
 ```
 
 ```
-104 lines written, sections ['## Error', '## Stages', '## GSAS-II log, last 40 lines']
-GSAS-II job 'refine' failed with exit code 1:
+17 lines written, sections ['## Error', '## Stages', '## GSAS-II log, last 40 lines']
+instrument parameter file not found
 ```
 
-That one block is the whole of it. Point `INSTPRM` at a real instrument
-parameter file and the same script becomes the shape to wrap a refinement of
-your own in: build the job, run it inside `try`, and on `Gsas2Error` write the
-report out rather than losing what the log had to say.
+`build_refine_job` checks that every input file exists before GSAS-II is
+started, so here the error comes from building the job, and there is no log to
+add. A failure inside GSAS-II itself comes from `run_job` instead, and its log
+tail fills the last section. That one block is the whole of it. Point
+`INSTPRM` at a real instrument parameter file and the same script becomes the
+shape to wrap a refinement of your own in: build the job and run it inside
+`try`, and on `Gsas2Error` write the report out rather than losing what the
+log had to say.
+
+### 7.8 The lebail and rietveld commands
+
+The scripts of Sections 6 and 7 build every stage by hand, which is the way to
+learn what a refinement does. Once that is clear, two commands do the same work
+from the project file, with no script at all. `xrdkit lebail SAMPLE` runs a Le
+Bail extraction and `xrdkit rietveld SAMPLE` runs the Rietveld refinement in
+four modes, each starting from the saved result of the one before, and both
+write their results, a figure and a write up for every mode. Both need GSAS-II,
+which Section 6.3 installs, and a project file, which `xrdkit init` starts.
+
+#### Start here: the complete script
+
+A command needs a project to run in, so the script below makes one first, in a
+folder named `toy_project` beside it, from nothing: a made up tungsten bronze
+whose true structure the script knows, a scan calculated from that structure
+with counting noise added, a reference CIF with the coordinates a little off
+and without the calcium the sample holds, a GSAS-II instrument parameter file
+and the project file. It then runs the two commands in that folder, exactly as
+typing `xrdkit lebail toy` and then `xrdkit rietveld toy` in a terminal there
+would, and prints what they printed. Last, it prints three sections of the
+write ups and the keys the result JSON records, which the rest of this section
+reads. Because the true structure is known, the refinement can be checked
+against it, which no measured scan allows.
+
+Save this as `refine_commands.py` in an empty folder and run it with
+`py refine_commands.py` on Windows, or `python3 refine_commands.py` on macOS.
+It takes about two minutes on a laptop. For a sample of your own there is no
+script to write: the project file and the two commands are all of it.
+
+The whole of `refine_commands.py`:
+
+```python
+import contextlib
+import io
+import json
+import math
+import os
+from pathlib import Path
+
+import numpy as np
+
+from xrdkit import load_project
+from xrdkit.cli import main
+from xrdkit.project import refine_settings
+from xrdkit.symmetry import is_absent, laue_group, multiplicity, space_group_operations
+
+# Edit these lines for each new sample. Nothing below needs changing.
+PROJECT = Path("toy_project").resolve()
+SAMPLE = "toy"
+
+# A made up tungsten bronze in P4bm, as the sample really is: its cell, and
+# each atom as label, element, x, y, z, occupancy and Uiso.
+A, C = 12.46, 3.92
+ATOMS = [
+    ("Sr1", "Sr", 0.0, 0.0, 0.48, 0.75, 0.008),
+    ("Ca1", "Ca", 0.0, 0.0, 0.48, 0.15, 0.008),
+    ("Ba2", "Ba", 0.172, 0.672, 0.47, 0.5, 0.008),
+    ("Sr2", "Sr", 0.172, 0.672, 0.47, 0.25, 0.008),
+    ("Ca2", "Ca", 0.172, 0.672, 0.47, 0.05, 0.008),
+    ("Nb1", "Nb", 0.0, 0.5, 0.0, 1.0, 0.006),
+    ("Nb2", "Nb", 0.075, 0.212, 0.01, 1.0, 0.006),
+    ("O1", "O", 0.283, 0.783, 0.03, 1.0, 0.012),
+    ("O2", "O", 0.139, 0.069, 0.98, 1.0, 0.012),
+    ("O3", "O", 0.343, 0.006, 0.02, 1.0, 0.012),
+    ("O4", "O", 0.0, 0.5, 0.52, 1.0, 0.012),
+    ("O5", "O", 0.075, 0.205, 0.49, 1.0, 0.012),
+]
+# How far the reference CIF's coordinates are from the sample's.
+OFFSETS = {
+    "Ba2": (-0.003, -0.003, 0.01),
+    "Sr2": (-0.003, -0.003, 0.01),
+    "Nb2": (0.003, -0.002, 0.0),
+    "O1": (-0.004, -0.004, -0.01),
+    "O2": (0.004, -0.003, 0.01),
+    "O3": (-0.003, 0.003, -0.01),
+    "O5": (0.003, 0.003, 0.01),
+}
+# The X-ray scattering factor of each element, as the Cromer-Mann a, b and c
+# of International Tables, Volume C.
+SCATTERING = {
+    "O": ((3.0485, 2.2868, 1.5463, 0.867), (13.2771, 5.7011, 0.3239, 32.9089), 0.2508),
+    "Ca": (
+        (8.6266, 7.3873, 1.5899, 1.0211),
+        (10.4421, 0.6599, 85.7484, 178.437),
+        1.3751,
+    ),
+    "Sr": (
+        (17.5663, 9.8184, 5.422, 2.6694),
+        (1.5564, 14.0988, 0.1664, 132.376),
+        2.5064,
+    ),
+    "Nb": (
+        (17.6142, 12.0144, 4.0418, 3.5335),
+        (1.1887, 11.766, 0.2048, 69.7957),
+        3.7559,
+    ),
+    "Ba": (
+        (20.3361, 19.297, 10.888, 2.6959),
+        (3.216, 0.2756, 20.2073, 167.202),
+        2.7731,
+    ),
+}
+# Each element's anomalous scattering, f' and f'', at Cu K alpha 1.
+DISPERSION = {
+    "O": (0.0492, 0.0322),
+    "Ca": (0.3639, 1.2855),
+    "Sr": (-0.3546, 1.8199),
+    "Nb": (-0.1135, 2.4816),
+    "Ba": (-1.0499, 8.4588),
+}
+# The instrument: Cu K alpha 1 and 2, U, V and W in centidegrees squared, X
+# and Y in centidegrees; and the crystallite size in angstroms.
+LAMBDA1, LAMBDA2 = 1.540598, 1.544426
+U, V, W, X, Y = 2.0, -2.0, 5.0, 0.5, 1.0
+SIZE = 1500.0
+
+for folder in ("data/raw", "data/standards", "cifs"):
+    (PROJECT / folder).mkdir(parents=True, exist_ok=True)
+
+# The reference CIF: the bronze without its Ca, which the project file
+# places, and with its coordinates a little off the sample's.
+lines = [
+    "data_bronze",
+    f"_cell_length_a {A}",
+    f"_cell_length_b {A}",
+    f"_cell_length_c {C}",
+    "_cell_angle_alpha 90",
+    "_cell_angle_beta 90",
+    "_cell_angle_gamma 90",
+    "_symmetry_space_group_name_H-M 'P 4 b m'",
+    "loop_",
+    "_atom_site_label",
+    "_atom_site_type_symbol",
+    "_atom_site_fract_x",
+    "_atom_site_fract_y",
+    "_atom_site_fract_z",
+    "_atom_site_occupancy",
+    "_atom_site_U_iso_or_equiv",
+]
+for label, element, x, y, z, occupancy, uiso in ATOMS:
+    if element != "Ca":
+        dx, dy, dz = OFFSETS.get(label, (0.0, 0.0, 0.0))
+        lines.append(f"{label} {element} {x + dx} {y + dy} {z + dz} {occupancy} {uiso}")
+(PROJECT / "cifs/bronze.cif").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+# The instrument parameter file, with no blank line in it.
+lines = [
+    "#GSAS-II instrument parameter file",
+    "Type:PXC",
+    "Bank:1.0",
+    f"Lam1:{LAMBDA1}",
+    f"Lam2:{LAMBDA2}",
+    "I(L2)/I(L1):0.5",
+    "Zero:0.0",
+    "Polariz.:0.5",
+    "Azimuth:0.0",
+    f"U:{U}",
+    f"V:{V}",
+    f"W:{W}",
+    f"X:{X}",
+    f"Y:{Y}",
+    "Z:0.0",
+    "SH/L:0.002",
+]
+(PROJECT / "data/standards/lab.instprm").write_text("\n".join(lines), encoding="utf-8")
+print(sorted(path.name for path in PROJECT.rglob("*") if path.is_file()))
+
+operations = space_group_operations("P4bm")
+laue = laue_group(operations)
+sites = []
+for label, element, x, y, z, occupancy, uiso in ATOMS:
+    images = []
+    for rotation, translation in operations:
+        image = np.array(rotation, float) @ (x, y, z) + np.array(translation, float)
+        image %= 1
+        if not any(np.allclose((image - seen + 0.5) % 1 - 0.5, 0) for seen in images):
+            images.append(image)
+    sites.append((element, occupancy, uiso, np.array(images)))
+
+two_theta = np.round(np.arange(10.0, 70.0001, 0.02), 2)
+counts = np.full(two_theta.size, 200.0)
+for h in range(12):
+    for k in range(h + 1):
+        for l in range(4):
+            if h + k + l == 0 or is_absent((h, k, l), operations):
+                continue
+            d = 1 / math.sqrt((h * h + k * k) / A**2 + l * l / C**2)
+            if LAMBDA2 / (2 * d) >= math.sin(math.radians(35.5)):
+                continue
+            s = 1 / (2 * d)
+            structure = 0
+            for element, occupancy, uiso, xyz in sites:
+                a, b, c = SCATTERING[element]
+                f_prime, f_double_prime = DISPERSION[element]
+                f = sum(ai * math.exp(-bi * s * s) for ai, bi in zip(a, b)) + c
+                f += f_prime + 1j * f_double_prime
+                debye_waller = math.exp(-8 * math.pi**2 * uiso * s * s)
+                phases = np.exp(2j * math.pi * (xyz @ (h, k, l))).sum()
+                structure += occupancy * f * debye_waller * phases
+            area = 0.0005 * multiplicity((h, k, l), laue) * abs(structure) ** 2
+            for wavelength, fraction in ((LAMBDA1, 1.0), (LAMBDA2, 0.5)):
+                theta = math.asin(wavelength / (2 * d))
+                tan, cos = math.tan(theta), math.cos(theta)
+                polarisation = (1 + math.cos(2 * theta) ** 2) / (
+                    math.sin(theta) ** 2 * cos
+                )
+                gauss = math.sqrt(8 * math.log(2) * (U * tan**2 + V * tan + W)) / 100
+                lorentz = (X / cos + Y * tan) / 100 + math.degrees(
+                    wavelength / (SIZE * cos)
+                )
+                # The Thompson, Cox and Hastings width and mixing of the two.
+                fwhm = (
+                    gauss**5
+                    + 2.69269 * gauss**4 * lorentz
+                    + 2.42843 * gauss**3 * lorentz**2
+                    + 4.47163 * gauss**2 * lorentz**3
+                    + 0.07842 * gauss * lorentz**4
+                    + lorentz**5
+                ) ** 0.2
+                q = lorentz / fwhm
+                eta = 1.36603 * q - 0.47719 * q**2 + 0.11116 * q**3
+                u = (two_theta - 2 * math.degrees(theta)) / fwhm
+                shape = eta / (1 + 4 * u**2) + (1 - eta) * np.exp(
+                    -4 * math.log(2) * u**2
+                )
+                gauss_area = (1 - eta) * math.sqrt(math.pi / (4 * math.log(2)))
+                width = fwhm * (eta * math.pi / 2 + gauss_area)
+                counts += fraction * area * polarisation / width * shape
+counts = np.random.default_rng(1).poisson(counts)
+
+xrdml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<xrdMeasurements xmlns="http://www.xrdml.com/XRDMeasurement/2.1">
+  <sample><id>{SAMPLE}</id></sample>
+  <xrdMeasurement>
+    <usedWavelength>
+      <kAlpha1>{LAMBDA1}</kAlpha1>
+      <kAlpha2>{LAMBDA2}</kAlpha2>
+      <ratioKAlpha2KAlpha1>0.5</ratioKAlpha2KAlpha1>
+    </usedWavelength>
+    <scan>
+      <dataPoints>
+        <positions axis="2Theta" unit="deg">
+          <startPosition>{two_theta[0]}</startPosition>
+          <endPosition>{two_theta[-1]}</endPosition>
+        </positions>
+        <commonCountingTime>1.0</commonCountingTime>
+        <counts>{" ".join(map(str, counts))}</counts>
+      </dataPoints>
+    </scan>
+  </xrdMeasurement>
+</xrdMeasurements>
+"""
+(PROJECT / f"data/raw/{SAMPLE}.xrdml").write_text(xrdml, encoding="utf-8")
+print(f"{two_theta.size} points, strongest {counts.max()} counts")
+
+project_file = f"""[project]
+name = "{SAMPLE}"
+version = 1
+
+[refine]
+background = {{ function = "chebyschev-1", terms = 6 }}
+max_passes = {{ lebail = 10, fixed_atoms = 10, coordinates = 10, occupancies = 10 }}
+followed = [[3, 1, 0], [0, 0, 1]]
+
+[instruments.lab]
+wavelength = [{LAMBDA1}, {LAMBDA2}]
+ka2 = true
+instprm = "data/standards/lab.instprm"
+
+[structures.bronze]
+library = "ttb/P4bm"
+cif = "cifs/bronze.cif"
+composition = "Sr0.5Ba0.4Ca0.1Nb2O6"
+cell = {{ a = 12.45, c = 3.925 }}
+exchange = [["Sr", "Ba"]]
+
+[structures.bronze.atoms]
+A1 = {{ Sr1 = "Sr", Ca1 = "Ca" }}
+A2 = {{ Ba2 = "Ba", Sr2 = "Sr" }}
+B1 = {{ Nb1 = "Nb" }}
+B2 = {{ Nb2 = "Nb" }}
+
+[samples.{SAMPLE}]
+file = "data/raw/{SAMPLE}.xrdml"
+instrument = "lab"
+structures = ["bronze"]
+form = "powder"
+
+[samples.{SAMPLE}.refine]
+two_theta = [12.0, 70.0]
+"""
+(PROJECT / "xrdkit.toml").write_text(project_file, encoding="utf-8")
+
+settings = refine_settings(load_project(PROJECT), SAMPLE)
+print(f"two_theta {settings.two_theta}")
+print(f"background {settings.background}")
+print(f"max_passes {settings.max_passes}")
+print(f"unsettled {settings.unsettled}")
+print(f"followed {settings.followed}")
+
+
+def xrdkit(*arguments):
+    """Run an xrdkit command in the project folder, as it runs when typed in
+    a terminal there, and print what it printed with that folder's own path
+    taken off, so that the lines read the same on every computer."""
+    here = Path.cwd()
+    os.chdir(PROJECT)
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            status = main(list(arguments))
+    finally:
+        os.chdir(here)
+    text = printed.getvalue().replace(str(PROJECT) + os.sep, "")
+    print(text.replace(os.sep, "/"), end="")
+    print(f"exit status {status}")
+
+
+xrdkit("lebail", SAMPLE)
+
+xrdkit("rietveld", SAMPLE)
+
+
+def section(write_up, heading):
+    """One section of a write up: its heading and the lines up to the next."""
+    lines = (PROJECT / write_up).read_text(encoding="utf-8").splitlines()
+    start = lines.index(heading)
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+        len(lines),
+    )
+    print("\n".join(lines[start:end]).strip())
+
+
+section("results/rietveld/toy/coordinates.md", "## Stage outcomes")
+section("results/rietveld/toy/coordinates.md", "## Undetermined parameters")
+section("results/rietveld/toy/occupancies.md", "## Occupancies")
+
+result = json.loads(
+    (PROJECT / "results/rietveld/toy/toy_occupancies_result.json").read_text("utf-8")
+)
+print(sorted(result["inputs"]))
+print(sorted(result["method"]))
+print(result["inputs"]["start_cell_source"])
+```
+
+```
+['bronze.cif', 'lab.instprm']
+3001 points, strongest 86930 counts
+two_theta (12.0, 70.0)
+background {'function': 'chebyschev-1', 'terms': 6}
+max_passes {'lebail': 10, 'fixed_atoms': 10, 'coordinates': 10, 'occupancies': 10}
+unsettled {'lebail': 'accept', 'fixed_atoms': 'accept', 'coordinates': 'accept', 'occupancies': 'accept'}
+followed ((3, 1, 0), (0, 0, 1))
+toy: lebail started, 5 stages, at most 10 passes each
+toy: lebail: background and scale clean
+toy: lebail: zero unsettled (not settled in 10 passes; largest remaining move 0.18 esd (:0:Zero))
+toy: lebail: cell unsettled (not settled in 10 passes; largest remaining move 0.89 esd (0::A2))
+toy: lebail: size clean
+toy: lebail: microstrain clean
+results/lebail/toy/toy_lebail_result.json
+results/lebail/toy/toy_lebail.gpx
+results/lebail/toy/lebail.md
+results/lebail/toy/toy_lebail.png
+results/lebail/toy/toy_lebail.pdf
+results/lebail/toy/toy_lebail_histogram.csv
+results/lebail/toy/toy_lebail_reflections_bronze.csv
+results/lebail/toy/toy_lebail.instprm
+results/lebail/toy/summary.md
+bronze: tetragonal cell a = 12.4601 +/- 0.0000, c = 3.9200 +/- 0.0000 angstrom
+V = 608.595 +/- 0.006 cubic angstrom
+size 0.1340 +/- 0.0006 micron, microstrain -182 +/- 15
+zero 0.0002 +/- 0.0001 degrees
+Rwp 2.694 per cent, reduced chi squared 1.550
+start cell of bronze from structures.bronze.cell
+exit status 0
+toy: fixed_atoms started, 4 stages, at most 10 passes each
+toy: fixed_atoms: scale and background clean
+toy: fixed_atoms: zero and cell clean
+toy: fixed_atoms: size clean
+toy: fixed_atoms: overall Uiso clean
+toy: coordinates started, 5 stages, at most 10 passes each
+toy: coordinates: profile clean
+toy: coordinates: Uiso groups clean
+toy: coordinates: A sites clean
+toy: coordinates: B sites clean
+toy: coordinates: O sites clean
+toy: occupancies started, 2 stages, at most 10 passes each
+toy: occupancies: profile and Uiso clean
+toy: occupancies: A site occupancies clean
+results/rietveld/toy/toy_fixed_atoms_result.json
+results/rietveld/toy/toy_fixed_atoms.gpx
+results/rietveld/toy/fixed_atoms.md
+results/rietveld/toy/toy_fixed_atoms.png
+results/rietveld/toy/toy_fixed_atoms.pdf
+results/rietveld/toy/toy_fixed_atoms_histogram.csv
+results/rietveld/toy/toy_fixed_atoms_reflections_bronze.csv
+results/rietveld/toy/toy_fixed_atoms.instprm
+results/rietveld/toy/toy_coordinates_result.json
+results/rietveld/toy/toy_coordinates.gpx
+results/rietveld/toy/coordinates.md
+results/rietveld/toy/toy_coordinates.png
+results/rietveld/toy/toy_coordinates.pdf
+results/rietveld/toy/toy_coordinates_histogram.csv
+results/rietveld/toy/toy_coordinates_reflections_bronze.csv
+results/rietveld/toy/toy_coordinates.instprm
+results/rietveld/toy/toy_occupancies_result.json
+results/rietveld/toy/toy_occupancies.gpx
+results/rietveld/toy/occupancies.md
+results/rietveld/toy/toy_occupancies.png
+results/rietveld/toy/toy_occupancies.pdf
+results/rietveld/toy/toy_occupancies_histogram.csv
+results/rietveld/toy/toy_occupancies_reflections_bronze.csv
+results/rietveld/toy/toy_occupancies.instprm
+results/rietveld/toy/summary.md
+fixed_atoms: scale and background, zero and cell, size, overall Uiso; Rwp 9.232 per cent, reduced chi squared 18.200
+coordinates: profile, Uiso groups, A sites, B sites, O sites; Rwp 2.387 per cent, reduced chi squared 1.225
+occupancies: profile and Uiso, A site occupancies; Rwp 2.387 per cent, reduced chi squared 1.218
+exit status 0
+## Stage outcomes
+
+| Stage | Status | Passes | Rwp (%) | Rp (%) | Reduced χ² | Why |
+| --- | --- | --- | --- | --- | --- | --- |
+| profile | clean | 2 | 9.232 | 7.236 | 18.193 |  |
+| Uiso groups | clean | 2 | 9.125 | 7.110 | 17.793 |  |
+| A sites | clean | 5 | 7.683 | 5.532 | 12.627 |  |
+| B sites | clean | 4 | 3.664 | 2.658 | 2.875 |  |
+| O sites | clean | 4 | 2.387 | 1.582 | 1.225 |  |
+
+The final model is that of stage O sites.
+## Undetermined parameters
+
+An occupancy whose esd is more than half its range, 0 to 1, and a coordinate or an isotropic Uiso whose esd is larger than its shift from the start model: the data do not determine them, and their values are not a result.
+
+- bronze Sr1 z 0.48054, esd 0.00094 more than its shift 0.00054
+- bronze Nb1 Uiso 0.00605, esd 0.00013 more than its shift 0.00005
+- bronze Nb2 Uiso 0.00605, esd 0.00013 more than its shift 0.00005
+- bronze O1 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O2 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O3 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O4 z 0.52296, esd 0.00319 more than its shift 0.00296
+- bronze O4 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O5 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze Ca1 z 0.48054, esd 0.00094 more than its shift 0.00054
+## Occupancies
+
+Each exchanged element's content over its group's sites, the sum of multiplicity times occupancy, held at its start while the element is traded between the sites, and the occupancies the stage left, whether it was kept or rejected:
+
+| Stage | Status | Phase | Element | Sites | Occupancies | Held total per cell | Stage total |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A site occupancies | clean | bronze | Sr | Sr1, Ba2 | Sr1 0.7454, Sr2 0.2523 | 2.50000 | 2.50000 |
+| A site occupancies | clean | bronze | Ba | Sr1, Ba2 | Ba1 0.0028, Ba2 0.4986 | 2.00000 | 2.00000 |
+['displacement', 'instrument', 'limits', 'options', 'project', 'refine', 'sample', 'scan_range', 'start_cell', 'start_cell_source', 'structures', 'zero']
+['cycles', 'driver_version', 'le_bail_cycles', 'max_passes', 'mode', 'pass_tolerance', 'stages', 'xrdkit_version']
+{'bronze': 'the coordinates result toy_coordinates_result.json, stage O sites'}
+```
+
+That one block is the whole of it. Nothing further has to be copied: the rest
+of the section says what the project file holds, what each command does, what
+it writes, and how to read what it wrote.
+
+#### The project file for a refinement
+
+The two commands take everything from `xrdkit.toml`: the scan and form of the
+sample, the instrument and its instrument parameter file, and each structure
+the sample lists. A `[refine]` table holds what they refine with, for every
+sample, and a sample's own `[samples.KEY.refine]` table overrides any key of
+it. Every key is optional, and a table given in part, such as
+`background = { terms = 8 }`, keeps the rest of its values.
+
+| Key | Default | What it sets |
+| --- | --- | --- |
+| `two_theta` | the scan's range | the range refined, `[low, high]` in degrees, clipped to the scan |
+| `background` | `{ function = "chebyschev-1", terms = 6 }` | the background function and its number of terms |
+| `max_passes` | `{ lebail = 60, fixed_atoms = 60, coordinates = 100, occupancies = 100 }` | the most passes of a stage, by mode |
+| `unsettled` | `accept` for every mode | whether a stage still moving after those passes is kept (`accept`) or rolled back (`reject`) |
+| `followed` | none | reflections to follow from mode to mode, as `[h, k, l]` triples |
+
+The script's project file sets the background terms, a cap of 10 passes so
+that the example runs quickly, and two reflections to follow, and the sample
+narrows the range to 12 to 70 degrees. The first lines the script printed are
+the settings as the commands resolve them for the sample, the package's
+defaults under the project's under the sample's.
+
+A structure gives `library`, an entry of the structure library, or `cif`, a
+CIF file, or both. The entry gives what a refinement needs to know about the
+structure type: its space group and crystal system, its sites and their kinds,
+the coordinates each site's Wyckoff position leaves free, the Uiso groups, the
+site that holds the origin along a polar axis, the anions and the bond limits.
+The CIF gives the coordinates. A Le Bail extraction needs no coordinates, so
+`xrdkit lebail` runs from a library entry alone, writing a CIF of the entry's
+space group and the structure's cell for GSAS-II to read. The Rietveld modes
+put atoms in, so they need a CIF beside the entry, and stop with a message
+saying so when there is none. A structure with `cif` and no `library` works
+too, with its sites, kinds and Wyckoff positions given in `atoms` as the list
+Section 7.2 uses for `sites`.
+
+`atoms` beside a library entry says which atoms of the CIF sit on which site of
+the entry, as a table of the entry's site labels. It is needed in two cases.
+The first is an element of the composition that the entry's prototype does not
+carry: `Sr0.5Ba0.4Ca0.1Nb2O6` holds calcium, which the tungsten bronze
+prototype does not, so `A1 = { Sr1 = "Sr", Ca1 = "Ca" }` places it. A label the
+CIF does not have, `Ca1` here, is put on the site beside the CIF's atom there,
+and the nominal composition then goes on every atom of that element, strontium
+here, in proportion to its occupancy. Leaving such an element unplaced stops
+the run with a message naming the element and the entry's sites. The second
+case is a CIF whose labels differ from the entry's. The Rietveld modes match
+each site the entry names to the CIF atom of the same label, so `O1` to `O5`
+need no line here, while `A1`, `A2`, `B1` and `B2` do, since the CIF calls
+those atoms `Sr1`, `Ba2` and `Sr2`, `Nb1` and `Nb2`.
+
+`origin` names the site whose coordinate along a polar axis is held, to stop
+the whole structure sliding along it. Left out, the entry's own applies:
+ttb/P4bm is polar along c and holds B1, which is `Nb1` here, at its z. A site
+label of the entry chooses another, and `origin = false` holds none. A
+structure with no library entry gives `origin = { site = "Nb1", axis = "z" }`.
+With no origin held, the coordinates mode refuses to free a coordinate along
+the entry's polar axis, naming the axis, since the refinement would have
+nothing to fix the structure in place along it.
+
+`exchange` lists groups of elements whose occupancies the occupancies mode
+trades, here `[["Sr", "Ba"]]`. The sites a group is traded between are every
+site of one kind that holds any of its elements.
+
+#### xrdkit lebail
+
+The whole of the command line is
+
+`usage: xrdkit lebail [-h] [--cell X [X ...]] [--system {cubic,tetragonal,orthorhombic,hexagonal,trigonal,monoclinic,triclinic}] [--zero DEG] [--displacement] [--out DIR] [--json] SAMPLE`
+
+The first phase's cell starts from `--cell`, given as for `xrdkit lattice`;
+without it, from the last row of the sample's `results/lattice/KEY` results
+written by `xrdkit lattice`; without those, from the structure's `cell`; and
+for a CIF structure with no cell, from the CIF. Every other phase starts from
+its structure's cell. The result records the choice as `start_cell_source`,
+and the command prints it last.
+
+A powder refines the zero, and a pellet refines the specimen displacement with
+the zero held, as `xrdkit lattice` does. `--displacement` refines the
+displacement for a powder too. `--zero DEG` starts the zero at DEG in place of
+the instrument parameter file's value. The two conflict, since the displacement
+is refined with the zero held at the instrument's, and the command says so and
+stops.
+
+The stages each add to the one before, so that by the last everything named
+along the way refines together.
+
+| Stage | Frees | Holds |
+| --- | --- | --- |
+| background and scale | the background, the histogram scale, and Le Bail extraction of every phase | the zero and the displacement |
+| zero, or displacement | the zero, or for a pellet the displacement | the other of the two |
+| cell | every cell parameter the space group leaves free | |
+| size | the isotropic crystallite size | the microstrain, at 0 |
+| microstrain | the isotropic microstrain, as a test | |
+
+With two phases or more the first stage frees the phase fractions in place of
+the histogram scale, which is held, since the two cannot both be refined. No
+instrument parameter but the zero is ever freed: the instrument parameter file
+describes the instrument, and a change to any of them stops the run.
+
+Each stage is refined in passes, up to the mode's `max_passes`, until no
+parameter moves by more than 0.1 esd from one pass to the next, as Section 7.4
+describes. A stage still moving at the cap is unsettled, and kept or rolled
+back as `unsettled` says. In a Le Bail stage the histogram scale is left out of
+that test, since with every intensity extracted it drifts without changing the
+fit.
+
+The microstrain stage is always run, as a test of whether the pattern holds a
+microstrain at all, and so `lebail` takes no `--mustrain`. The write up gives
+the verdict, and a Rietveld mode refines the microstrain only when asked.
+
+#### xrdkit rietveld
+
+The whole of the command line is
+
+`usage: xrdkit rietveld [-h] [--from MODE] [--through MODE] [--mustrain] [--preferred-orientation H K L] [--out DIR] [--json] SAMPLE`
+
+It runs the modes from `--from` through `--through`, `fixed_atoms`,
+`coordinates` and `occupancies` in that order, by default all three. A mode
+starts from the saved result of the mode before it, the Le Bail result for
+`fixed_atoms`, and when that result is missing the command stops before
+writing anything, naming the file and the command that writes it. So
+`--from coordinates` needs the `fixed_atoms` result in place, and `--from`
+after `--through` is refused.
+
+| Mode | Starts from | Stages | Frees | Holds |
+| --- | --- | --- | --- | --- |
+| fixed_atoms | the Le Bail size stage, or its microstrain stage with `--mustrain` | scale and background; zero and cell (or displacement and cell); size (or size and microstrain); overall Uiso; preferred orientation, with `--preferred-orientation` | the scale, background, zero or displacement, cell, size, one Uiso for every atom, and with `--preferred-orientation` a March-Dollase ratio | the coordinates and occupancies of the CIF, at the nominal composition |
+| coordinates | the fixed_atoms result | profile; Uiso groups; one stage per kind of site, in the entry's order | the profile, the entry's Uiso groups, then each kind's free coordinates | the origin site along its axis, and the occupancies |
+| occupancies | the coordinates result | profile and Uiso; one stage per exchange group, named from its kind of site | the profile and Uiso groups, then the occupancies of each group's elements over its sites | the coordinates, and each element's content over the group's sites |
+
+A kind of site with nothing free, every site of it fixed by symmetry or holding
+the origin, has no stage of its own. The microstrain is held at 0 in every
+Rietveld mode unless `--mustrain` is given. `--preferred-orientation 0 0 1`
+adds a last fixed_atoms stage freeing a March-Dollase ratio about that axis.
+With two phases or more, the scale guard of the Le Bail stages applies here
+too, and the weight fractions are printed with their esds.
+
+For both commands `--out DIR` writes every file into DIR itself, not under a
+`results` folder in it, so a `rietveld` run given the same `--out` as the
+`lebail` run before it finds the Le Bail result there. `--json` prints the
+files written and the outcome of each mode as JSON, with the progress lines on
+the error stream so that the JSON stands alone. A mode that fails prints the
+path of its `failure.md` and the command returns 1.
+
+#### What is written, and where
+
+| File | Where | What it holds |
+| --- | --- | --- |
+| `KEY_MODE_result.json` | `results/lebail/KEY` or `results/rietveld/KEY` | every stage, with its status, residuals, parameters, atoms and every value refined or held; the final model; the inputs, method and date |
+| `KEY_MODE.gpx` | beside it | the GSAS-II project |
+| `KEY_MODE_histogram.csv`, `KEY_MODE_reflections_PHASE.csv`, `KEY_MODE.instprm` | beside it | the fitted pattern, each phase's reflections, and the instrument parameters as used |
+| `KEY_MODE.png`, `KEY_MODE.pdf` | beside it | the fit drawn with `plot_rietveld` |
+| `MODE.md` | beside it | the write up of the mode |
+| `summary.md` | in the folder of the last mode run | a row for every mode the command ran, with its outcome, residuals, cell and the status of every stage |
+| `failure.md` | in the folder of the mode that failed | the error, the stages that mode's own run got through, and the tail of its GSAS-II log; never an older result |
+| `work/MODE/` | beside it | the jobs, the GSAS-II log and the start instrument parameter file |
+
+A failure in drawing the figure or writing the write up comes after the result
+JSON is written, so the result is kept and `failure.md` says so.
+
+The result JSON records what went into it under three keys. `inputs` holds the
+project, the sample, the instrument, every structure as the project file gives
+it, the refine settings, the scan's range and the range refined, the start
+cell of every phase and where it came from, whether the displacement was
+refined, the start zero, and the command's options. `method` holds the mode,
+the stages as the job gave them, the cycles, Le Bail cycles, pass cap and pass
+tolerance, the driver's version and the version of xrdkit. `date` is when the
+run finished. The last three lines the script printed are those keys and the
+start cell source of the occupancies mode, which is the coordinates result it
+started from.
+
+#### Reading the write ups
+
+Every write up begins with the settings and then a stage outcomes table, one
+row for every stage by name, with its status, passes, Rwp, Rp and reduced chi
+squared. A rejected or failed stage keeps its row, saying so and why, with no
+figures in it, and the line under the table names the stage the final model
+comes from. The coordinates table the script printed shows what a structure
+refinement ought to look like: Rwp falls from 9.232 to 2.387 per cent as the A,
+B and O sites move to where the sample has them, and every stage is clean. The
+Rp of a stage is left blank when GSAS-II's own record of it is of a trial step
+rather than the model it kept, which can happen in a stage of constrained
+coordinates; the Rwp is then taken from the chi squared of the model kept.
+
+The cell is given with its esds beside the cell it started from, and the zero
+or the displacement, whichever was refined, beside its start. The Le Bail
+write up gives the size and microstrain and the verdict of the microstrain
+test. A microstrain is found when it lies three esds or more from zero and
+lowers Rwp. A negative microstrain is not physical, and the verdict then says
+the size refined alone is the better estimate; that is the verdict here, since
+the lines of the made up pattern are broadened by size alone.
+
+The reflection misfits list the reflections whose observed and calculated
+intensities differ most, beside the ratio a Le Bail fit gives, which owes
+nothing to the structure: where the two agree, the misfit is the structure's.
+When the library entry is polar, the misfits are also classed by the index
+along its polar axis, l here, which is where a wrong coordinate along that
+axis shows. The followed reflections table gives F²obs over F²calc of each
+reflection in `followed` in every mode run so far.
+
+A parameter is undetermined when the data do not determine it: an occupancy
+whose esd is more than half its range, 0 to 1, and a coordinate or an
+isotropic Uiso whose esd is larger than its shift from the start model. The
+start model is the structure as the fixed_atoms mode set it up, the CIF at the
+nominal composition, and it is carried to every later mode, so a shift is
+always measured from the same place. An undetermined value is not a result:
+the data cannot tell it from where it started. In the list the script printed,
+the Uiso of the niobium and the oxygen sites came out within an esd of the
+values the CIF gave them, which is right, since the made up structure has those
+values; that is also why the data cannot tell them apart from the start. The z
+of Sr1 and of O4 moved less than their esds.
+
+The occupancies table gives, for each element of an exchange group, the sites
+it was traded between, the occupancy of each of its atoms after the stage, the
+content per cell held while it was traded, and the content the stage's own
+atoms give, which differs from the held total only if the constraint failed.
+Here strontium holds 2.5 atoms per cell and barium 2.0, the nominal composition
+of five formula units. The mode added Ba1 on A1 at occupancy 0, since A1 held
+no barium to trade, and the refinement left Sr1 at 0.7454 and Ba1 at 0.0028,
+where the made up structure has 0.75 and none. Every stage of
+a mode is listed, kept or rejected, so a rejected occupancy stage still shows
+where it tried to go.
+
+The structure write ups also give every atom's coordinates, occupancy and
+Uiso with esds, and its shift from the start model in angstroms in the refined
+cell, and the bond lengths from each cation site to the anions, flagged outside
+the bond limits of the site's kind that the library entry gives. With two
+phases or more, every write up gives the phase and weight fractions with their
+esds.
 
 ## 8. Known limitations
 
-Seven things the kit does not do yet. The first six are met somewhere in this
-guide and are on the list for the next release; the last concerns the K alpha 2
-satellites in `xrdkit lattice`. Only the first of them needs code to
+Ten things the kit does not do yet. The first five are met somewhere in this
+guide and are on the list for the next release; the sixth concerns the K alpha 2
+satellites in `xrdkit lattice`, and the last four the `xrdkit lebail` and
+`xrdkit rietveld` commands of Section 7.8. Only the first of them needs code to
 work round, and that code is the script below.
 
 ### 8.1 Start here: the complete script
@@ -3092,9 +3789,9 @@ x10: 10.01 to 99.98 degrees, 49 peaks
 ```
 
 That one block is the whole of `read_xy.py`. There is nothing further to copy:
-the rest of the section is the seven limitations themselves, this one included.
+the rest of the section is the ten limitations themselves, this one included.
 
-### 8.2 The seven limitations
+### 8.2 The ten limitations
 
 The reader accepts `.xrdml` and nothing else. There is no reader for two or
 three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
@@ -3115,11 +3812,6 @@ tungsten bronze must be given `space_group="P4bm"` or its labels may name
 reflections the group forbids. Trigonal and rhombohedral groups are handled on
 hexagonal axes only, so a cell in the rhombohedral setting has to be converted
 to hexagonal axes first.
-
-`standard_stages` is the instrument calibration sequence, background and scale,
-zero, cell, U V W, X Y, SH/L, and not a sample refinement sequence. There is no
-helper that builds a Le Bail or a Rietveld stage list, so those are written out
-in full, as in Sections 6.5 and 7.5.
 
 The caption `plot_rietveld` writes takes its Rwp and goodness of fit from the
 last stage that has no error entry, and a stage that was rejected has none: it
@@ -3145,3 +3837,25 @@ per cent of its height must come from the parent's K alpha 2 line, yet
 `fit_profile` models it as a lone doublet, so its fitted position carries a
 bias. The report prints the number of peaks recovered, so that a reader can see
 how much of a refinement rests on such peaks.
+
+The Rietveld modes of `xrdkit rietveld` need a CIF beside a library entry. An
+entry of the structure library carries the sites, their kinds and what their
+Wyckoff positions leave free, but no coordinates, so a structure given as
+`library` alone runs `xrdkit lebail` and stops at the fixed_atoms mode with a
+message asking for `cif`.
+
+A library structure whose CIF labels its atoms otherwise than the entry labels
+its sites has to name them in `atoms`, site by site. The coordinates and
+occupancies modes match a site the entry names to the CIF atom of the same
+label and to nothing else, and stop naming the site when there is none.
+
+Preferred orientation has not been exercised on a real refinement.
+`--preferred-orientation H K L` adds a stage freeing a March-Dollase ratio about
+that axis, and its flags are checked, but no refinement of a measured scan has
+yet been run with it, so check its result against a scan of the same sample
+loaded to limit texture before relying on it.
+
+The commands assume one instrument with a constant wavelength: one histogram,
+with K alpha 1 and 2 or K alpha 1 alone, as the instrument parameter file of the
+project describes it. Time of flight and energy dispersive data, and several
+histograms of one sample refined together, are not handled.
