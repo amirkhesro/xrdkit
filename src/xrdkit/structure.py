@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from xrdkit.config import wyckoff_multiplicity
+from xrdkit.config import AXIS_COORDINATE, wyckoff_multiplicity
 from xrdkit.library import DEFAULT_ANIONS, DEFAULT_BOND_LIMITS, load_entry
 from xrdkit.library import bond_limits as entry_bond_limits
 
@@ -425,6 +425,9 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
       name: free}}``;
     - ``exchange``: ``{"elements", "sites"}``, or None for a structure with
       no exchange;
+    - ``polar_axis``: the coordinate, x, y or z, along which the library
+      entry's symmetry leaves the origin free, or None for a structure that
+      names no entry or an entry that is not polar;
     - ``anions``: the elements bonds are measured to, the library entry's
       for a structure that names one (``library``), else the structure's
       own ``anions`` or :data:`xrdkit.library.DEFAULT_ANIONS`;
@@ -530,6 +533,11 @@ def site_setup(structure: Mapping, atoms: Sequence[Mapping]) -> dict:
                 "sites": list(exchange["sites"]),
             }
             if exchange
+            else None
+        ),
+        "polar_axis": (
+            AXIS_COORDINATE[entry.polar_axis]
+            if entry is not None and entry.polar_axis
             else None
         ),
         "anions": anions,

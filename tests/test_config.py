@@ -411,6 +411,8 @@ def test_site_setup_carries_anions_and_bond_limits() -> None:
         ABO_ATOMS,
     )
     assert from_entry["anions"] == ["O"]
+    # Its polar axis, as a coordinate; a CIF structure has none.
+    assert (plan["polar_axis"], from_entry["polar_axis"]) == (None, "z")
     assert from_entry["bond_limits"] == {
         "A": (2.45, 3.0),
         "B": (1.8, 2.3),

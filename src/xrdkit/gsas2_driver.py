@@ -77,6 +77,11 @@ A stage is a dict with a ``name`` and the refinement flags to switch on:
     between them; each site's own total may change. Other atoms on the sites
     keep their occupancies. ``None``, for a structure with no exchange, adds
     no constraint.
+``preferred_orientation``
+    ``{phase: [h, k, l]}``, a phase name or ``"*"`` for every phase: the
+    March-Dollase ratio of the phase in the histogram refined, for texture
+    about the [h, k, l] axis, replacing any axis given before; ``{phase:
+    None}`` drops it.
 Flags carry over from stage to stage, a list growing by the new entries, a
 ``True`` or ``False`` replacing what was there, unless the stage has
 ``"reset": true``, when it starts again from nothing refined. The
@@ -229,6 +234,7 @@ STAGE_KEYS = frozenset(
         "coordinates",
         "origin",
         "occupancies",
+        "preferred_orientation",
     }
 )
 BOOLEAN_FLAGS = ("scale", "zero", "displacement")
@@ -346,6 +352,7 @@ def empty_flags():
         "coordinates": {},
         "origin": {},
         "occupancies": [],
+        "preferred_orientation": {},
     }
 
 
@@ -551,6 +558,32 @@ def _origin(value, current, name):
     return origin
 
 
+def _preferred_orientation(value, current, name):
+    """The March-Dollase axis refined by phase, ``{phase: [h, k, l]}``,
+    replacing any before; None for a phase drops it."""
+    if not isinstance(value, dict):
+        raise TypeError(
+            f"stage {name!r}: preferred_orientation must map phases to [h, k, l]"
+        )
+    chosen = copy.deepcopy(current)
+    for phase, hkl in value.items():
+        if hkl is None:
+            chosen.pop(str(phase), None)
+            continue
+        if (
+            not isinstance(hkl, (list, tuple))
+            or len(hkl) != 3
+            or not all(isinstance(i, int) and not isinstance(i, bool) for i in hkl)
+            or not any(hkl)
+        ):
+            raise ValueError(
+                f"stage {name!r}: the preferred orientation axis of {phase!r} must "
+                f"be [h, k, l], three whole numbers not all 0, got {hkl!r}"
+            )
+        chosen[str(phase)] = [int(i) for i in hkl]
+    return chosen
+
+
 def _names(value):
     """Whether ``value`` is a non-empty list of distinct non-empty strings."""
     return (
@@ -652,6 +685,10 @@ def accumulate_stages(stages):
         if "occupancies" in stage:
             flags["occupancies"] = _occupancies(
                 stage["occupancies"], flags["occupancies"], name
+            )
+        if "preferred_orientation" in stage:
+            flags["preferred_orientation"] = _preferred_orientation(
+                stage["preferred_orientation"], flags["preferred_orientation"], name
             )
         both = [
             phase
@@ -1721,6 +1758,7 @@ def apply_flags(project, histogram, flags):
         *flags["coordinates"],
         *flags["origin"],
         *(entry["phase"] for entry in flags["occupancies"]),
+        *flags["preferred_orientation"],
     ]
     missing = sorted({phase for phase in named if phase != ALL_PHASES} - names)
     if missing:
@@ -1744,6 +1782,7 @@ def apply_flags(project, histogram, flags):
         phase.clear_HAP_refinements({"Scale": True}, [histogram])
         phase.clear_HAP_refinements({"Size": True}, [histogram])
         phase.clear_HAP_refinements({"Mustrain": True}, [histogram])
+        phase.clear_HAP_refinements({"Pref.Ori.": True}, [histogram])
 
     background = flags["background"]
     if background:
@@ -1788,6 +1827,14 @@ def apply_flags(project, histogram, flags):
                 phase.set_HAP_refinements(
                     {key: {"type": "isotropic", "refine": True}}, [histogram]
                 )
+        orientation = flags["preferred_orientation"]
+        hkl = orientation.get(phase.name, orientation.get(ALL_PHASES))
+        if hkl is not None:
+            # GSAS-II's March-Dollase entry: model, ratio, refine, axis.
+            entry = phase.data["Histograms"][histogram.name]["Pref.Ori."]
+            entry[0] = "MD"
+            entry[3] = list(hkl)
+            phase.set_HAP_refinements({"Pref.Ori.": True}, [histogram])
 
 
 # Refinement
