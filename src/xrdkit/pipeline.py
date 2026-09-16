@@ -1644,7 +1644,6 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
 
     plans: list[dict] = []
     if mode == "lebail":
-        report(f"{sample.key}: lebail from {inputs.start_cell_source}")
         instprm = _write_start_instprm(
             inputs.instprm, inputs.zero, paths["start_instprm"]
         )
@@ -1701,7 +1700,6 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
             raise PipelineError(
                 f"{before_result}: has no phase {', '.join(missing)} of the sample"
             )
-        report(f"{sample.key}: {mode} from {before_result.name}, stage {start.stage}")
         instprm = _write_start_instprm(
             inputs.instprm, start.zero, paths["start_instprm"]
         )
@@ -1814,9 +1812,15 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
     job["result"] = str(paths["result"])
     context["log"] = paths["log"]
     report(
-        f"{sample.key}: {mode}, {len(stages)} stages, at most {max_passes} passes each"
+        f"{sample.key}: {mode} started, {len(stages)} stages, at most {max_passes} "
+        "passes each"
     )
     result = run_job(job, work)
+    for row in stage_statuses(result):
+        report(
+            f"{sample.key}: {mode}: {row['name']} {row['status']}"
+            + (f" ({row['reason']})" if row.get("reason") else "")
+        )
     result["inputs"] = _inputs_record(inputs, options, cells)
     result["method"] = {
         "mode": mode,
@@ -1879,7 +1883,6 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
         ),
         encoding="utf-8",
     )
-    report(f"{sample.key}: {mode} done, final model from {result.get('final_from')}")
     return Outcome(
         mode=mode,
         accepted=[stage["name"] for stage in kept],
@@ -1993,7 +1996,6 @@ def run_sequence(
             result = getattr(error, "result", None)
             log = getattr(error, "log", None)
             message = f"{type(error).__name__}: {error}"
-            report(f"{sample.key}: {mode} failed: {message}")
             later = list(modes[modes.index(mode) + 1 :])
             intro = [
                 f"The {mode} mode of {sample.key} did not finish, so this is what "

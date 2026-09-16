@@ -1568,3 +1568,224 @@ def test_lattice_does_not_recover_a_satellite_whose_refit_is_rejected(
     ):
         assert row[name] == bare_row[name], name
     _assert_counts_add_up(row, peaks)
+
+
+# lebail and rietveld, with GSAS-II played by the fake of test_pipeline
+
+
+@pytest.fixture
+def refinement(tmp_path, monkeypatch):
+    """A synthetic project in tmp_path, the working folder, with GSAS-II faked."""
+    from test_pipeline import FakeGsas2, fake_project
+
+    from xrdkit import pipeline
+
+    project = fake_project(tmp_path)
+    monkeypatch.chdir(project.root)
+    gsas2 = FakeGsas2()
+    monkeypatch.setattr(pipeline, "run_job", gsas2)
+    return project
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["lebail"],
+        ["lebail", "chain", "--mustrain"],
+        ["rietveld", "chain", "--from", "lebail"],
+        ["rietveld", "chain", "--through", "everything"],
+        ["rietveld", "chain", "--preferred-orientation", "0", "1"],
+    ],
+    ids=[
+        "no sample",
+        "mustrain on lebail",
+        "from lebail",
+        "through unknown",
+        "two indices",
+    ],
+)
+def test_refinement_usage_errors(refinement, capsys, argv) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(argv)
+
+    assert raised.value.code == 2
+    assert "usage: xrdkit" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (
+            ["lebail", "chain", "--zero", "0.1", "--displacement"],
+            "xrdkit lebail: --zero and --displacement conflict",
+        ),
+        (
+            ["lebail", "chain", "--system", "cubic"],
+            "xrdkit lebail: --system needs --cell",
+        ),
+        (
+            ["rietveld", "chain", "--from", "occupancies", "--through", "fixed_atoms"],
+            "xrdkit rietveld: --from occupancies comes after --through fixed_atoms",
+        ),
+        (
+            [
+                "rietveld",
+                "chain",
+                "--from",
+                "coordinates",
+                "--preferred-orientation",
+                "0",
+                "0",
+                "1",
+            ],
+            (
+                "xrdkit rietveld: --preferred-orientation applies to the fixed_atoms "
+                "mode, which --from coordinates leaves out"
+            ),
+        ),
+        (
+            ["rietveld", "chain", "--preferred-orientation", "0", "0", "0"],
+            "xrdkit rietveld: --preferred-orientation takes an axis H K L not all 0",
+        ),
+        (
+            ["lebail", "nope"],
+            "xrdkit lebail: no sample nope in ",
+        ),
+    ],
+    ids=[
+        "zero and displacement",
+        "system without cell",
+        "from after through",
+        "orientation without fixed atoms",
+        "orientation of zeros",
+        "missing sample",
+    ],
+)
+def test_refinement_conflicts_return_1(refinement, capsys, argv, message) -> None:
+    assert main(argv) == 1
+
+    error = capsys.readouterr().err
+    assert error.startswith(message)
+    assert len(error.strip().splitlines()) == 1
+    assert not (refinement.root / "results").exists()
+
+
+def test_lebail_missing_scan(refinement, capsys) -> None:
+    (refinement.root / "toy.xrdml").unlink()
+
+    assert main(["lebail", "chain"]) == 1
+
+    scan = refinement.root / "toy.xrdml"
+    assert capsys.readouterr().err.strip() == f"xrdkit lebail: no such file: {scan}"
+    assert not (refinement.root / "results").exists()
+
+
+def test_rietveld_needs_the_lebail_result(refinement, capsys) -> None:
+    assert main(["rietveld", "chain"]) == 1
+
+    result = (
+        refinement.root / "results" / "lebail" / "chain" / "chain_lebail_result.json"
+    )
+    assert capsys.readouterr().err.strip() == (
+        f"xrdkit rietveld: no such file: {result}; xrdkit lebail chain writes it"
+    )
+    assert not (refinement.root / "results").exists()
+
+
+def test_lebail_prints_its_files_and_the_fit(refinement, capsys) -> None:
+    assert main(["lebail", "x0.10.powder"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    folder = refinement.root / "results" / "lebail" / "x0.10.powder"
+    assert lines[0] == "x0.10.powder: lebail started, 5 stages, at most 60 passes each"
+    assert "x0.10.powder: lebail: background and scale clean" in lines
+    for name in (
+        "x0.10.powder_lebail_result.json",
+        "x0.10.powder_lebail.gpx",
+        "lebail.md",
+        "x0.10.powder_lebail.png",
+        "x0.10.powder_lebail.pdf",
+        "summary.md",
+    ):
+        assert str(folder / name) in lines
+        if name != "x0.10.powder_lebail.gpx":
+            assert (folder / name).is_file()
+    assert "bronze: tetragonal cell a = 6.0000, c = 4.0000 angstrom" in lines
+    assert "size 0.4000 micron, microstrain 0" in lines
+    assert "zero 0.0100 +/- 0.0010 degrees" in lines
+    assert "Rwp 10.000 per cent, chi squared 2.250" in lines
+    assert "start cell of bronze from structures.bronze.cell" in lines
+
+
+def test_rietveld_from_coordinates(refinement, capsys) -> None:
+    assert main(["lebail", "chain"]) == 0
+    assert main(["rietveld", "chain", "--through", "fixed_atoms"]) == 0
+    capsys.readouterr()
+
+    assert main(["rietveld", "chain", "--from", "coordinates"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert (
+        "coordinates: profile, Uiso groups, A sites, O sites; Rwp 10.000 per cent, chi squared 2.250"
+        in lines
+    )
+    assert (
+        "occupancies: profile and Uiso, A site occupancies; Rwp 10.000 per cent, chi squared 2.250"
+        in lines
+    )
+    folder = refinement.root / "results" / "rietveld" / "chain"
+    assert str(folder / "occupancies.md") in lines
+    assert (folder / "summary.md").is_file()
+
+
+def test_rietveld_prints_the_weight_fractions(refinement, capsys) -> None:
+    assert main(["lebail", "two"]) == 0
+    capsys.readouterr()
+
+    assert main(["rietveld", "two", "--through", "fixed_atoms"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert any(
+        line.startswith(
+            "fixed_atoms: scale and background, zero and cell, size, overall Uiso;"
+        )
+        and line.endswith(
+            "weight fractions toy 0.500 +/- 0.020, second 0.500 +/- 0.020"
+        )
+        for line in lines
+    )
+
+
+def test_a_failed_mode_returns_1_with_its_failure_record(
+    refinement, monkeypatch, capsys
+) -> None:
+    from test_pipeline import FakeGsas2
+
+    from xrdkit import pipeline
+
+    monkeypatch.setattr(pipeline, "run_job", FakeGsas2(status="rejected"))
+
+    assert main(["lebail", "chain"]) == 1
+
+    captured = capsys.readouterr()
+    failure = refinement.root / "results" / "lebail" / "chain" / "failure.md"
+    assert failure.is_file()
+    assert str(failure) in captured.out.splitlines()
+    assert captured.err.strip().startswith(
+        "xrdkit lebail: lebail failed: PipelineError:"
+    )
+    assert captured.err.strip().endswith(f"see {failure}")
+
+
+def test_lebail_json(refinement, capsys) -> None:
+    assert main(["lebail", "chain", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert output["sample"] == "chain"
+    (outcome,) = output["outcomes"]
+    assert outcome["mode"] == "lebail" and outcome["error"] is None
+    assert outcome["residuals"]["rwp"] == 10.0
+    assert any(path.endswith("chain_lebail_result.json") for path in output["files"])
+    # The progress lines go to stderr, so that stdout is the JSON alone.
+    assert "chain: lebail started" in captured.err

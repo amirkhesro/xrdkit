@@ -13,6 +13,14 @@ its scan, its instrument's wavelength and its first structure from the project,
 and its outputs go to ``results/<command>/<key>`` under the project root unless
 ``--out`` is given. An option given on the command line wins over the project's
 value.
+
+lebail and rietveld take a sample key and run :func:`xrdkit.pipeline.run_sequence`
+on it: lebail the Le Bail mode, rietveld the Rietveld modes from ``--from``
+through ``--through``, each from the saved result of the mode before. Their
+files go to ``results/lebail/<key>`` and ``results/rietveld/<key>``, or to the
+folder ``--out`` names itself; a line is printed as each mode starts and for
+each stage's outcome, and a mode that fails prints the path of its
+``failure.md`` and returns 1.
 """
 
 from __future__ import annotations
@@ -64,6 +72,7 @@ from xrdkit.peaks import (
     flag_kalpha2,
     peaks_to_csv,
 )
+from xrdkit.pipeline import MODES, Options, mode_paths, run_sequence
 from xrdkit.plotting import (
     annotate_hkl,
     apply_style,
@@ -1571,6 +1580,376 @@ def _add_lattice(subparsers) -> None:
     parser.set_defaults(handler=_run_lattice)
 
 
+# Le Bail and Rietveld refinement, run by xrdkit.pipeline
+
+# The Rietveld modes, in order, and the parameters of a cell by name, as
+# GSAS-II reports them.
+RIETVELD_MODES = MODES[1:]
+GSAS_CELL = (
+    ("a", "length_a"),
+    ("b", "length_b"),
+    ("c", "length_c"),
+    ("alpha", "angle_alpha"),
+    ("beta", "angle_beta"),
+    ("gamma", "angle_gamma"),
+)
+
+
+def _refinement_sample(key: str) -> tuple[Project, Sample]:
+    """The project of the current folder and its sample ``key``, with the
+    scan, the instrument parameter file and every CIF the refinement reads
+    checked to exist."""
+    try:
+        path = find_project()
+    except FileNotFoundError:
+        raise CommandError(
+            f"no {PROJECT_FILE} in the current folder or above it to look up the "
+            f"sample {key} in; run xrdkit init"
+        ) from None
+    try:
+        project = load_project(path)
+    except ValueError as error:
+        message = str(error)
+        marker = "no such file: "
+        if marker in message:
+            raise CommandError(marker + message.split(marker, 1)[1]) from None
+        raise CommandError(message) from None
+    if key not in project.samples:
+        raise CommandError(
+            f"no sample {key} in {project.root / PROJECT_FILE}; the samples are "
+            + (", ".join(project.samples) or "none")
+        )
+    sample = project.samples[key]
+    instrument = project.instruments[sample.instrument]
+    if instrument.instprm is None:
+        raise CommandError(
+            f"instrument {instrument.key} of sample {key} gives no instprm, which a "
+            "GSAS-II refinement needs"
+        )
+    needed = [sample.file, instrument.instprm]
+    needed += [
+        project.structures[name].cif
+        for name in sample.structures
+        if project.structures[name].cif is not None
+    ]
+    for file in needed:
+        if not Path(file).is_file():
+            raise CommandError(f"no such file: {file}")
+    return project, sample
+
+
+def _printer(args: argparse.Namespace):
+    """A reporter printing each line: to stdout, or to stderr under --json so
+    that stdout holds the JSON alone."""
+    stream = sys.stderr if args.json else sys.stdout
+
+    def report(line: str) -> None:
+        print(line, file=stream)
+
+    return report
+
+
+def _outcome_files(outcome) -> list[str]:
+    """The files a finished mode wrote, the result first."""
+    paths = outcome.paths
+    files = [paths.get("result"), paths.get("gpx"), paths.get("markdown")]
+    files += list(paths.get("figures") or [])
+    files += [paths.get("histogram"), *(paths.get("reflections") or {}).values()]
+    files.append(paths.get("instprm"))
+    return [str(path) for path in files if path]
+
+
+def _no_zero(esd):
+    """An esd, or None for none or 0, as _plus_minus takes it."""
+    return esd if esd else None
+
+
+def _lebail_lines(project: Project, outcome) -> list[str]:
+    """The cell of each phase with esds, its size and microstrain, the zero or
+    displacement, Rwp and chi squared, and where the start cell came from."""
+    result = json.loads(Path(outcome.paths["result"]).read_text(encoding="utf-8"))
+    inputs = result.get("inputs") or {}
+    final = outcome.final or {}
+    lines = []
+    for phase in final.get("phases") or []:
+        six = {short: phase["cell"][gsas] for short, gsas in GSAS_CELL}
+        esds = {
+            short: _no_zero((phase.get("cell_esd") or {}).get(gsas))
+            for short, gsas in GSAS_CELL
+        }
+        spec = project.structures.get(phase["name"])
+        system = (
+            load_entry(spec.library).crystal_system
+            if spec is not None and spec.library
+            else _crystal_system_of(six)
+        )
+        free = {name: six[name] for name in CELL_PARAMETERS[system]}
+        volume = phase["cell"].get("volume")
+        if volume is None:
+            volume = Cell.from_parameters(system, free).volume
+        volume_text = _plus_minus(
+            volume, _no_zero((phase.get("cell_esd") or {}).get("volume")), 3
+        )
+        size, strain = phase.get("size") or {}, phase.get("mustrain") or {}
+        size_text = _plus_minus(size.get("value"), _no_zero(size.get("esd")), 4)
+        strain_text = _plus_minus(strain.get("value"), _no_zero(strain.get("esd")), 0)
+        lines += [
+            f"{phase['name']}: {system} cell {_cell_text(free, esds)}",
+            f"V = {volume_text} cubic angstrom",
+            f"size {size_text} micron, microstrain {strain_text}",
+        ]
+    if inputs.get("displacement"):
+        shift = (final.get("sample") or {}).get("Shift") or {}
+        lines.append(
+            f"displacement {_plus_minus(shift.get('value'), _no_zero(shift.get('esd')), 4)} "
+            "(GSAS-II Shift, micron), zero held"
+        )
+    else:
+        zero = (final.get("instrument") or {}).get("Zero") or {}
+        lines.append(
+            f"zero {_plus_minus(zero.get('value'), _no_zero(zero.get('esd')), 4)} degrees"
+        )
+    lines.append(_residual_text(outcome))
+    sources = inputs.get("start_cell_source") or {}
+    for name, source in sources.items():
+        lines.append(f"start cell of {name} from {source}")
+    return lines
+
+
+def _residual_text(outcome) -> str:
+    residuals = outcome.residuals
+    rwp, chi = residuals.get("rwp"), residuals.get("chi_squared")
+    text = (
+        f"Rwp {'—' if rwp is None else f'{rwp:.3f}'} per cent, chi squared "
+        f"{'—' if chi is None else f'{chi:.3f}'}"
+    )
+    fractions = residuals.get("weight_fractions")
+    if fractions:
+        text += "; weight fractions " + ", ".join(
+            f"{name} {_plus_minus(entry.get('value'), _no_zero(entry.get('esd')), 3)}"
+            for name, entry in fractions.items()
+            if entry and entry.get("value") is not None
+        )
+    return text
+
+
+def _run_refinement(
+    args: argparse.Namespace,
+    project: Project,
+    sample: Sample,
+    modes: Sequence[str],
+    options: Options,
+) -> int:
+    """Run ``modes`` and print the files written and the outcome; 1 when a
+    mode failed, with the path of its failure record."""
+    outcomes = run_sequence(project, sample, modes, options, _printer(args))
+    written = []
+    for outcome in outcomes:
+        if outcome.error is None:
+            written += _outcome_files(outcome)
+    failed = next((outcome for outcome in outcomes if outcome.error), None)
+    if failed is not None:
+        written.append(failed.paths["failure"])
+    if outcomes and outcomes[-1].paths.get("summary"):
+        written.append(outcomes[-1].paths["summary"])
+    if args.json:
+        print(
+            json.dumps(
+                _jsonable(
+                    {
+                        "files": written,
+                        "sample": sample.key,
+                        "outcomes": [asdict(outcome) for outcome in outcomes],
+                    }
+                ),
+                indent=2,
+            )
+        )
+    else:
+        for path in written:
+            print(path)
+        for outcome in outcomes:
+            if outcome.error is not None:
+                continue
+            if outcome.mode == "lebail":
+                for line in _lebail_lines(project, outcome):
+                    print(line)
+            else:
+                print(
+                    f"{outcome.mode}: {', '.join(outcome.accepted)}; "
+                    f"{_residual_text(outcome)}"
+                )
+    if failed is not None:
+        print(
+            f"xrdkit {args.command}: {failed.mode} failed: {failed.error}; see "
+            f"{failed.paths['failure']}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _run_lebail(args: argparse.Namespace) -> int:
+    # Every option and input is checked before anything is written.
+    cell = _cell_option(args)
+    if args.zero is not None and args.displacement:
+        raise CommandError(
+            "--zero and --displacement conflict: the displacement is refined with "
+            "the zero held at the instrument's"
+        )
+    project, sample = _refinement_sample(args.sample)
+    options = Options(
+        cell=None
+        if cell is None
+        else {name: getattr(cell, name) for name, _ in GSAS_CELL},
+        zero=args.zero,
+        displacement=True if args.displacement else None,
+        out=args.out,
+    )
+    return _run_refinement(args, project, sample, ["lebail"], options)
+
+
+def _add_lebail(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "lebail",
+        help="Le Bail extraction of a sample in GSAS-II, for its cell",
+        description=(
+            "Refine a sample of the project file by Le Bail extraction in GSAS-II: "
+            "background and scale, then the zero (or for a pellet, or with "
+            "--displacement, the specimen displacement), the cell, the size and, "
+            "always, the microstrain as a test. Every phase of the sample is "
+            "extracted. The first phase's cell starts from --cell, else the "
+            "sample's lattice results, else its structure's cell. Writes the result "
+            "JSON, the GSAS-II project, the fitted pattern and reflections, the "
+            "instrument parameters as used, a figure and lebail.md to "
+            "results/lebail/KEY under the project root, or to --out; prints each "
+            "file, then the cell, size, microstrain, zero or displacement, Rwp and "
+            "chi squared."
+        ),
+    )
+    parser.add_argument(
+        "sample", metavar="SAMPLE", help="a sample key of the project file"
+    )
+    _add_cell_options(parser, "start cell of the first phase")
+    parser.add_argument(
+        "--zero",
+        type=float,
+        metavar="DEG",
+        help="start the zero at this value, in degrees (default: the instrument's)",
+    )
+    parser.add_argument(
+        "--displacement",
+        action="store_true",
+        help="refine the specimen displacement, the zero held (always for a pellet)",
+    )
+    _add_refinement_output_options(parser, "lebail")
+    parser.set_defaults(handler=_run_lebail)
+
+
+def _add_refinement_output_options(
+    parser: argparse.ArgumentParser, command: str
+) -> None:
+    parser.add_argument(
+        "--out",
+        metavar="DIR",
+        help=(
+            "folder every file is written to (default: results/"
+            f"{command}/KEY under the project root)"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the files written and the outcome as JSON",
+    )
+
+
+def _run_rietveld(args: argparse.Namespace) -> int:
+    first, last = RIETVELD_MODES.index(args.first), RIETVELD_MODES.index(args.through)
+    if first > last:
+        raise CommandError(f"--from {args.first} comes after --through {args.through}")
+    modes = list(RIETVELD_MODES[first : last + 1])
+    axis = args.preferred_orientation
+    if axis is not None:
+        if "fixed_atoms" not in modes:
+            raise CommandError(
+                "--preferred-orientation applies to the fixed_atoms mode, which "
+                f"--from {args.first} leaves out"
+            )
+        if not any(axis):
+            raise CommandError("--preferred-orientation takes an axis H K L not all 0")
+    project, sample = _refinement_sample(args.sample)
+    options = Options(
+        mustrain=args.mustrain,
+        preferred_orientation=None if axis is None else tuple(axis),
+        out=args.out,
+    )
+    before = MODES[MODES.index(modes[0]) - 1]
+    path = mode_paths(project, sample, before, options)["result"]
+    if not path.is_file():
+        out = f" --out {args.out}" if args.out else ""
+        command = (
+            f"xrdkit lebail {sample.key}{out}"
+            if before == "lebail"
+            else f"xrdkit rietveld {sample.key} --through {before}{out}"
+        )
+        raise CommandError(f"no such file: {path}; {command} writes it")
+    return _run_refinement(args, project, sample, modes, options)
+
+
+def _add_rietveld(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "rietveld",
+        help="Rietveld refinement of a sample in GSAS-II, mode by mode",
+        description=(
+            "Refine a sample of the project file in GSAS-II from its Le Bail "
+            "result, in the modes fixed_atoms (the structure in at its nominal "
+            "composition, the atoms fixed but for one Uiso), coordinates (the "
+            "coordinates kind of site by kind) and occupancies (the exchanged "
+            "elements traded between their sites), each from the result of the "
+            "one before, from --from through --through. A mode that fails is "
+            "written up in failure.md and the modes after it are not run. Writes "
+            "each mode's result JSON, GSAS-II project, fitted pattern and "
+            "reflections, instrument parameters, figure and MODE.md, and "
+            "summary.md, to results/rietveld/KEY under the project root, or to "
+            "--out; prints each file, then a line per mode with its accepted "
+            "stages, Rwp and chi squared."
+        ),
+    )
+    parser.add_argument(
+        "sample", metavar="SAMPLE", help="a sample key of the project file"
+    )
+    parser.add_argument(
+        "--from",
+        dest="first",
+        metavar="MODE",
+        choices=RIETVELD_MODES,
+        default=RIETVELD_MODES[0],
+        help=f"first mode to run, one of {', '.join(RIETVELD_MODES)} (default: fixed_atoms)",
+    )
+    parser.add_argument(
+        "--through",
+        metavar="MODE",
+        choices=RIETVELD_MODES,
+        default=RIETVELD_MODES[-1],
+        help="last mode to run (default: occupancies)",
+    )
+    parser.add_argument(
+        "--mustrain",
+        action="store_true",
+        help="refine the microstrain with the size (held at zero by default)",
+    )
+    parser.add_argument(
+        "--preferred-orientation",
+        nargs=3,
+        type=int,
+        metavar=("H", "K", "L"),
+        help="refine a March-Dollase ratio about this axis in the fixed_atoms mode",
+    )
+    _add_refinement_output_options(parser, "rietveld")
+    parser.set_defaults(handler=_run_rietveld)
+
+
 # The folders xrdkit init makes beside the project file.
 INIT_FOLDERS = ("data/raw", "cifs", "results")
 
@@ -1745,6 +2124,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_stack(subparsers)
     _add_density(subparsers)
     _add_lattice(subparsers)
+    _add_lebail(subparsers)
+    _add_rietveld(subparsers)
     return parser
 
 

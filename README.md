@@ -32,6 +32,25 @@ GSAS-II is optional and is needed only for the Rietveld driver in
 point `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME` at it, or leave it at
 `~/gsas2main`. Every other module works without it.
 
+## Commands
+
+`xrdkit COMMAND --help` describes each command in full.
+
+| Command | What it does |
+| --- | --- |
+| `xrdkit init` | start a project: write `xrdkit.toml` and make its folders |
+| `xrdkit add-sample` | add a sample to `xrdkit.toml` |
+| `xrdkit check SCAN` | report the data quality of a scan, with a verdict per workflow |
+| `xrdkit plot SCAN` | plot one scan, list its peaks, and label them with hkl given a cell |
+| `xrdkit stack SCAN ...` | plot several scans stacked one above the other |
+| `xrdkit density` | theoretical density from a formula and a cell, and relative density |
+| `xrdkit lattice SCAN` | refine the cell of a scan, with its volume and density |
+| `xrdkit lebail SAMPLE` | Le Bail extraction of a sample in GSAS-II, for its cell, to `results/lebail/KEY` |
+| `xrdkit rietveld SAMPLE` | Rietveld refinement of a sample in GSAS-II from its Le Bail result, `--from` and `--through` the modes fixed_atoms, coordinates and occupancies, to `results/rietveld/KEY` |
+
+`lebail` and `rietveld` need GSAS-II (below) and a sample of the project file
+whose instrument gives an `instprm`.
+
 ## Feedback and bug reports
 
 Bug reports and feature requests go through GitHub Issues, at
