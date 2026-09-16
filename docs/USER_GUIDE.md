@@ -3039,9 +3039,9 @@ report out rather than losing what the log had to say.
 
 ## 8. Known limitations
 
-Eight things the kit does not do yet. The first six are met somewhere in this
-guide and are on the list for the next release; the last two concern the K
-alpha 2 satellites in `xrdkit lattice`. Only the first of them needs code to
+Seven things the kit does not do yet. The first six are met somewhere in this
+guide and are on the list for the next release; the last concerns the K alpha 2
+satellites in `xrdkit lattice`. Only the first of them needs code to
 work round, and that code is the script below.
 
 ### 8.1 Start here: the complete script
@@ -3092,9 +3092,9 @@ x10: 10.01 to 99.98 degrees, 49 peaks
 ```
 
 That one block is the whole of `read_xy.py`. There is nothing further to copy:
-the rest of the section is the eight limitations themselves, this one included.
+the rest of the section is the seven limitations themselves, this one included.
 
-### 8.2 The eight limitations
+### 8.2 The seven limitations
 
 The reader accepts `.xrdml` and nothing else. There is no reader for two or
 three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
@@ -3145,7 +3145,3 @@ per cent of its height must come from the parent's K alpha 2 line, yet
 `fit_profile` models it as a lone doublet, so its fitted position carries a
 bias. The report prints the number of peaks recovered, so that a reader can see
 how much of a refinement rests on such peaks.
-
-The peaks file `xrdkit lattice` writes does not mark which indexed peaks had a
-single candidate reflection, and only those are used in the refinement. The
-count of peaks used therefore cannot be checked row by row against that file.
