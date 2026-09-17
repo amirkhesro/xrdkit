@@ -3,6 +3,7 @@
 import csv
 import datetime
 import json
+import os
 from pathlib import Path
 
 import matplotlib
@@ -1788,6 +1789,68 @@ def test_rietveld_prints_the_weight_fractions(refinement, capsys) -> None:
         )
         for line in lines
     )
+
+
+def test_rietveld_with_a_relative_out(refinement, monkeypatch, capsys) -> None:
+    from test_pipeline import FakeGsas2
+
+    from xrdkit import pipeline
+
+    fake = FakeGsas2()
+
+    def in_its_work_folder(job, workdir, install=None):
+        # As run_job does, the work folder is resolved and the GSAS-II driver
+        # runs in it, where a relative path names somewhere else.
+        workdir = Path(workdir).resolve()
+        workdir.mkdir(parents=True, exist_ok=True)
+        here = Path.cwd()
+        os.chdir(workdir)
+        try:
+            return fake(job, workdir, install)
+        finally:
+            os.chdir(here)
+
+    monkeypatch.setattr(pipeline, "run_job", in_its_work_folder)
+
+    assert main(["lebail", "chain", "--out", "elsewhere"]) == 0
+    assert (
+        main(["rietveld", "chain", "--through", "fixed_atoms", "--out", "elsewhere"])
+        == 0
+    )
+
+    folder = refinement.root / "elsewhere"
+    assert (folder / "chain_lebail_result.json").is_file()
+    assert (folder / "chain_fixed_atoms_result.json").is_file()
+    assert str(folder / "chain_fixed_atoms_result.json") in capsys.readouterr().out
+    assert all(
+        Path(job[key]).is_absolute()
+        for job in fake.jobs
+        if job["action"] == "refine"
+        for key in ("result", "export_prefix")
+    )
+
+
+def test_rietveld_refuses_to_overwrite_a_result(refinement, capsys) -> None:
+    assert main(["lebail", "chain"]) == 0
+    assert main(["rietveld", "chain", "--through", "fixed_atoms"]) == 0
+    folder = refinement.root / "results" / "rietveld" / "chain"
+    result = folder / "chain_fixed_atoms_result.json"
+    before = result.read_bytes()
+    result.write_bytes(before + b"\n")
+    capsys.readouterr()
+
+    assert main(["rietveld", "chain", "--through", "fixed_atoms"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err.strip() == (
+        f"xrdkit rietveld: {result} exists already; give --overwrite to replace "
+        "the results of the modes run, or --out DIR to write them elsewhere"
+    )
+    assert captured.out == ""
+    assert result.read_bytes() == before + b"\n"
+
+    assert main(["rietveld", "chain", "--through", "fixed_atoms", "--overwrite"]) == 0
+    assert result.read_bytes() != before + b"\n"
 
 
 def test_a_failed_mode_returns_1_with_its_failure_record(

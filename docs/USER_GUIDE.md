@@ -3625,7 +3625,7 @@ the verdict, and a Rietveld mode refines the microstrain only when asked.
 
 The whole of the command line is
 
-`usage: xrdkit rietveld [-h] [--from MODE] [--through MODE] [--mustrain] [--preferred-orientation H K L] [--out DIR] [--json] SAMPLE`
+`usage: xrdkit rietveld [-h] [--from MODE] [--through MODE] [--mustrain] [--preferred-orientation H K L] [--overwrite] [--out DIR] [--json] SAMPLE`
 
 It runs the modes from `--from` through `--through`, `fixed_atoms`,
 `coordinates` and `occupancies` in that order, by default all three. A mode
@@ -3648,9 +3648,18 @@ adds a last fixed_atoms stage freeing a March-Dollase ratio about that axis.
 With two phases or more, the scale guard of the Le Bail stages applies here
 too, and the weight fractions are printed with their esds.
 
+`rietveld` does not replace a result it would write. When the result JSON of
+any mode it is to run is already in the folder, `results/rietveld/KEY` or
+`--out`, it stops before refining or writing anything, naming the files, and
+returns 1. `--overwrite` replaces them; `--out DIR` keeps them and writes the
+new run elsewhere. A mode not run is left alone, so `--from coordinates` after
+a `fixed_atoms` run needs no `--overwrite`. There is no dated subfolder: each
+mode reads the result of the one before from the same folder.
+
 For both commands `--out DIR` writes every file into DIR itself, not under a
 `results` folder in it, so a `rietveld` run given the same `--out` as the
-`lebail` run before it finds the Le Bail result there. `--json` prints the
+`lebail` run before it finds the Le Bail result there. A relative DIR is taken
+from the folder the command is run in. `--json` prints the
 files written and the outcome of each mode as JSON, with the progress lines on
 the error stream so that the JSON stands alone. A mode that fails prints the
 path of its `failure.md` and the command returns 1.

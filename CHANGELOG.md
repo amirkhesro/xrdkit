@@ -165,6 +165,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `xrdkit rietveld` refuses to replace an existing result: when the result
+  JSON of a mode it is to run is already in the output folder it stops before
+  refining, names the files and returns 1. `--overwrite` replaces them. It used
+  to overwrite `results/rietveld/KEY` without a word.
 - Breaking: `flag_kalpha2` flags a peak only when it lies within half its
   nearest lower parent's FWHM (`KALPHA2_POSITION_TOLERANCE`) of that parent's
   K alpha 2 position and its height above the background over the parent's
@@ -268,6 +272,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `xrdkit lebail` and `xrdkit rietveld` given a relative `--out` refined the
+  sample and then failed writing the result JSON with `FileNotFoundError`:
+  the GSAS-II driver runs in a work folder of its own and took the path from
+  there. `--out` is now made absolute, against the folder the command is run
+  in, before anything else.
 - The Rietveld pipeline's start cell reads the lattice results the lattice
   command writes. It looked for columns `a` to `gamma`, but the command writes
   `a_angstrom`, `b_angstrom`, `c_angstrom`, `alpha_deg`, `beta_deg` and

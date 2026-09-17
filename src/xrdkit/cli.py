@@ -1804,7 +1804,7 @@ def _run_lebail(args: argparse.Namespace) -> int:
         else {name: getattr(cell, name) for name, _ in GSAS_CELL},
         zero=args.zero,
         displacement=True if args.displacement else None,
-        out=args.out,
+        out=_out_folder(args),
     )
     return _run_refinement(args, project, sample, ["lebail"], options)
 
@@ -1846,6 +1846,13 @@ def _add_lebail(subparsers) -> None:
     parser.set_defaults(handler=_run_lebail)
 
 
+def _out_folder(args: argparse.Namespace) -> Path | None:
+    """``--out`` as an absolute path, resolved against the current folder:
+    the GSAS-II driver runs in a work folder of its own, where a relative
+    path would name somewhere else."""
+    return None if args.out is None else Path(args.out).resolve()
+
+
 def _add_refinement_output_options(
     parser: argparse.ArgumentParser, command: str
 ) -> None:
@@ -1882,7 +1889,7 @@ def _run_rietveld(args: argparse.Namespace) -> int:
     options = Options(
         mustrain=args.mustrain,
         preferred_orientation=None if axis is None else tuple(axis),
-        out=args.out,
+        out=_out_folder(args),
     )
     before = MODES[MODES.index(modes[0]) - 1]
     path = mode_paths(project, sample, before, options)["result"]
@@ -1894,6 +1901,17 @@ def _run_rietveld(args: argparse.Namespace) -> int:
             else f"xrdkit rietveld {sample.key} --through {before}{out}"
         )
         raise CommandError(f"no such file: {path}; {command} writes it")
+    existing = [
+        str(result)
+        for mode in modes
+        if (result := mode_paths(project, sample, mode, options)["result"]).is_file()
+    ]
+    if existing and not args.overwrite:
+        raise CommandError(
+            f"{', '.join(existing)} {'exists' if len(existing) == 1 else 'exist'} "
+            "already; give --overwrite to replace the results of the modes run, "
+            "or --out DIR to write them elsewhere"
+        )
     return _run_refinement(args, project, sample, modes, options)
 
 
@@ -1912,8 +1930,9 @@ def _add_rietveld(subparsers) -> None:
             "each mode's result JSON, GSAS-II project, fitted pattern and "
             "reflections, instrument parameters, figure and MODE.md, and "
             "summary.md, to results/rietveld/KEY under the project root, or to "
-            "--out; prints each file, then a line per mode with its accepted "
-            "stages, Rwp and chi squared."
+            "--out, and refuses to replace a mode's existing result unless "
+            "--overwrite is given; prints each file, then a line per mode with "
+            "its accepted stages, Rwp and chi squared."
         ),
     )
     parser.add_argument(
@@ -1945,6 +1964,14 @@ def _add_rietveld(subparsers) -> None:
         type=int,
         metavar=("H", "K", "L"),
         help="refine a March-Dollase ratio about this axis in the fixed_atoms mode",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "replace the results of the modes run where they exist already "
+            "(refused by default)"
+        ),
     )
     _add_refinement_output_options(parser, "rietveld")
     parser.set_defaults(handler=_run_rietveld)
