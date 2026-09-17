@@ -51,6 +51,7 @@ from xrdkit import gsas2_driver, writeup
 from xrdkit.config import AXIS_COORDINATE
 from xrdkit.density import parse_formula
 from xrdkit.gsas2 import (
+    _same_site,
     accepted_stages,
     build_refine_job,
     failure_markdown,
@@ -1218,37 +1219,69 @@ def _element_of(atom_type: object) -> str:
     return match.group(0) if match else str(atom_type)
 
 
-def _added_rule(phase: PhaseInput, cif_atoms: Sequence[Mapping]) -> dict[str, str]:
-    """The composition rule of a structure's atoms placement: an element a
-    site names by a label the CIF lacks goes on every atom of the element
-    the CIF has on that site."""
+def _added_rule(
+    phase: PhaseInput, cif_atoms: Sequence[Mapping]
+) -> dict[str, dict[str, str]]:
+    """The composition rule of a structure's atoms placement, by host atom:
+    an element a site names by a label the CIF lacks goes beside the first
+    CIF atom the site names, under the label the site gives it, and on no
+    site the placement does not name it on."""
     labels = {str(atom["label"]): _element_of(atom["type"]) for atom in cif_atoms}
     held = set(labels.values())
-    rule: dict[str, str] = {}
+    rule: dict[str, dict[str, str]] = {}
     for site in phase.spec.atoms or ():
         name = site.get("label") or site["name"]
-        present = [labels[label] for label in site["atoms"] if label in labels]
-        absent = [
-            element
+        present = [label for label in site["atoms"] if label in labels]
+        absent = {
+            label: element
             for label, element in site["atoms"].items()
             if label not in labels and element not in held
-        ]
+        }
         if not absent:
             continue
         if not present:
             raise PipelineError(
                 f"structures.{phase.key}.atoms: site {name} names no atom of the CIF, "
-                f"so {', '.join(absent)} has nothing to go beside"
+                f"so {', '.join(absent.values())} has nothing to go beside"
             )
-        for element in absent:
-            if rule.get(element, present[0]) != present[0]:
-                raise PipelineError(
-                    f"structures.{phase.key}.atoms: {element} would go beside "
-                    f"{rule[element]} on one site and {present[0]} on another; "
-                    "one host per element"
-                )
-            rule[element] = present[0]
+        for label, element in absent.items():
+            rule.setdefault(element, {})[present[0]] = label
     return rule
+
+
+def _check_placement(
+    phase: PhaseInput, cif_atoms: Sequence[Mapping], edits: Sequence[Mapping]
+) -> None:
+    """Every atom on a site the structure's atoms placement names, the CIF's
+    or one ``edits`` add beside them, must be of an element the placement
+    puts on that site."""
+    by_label = {str(atom["label"]): atom for atom in cif_atoms}
+    on_position = [
+        (label, _element_of(atom["type"]), atom.get("xyz"))
+        for label, atom in by_label.items()
+    ] + [
+        (edit["label"], _element_of(edit["type"]), by_label[edit["copy"]].get("xyz"))
+        for edit in edits
+        if "copy" in edit
+    ]
+    for site in phase.spec.atoms or ():
+        name = site.get("label") or site["name"]
+        present = [label for label in site["atoms"] if label in by_label]
+        if not present or by_label[present[0]].get("xyz") is None:
+            continue
+        position = by_label[present[0]]["xyz"]
+        placed = set(site["atoms"].values())
+        stray = [
+            f"{element} ({label})"
+            for label, element, xyz in on_position
+            if xyz is not None and _same_site(xyz, position) and element not in placed
+        ]
+        if stray:
+            raise PipelineError(
+                f"structures.{phase.key}.atoms: site {name} holds "
+                f"{', '.join(stray)}, which atoms does not place there; name "
+                "every element on the site in its atoms"
+            )
 
 
 def _nominal_edits(phase: PhaseInput, cif_atoms: Sequence[Mapping]) -> list[dict]:
@@ -1264,9 +1297,11 @@ def _nominal_edits(phase: PhaseInput, cif_atoms: Sequence[Mapping]) -> list[dict
         "composition": {"added": _added_rule(phase, cif_atoms)},
     }
     try:
-        return composition_edits(cif_atoms, phase.composition, structure)
+        edits = composition_edits(cif_atoms, phase.composition, structure)
     except ValueError as error:
         raise PipelineError(f"structures.{phase.key}: {error}") from None
+    _check_placement(phase, cif_atoms, edits)
+    return edits
 
 
 def _mean_ueq(atoms: Sequence[Mapping], cell: Mapping[str, float]) -> float:

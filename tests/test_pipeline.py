@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -35,7 +36,7 @@ from xrdkit.pipeline import (
     start_from_result,
 )
 from xrdkit.project import load_project
-from xrdkit.structure import site_setup
+from xrdkit.structure import composition_edits, site_setup
 from xrdkit.symmetry import is_absent, space_group_operations
 
 BACKGROUND = {"function": "chebyschev-1", "terms": 8}
@@ -1427,6 +1428,135 @@ def test_run_mode_places_an_element_beside_the_cif_atom(tmp_path, fake) -> None:
     fixed = refine_jobs(fake)[-1]
     (la,) = [edit for edit in fixed["phases"][0]["atoms"] if edit.get("type") == "La"]
     assert la["copy"] == "Sr1"
+
+
+# A synthetic cell in which Sr is on two sites, Sr1 (multiplicity 1) and Sr2
+# (multiplicity 2), for placing La by an atoms table.
+TWO_SITE_ATOMS = [
+    {
+        "label": "Sr1",
+        "type": "Sr",
+        "xyz": [0.0, 0.0, 0.0],
+        "multiplicity": 1,
+        "occupancy": 0.6,
+    },
+    {
+        "label": "Sr2",
+        "type": "Sr",
+        "xyz": [0.5, 0.0, 0.5],
+        "multiplicity": 2,
+        "occupancy": 0.2,
+    },
+    {
+        "label": "Nb1",
+        "type": "Nb",
+        "xyz": [0.5, 0.5, 0.5],
+        "multiplicity": 1,
+        "occupancy": 1.0,
+    },
+    {
+        "label": "O1",
+        "type": "O",
+        "xyz": [0.5, 0.5, 0.0],
+        "multiplicity": 3,
+        "occupancy": 1.0,
+    },
+]
+TWO_SITE_COMPOSITION = {"Sr": 0.8, "La": 0.2, "Nb": 1.0, "O": 3.0}
+
+
+def two_site_phase(atoms):
+    """A phase of the synthetic cell, one formula unit, with ``atoms`` its
+    atoms table by site label, or None."""
+    sites = None
+    if atoms is not None:
+        sites = [
+            {"name": next(iter(held)), "atoms": held, "label": label}
+            for label, held in atoms.items()
+        ]
+    return SimpleNamespace(
+        key="toy",
+        spec=SimpleNamespace(atoms=sites),
+        z=1,
+        composition=TWO_SITE_COMPOSITION,
+    )
+
+
+def test_nominal_edits_place_an_added_element_on_the_named_site_only() -> None:
+    phase = two_site_phase({"A1": {"Sr1": "Sr", "La1": "La"}, "A2": {"Sr2": "Sr"}})
+
+    edits = pipeline._nominal_edits(phase, TWO_SITE_ATOMS)
+
+    added = [edit for edit in edits if "copy" in edit]
+    # All 0.2 La per cell on the multiplicity 1 site beside Sr1; Sr scaled
+    # by 0.8 on both its sites as without the table.
+    assert added == [
+        {"label": "La1", "type": "La", "copy": "Sr1", "occupancy": pytest.approx(0.2)}
+    ]
+    by_label = {edit["label"]: edit["occupancy"] for edit in edits}
+    assert by_label["Sr1"] == pytest.approx(0.48)
+    assert by_label["Sr2"] == pytest.approx(0.16)
+
+    # Placed on both sites, La is shared in proportion to the Sr of the CIF.
+    phase = two_site_phase(
+        {"A1": {"Sr1": "Sr", "La1": "La"}, "A2": {"Sr2": "Sr", "La2": "La"}}
+    )
+    added = {
+        edit["label"]: (edit["copy"], edit["occupancy"])
+        for edit in pipeline._nominal_edits(phase, TWO_SITE_ATOMS)
+        if "copy" in edit
+    }
+    assert added == {
+        "La1": ("Sr1", pytest.approx(0.12)),
+        "La2": ("Sr2", pytest.approx(0.04)),
+    }
+
+
+def test_nominal_edits_without_atoms_keep_the_rule_by_element() -> None:
+    # Without atoms the composition takes only the CIF's elements, scaled.
+    phase = two_site_phase(None)
+    phase.composition = {**TWO_SITE_COMPOSITION, "La": 0.0}
+    edits = pipeline._nominal_edits(phase, TWO_SITE_ATOMS)
+
+    assert edits == [
+        {"label": "Sr1", "occupancy": pytest.approx(0.48)},
+        {"label": "Sr2", "occupancy": pytest.approx(0.16)},
+    ]
+
+    # A rule by element puts La beside every Sr atom, in proportion.
+    structure = {"formula_units": 1, "composition": {"added": {"La": "Sr"}}}
+    added = {
+        edit["label"]: (edit["copy"], edit["occupancy"])
+        for edit in composition_edits(TWO_SITE_ATOMS, TWO_SITE_COMPOSITION, structure)
+        if "copy" in edit
+    }
+    assert added == {
+        "La1": ("Sr1", pytest.approx(0.12)),
+        "La2": ("Sr2", pytest.approx(0.04)),
+    }
+
+
+def test_nominal_edits_reject_an_element_the_atoms_do_not_place() -> None:
+    # Ba shares Sr1's position in the CIF, but the table puts only Sr and La
+    # on A1.
+    atoms = TWO_SITE_ATOMS + [
+        {
+            "label": "Ba1",
+            "type": "Ba",
+            "xyz": [0.0, 0.0, 0.0],
+            "multiplicity": 1,
+            "occupancy": 0.1,
+        },
+    ]
+    phase = two_site_phase({"A1": {"Sr1": "Sr", "La1": "La"}})
+    phase.composition = {**TWO_SITE_COMPOSITION, "Ba": 0.1}
+
+    with pytest.raises(
+        PipelineError,
+        match=r"^structures\.toy\.atoms: site A1 holds Ba \(Ba1\), which atoms "
+        r"does not place there",
+    ):
+        pipeline._nominal_edits(phase, atoms)
 
 
 def test_run_mode_held_instrument_check(tmp_path, monkeypatch) -> None:

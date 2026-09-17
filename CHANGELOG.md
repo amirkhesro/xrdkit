@@ -268,6 +268,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Rietveld set up places an element that a structure's `atoms` table adds
+  only beside the CIF atoms the table names on that element's sites, with the
+  label the table gives it. It used to reduce the table to a host element and
+  add the element beside every atom of that element, so La placed on A1 beside
+  Sr1 also landed beside Sr2 on A2. The element's whole content now goes on
+  the named sites, shared in proportion to the hosts' CIF occupancies when it is
+  placed on more than one. `composition_edits` takes, besides a host element,
+  host atoms as `{host label: added label}`. A site of the table that holds an
+  element the table does not place there, in the CIF or after the edits, stops
+  the set up with a `PipelineError` naming the site and element. Structures
+  without `atoms` are unchanged.
 - `formula_mass` and `theoretical_density` accept a formula string as well as a
   mapping of element to atoms per formula unit.
 - `build_refine_job` makes every path it is given absolute, against the

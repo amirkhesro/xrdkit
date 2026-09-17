@@ -326,11 +326,15 @@ def composition_edits(
     atoms hold is scaled by one factor on every site it occupies, which
     keeps the CIF's distribution of it over the sites; an atom whose
     occupancy that leaves unchanged gets no edit. Each element of
-    ``structure["composition"]["added"]``, which maps it to a host element,
-    is put on every atom of its host at one fraction of that atom's CIF
-    occupancy, so that it goes where the host is, as an atom labelled by the
-    added element and the rest of the host's label (La1 on Sr1); an added
-    element whose content is 0 is not added. The edits are in the form the
+    ``structure["composition"]["added"]`` maps it to its host: a host
+    element, when it is put on every atom of that element, as an atom
+    labelled by the added element and the rest of the host's label (La1 on
+    Sr1); or host atoms, ``{host label: added label}``, when it is put
+    beside those atoms only, labelled as given. Either way its whole content
+    goes on its host atoms, each at one fraction of that atom's CIF
+    occupancy, so that it is shared among them as the host is; the hosts'
+    own occupancies are scaled as above, whatever is added beside them. An
+    added element whose content is 0 is not added. The edits are in the form the
     GSAS-II driver takes: ``{"label", "occupancy"}``, and ``{"label",
     "type", "copy", "occupancy"}`` for an added atom.
 
@@ -339,8 +343,8 @@ def composition_edits(
     ValueError
         If the structure gives no formula units, the atoms hold an element
         the composition lacks, the composition has one the atoms lack that
-        the rule does not add, an added element is on the atoms already, or
-        a label for an added atom is taken.
+        the rule does not add, an added element is on the atoms already, its
+        host is not among them, or a label for an added atom is taken.
     """
     if structure.get("formula_units") is None:
         name = structure.get("name")
@@ -367,12 +371,31 @@ def composition_edits(
             f"the composition has {lacking}, which the atoms lack and the rule "
             "does not add"
         )
+    by_label = {atom["label"]: atom for atom in atoms}
+    hosts: dict[str, dict[str, str]] = {}
     for kind, host in added_on.items():
         if kind in cif:
             raise ValueError(f"{kind} is to be added on {host} but is there already")
-        if per_cell.get(kind) and not cif.get(host):
+        if isinstance(host, str):
+            hosts[kind] = {
+                atom["label"]: kind + atom["label"][len(host) :]
+                for atom in atoms
+                if _element(atom["type"]) == host
+            }
+        else:
+            unknown = [label for label in host if label not in by_label]
+            if unknown:
+                raise ValueError(
+                    f"{kind} is to be added beside {', '.join(unknown)}, which the "
+                    "atoms lack"
+                )
+            hosts[kind] = dict(host)
+        if per_cell.get(kind) and not sum(
+            by_label[label]["multiplicity"] * by_label[label]["occupancy"]
+            for label in hosts[kind]
+        ):
             raise ValueError(f"{kind} is to be added on {host}, which the atoms lack")
-    labels = {atom["label"] for atom in atoms}
+    labels = set(by_label)
     edits = []
     for atom in atoms:
         kind = _element(atom["type"])
@@ -380,21 +403,25 @@ def composition_edits(
             occupancy = atom["occupancy"] * per_cell[kind] / cif[kind]
             if occupancy != atom["occupancy"]:
                 edits.append({"label": atom["label"], "occupancy": occupancy})
-        for added, host in added_on.items():
-            if host != kind or not per_cell.get(added):
+        for added, placed in hosts.items():
+            if atom["label"] not in placed or not per_cell.get(added):
                 continue
-            label = added + atom["label"][len(kind) :]
+            label = placed[atom["label"]]
             if label in labels:
                 raise ValueError(
                     f"label {label!r} for {added} on {atom['label']} is taken"
                 )
             labels.add(label)
+            content = sum(
+                by_label[host]["multiplicity"] * by_label[host]["occupancy"]
+                for host in placed
+            )
             edits.append(
                 {
                     "label": label,
                     "type": added,
                     "copy": atom["label"],
-                    "occupancy": atom["occupancy"] * per_cell[added] / cif[kind],
+                    "occupancy": atom["occupancy"] * per_cell[added] / content,
                 }
             )
     return edits
