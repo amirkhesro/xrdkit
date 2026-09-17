@@ -940,6 +940,15 @@ def _check_cell(cell: Mapping[str, float], where: str) -> dict[str, float]:
     return checked
 
 
+def _lattice_column(row: Mapping[str, str], key: str) -> str:
+    """A cell parameter of a lattice results row: under the name the lattice
+    command writes, such as a_angstrom or alpha_deg, or where a row lacks
+    that column, the plain name of older files, such as a or alpha."""
+    unit = "angstrom" if key in ("a", "b", "c") else "deg"
+    written = f"{key}_{unit}"
+    return row[written] if written in row else row[key]
+
+
 def _lattice_cell(project: Project, sample: Sample) -> tuple[dict, Path] | None:
     """The cell of the last row of the sample's lattice results, if any."""
     folder = results_dir(project, "lattice", sample.key)
@@ -951,7 +960,7 @@ def _lattice_cell(project: Project, sample: Sample) -> tuple[dict, Path] | None:
         if not rows:
             continue
         try:
-            cell = {key: float(rows[-1][key]) for key, _ in _CELL_KEYS}
+            cell = {key: float(_lattice_column(rows[-1], key)) for key, _ in _CELL_KEYS}
         except (KeyError, TypeError, ValueError):
             raise PipelineError(f"{path}: its last row gives no whole cell") from None
         return cell, path

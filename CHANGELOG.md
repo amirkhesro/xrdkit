@@ -268,6 +268,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Rietveld pipeline's start cell reads the lattice results the lattice
+  command writes. It looked for columns `a` to `gamma`, but the command writes
+  `a_angstrom`, `b_angstrom`, `c_angstrom`, `alpha_deg`, `beta_deg` and
+  `gamma_deg`, so `resolve_inputs` raised "its last row gives no whole cell"
+  on every sample with lattice results. The plain names of older files are
+  still read.
 - The Rietveld set up places an element that a structure's `atoms` table adds
   only beside the CIF atoms the table names on that element's sites, with the
   label the table gives it. It used to reduce the table to a host element and

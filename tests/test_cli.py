@@ -20,6 +20,7 @@ from xrdkit import (
     find_peaks,
     generate_reflections,
     index_and_refine,
+    pipeline,
     read_xrdml,
 )
 from xrdkit.cli import HKL_HEADROOM, main
@@ -1279,6 +1280,39 @@ def test_lattice_by_key_of_a_cubic_sample(project, capsys) -> None:
     assert row["esd_c_angstrom"] == ""
     assert float(row["z"]) == 1
     assert float(row["theoretical_density_g_cm3"]) == pytest.approx(5.12, abs=0.02)
+
+
+def test_lattice_results_give_the_rietveld_start_cell(project, capsys) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(LAB_INSTRUMENT)
+    raw = project / "data" / "raw" / "ttb.xrdml"
+    _write_doublet_xrdml(raw, TTB_TRUE, "P4bm", zero=APPLIED_ZERO_OFFSET)
+    argv = ["add-sample", "data/raw/ttb.xrdml", "--structure", "ttb_x010"]
+    assert main([*argv, "--instrument", "lab"]) == 0
+    assert main(["lattice", "ttb"]) == 0
+    capsys.readouterr()
+
+    loaded = load_project(project)
+    path = project / "results" / "lattice" / "ttb" / "lattice_ttb.csv"
+    (row,) = _rows(path)
+
+    cell, source = pipeline._start_cell(
+        loaded,
+        loaded.samples["ttb"],
+        loaded.structures["ttb_x010"],
+        pipeline.Options(),
+    )
+
+    # The cell is read from the columns the lattice command writes.
+    assert source == f"lattice results {path}"
+    assert cell == {
+        "a": float(row["a_angstrom"]),
+        "b": float(row["b_angstrom"]),
+        "c": float(row["c_angstrom"]),
+        "alpha": float(row["alpha_deg"]),
+        "beta": float(row["beta_deg"]),
+        "gamma": float(row["gamma_deg"]),
+    }
 
 
 @pytest.mark.parametrize("form", ["pellet", "powder"])
