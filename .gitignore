@@ -52,3 +52,4 @@ figures/
 data/
 # Synthetic data the tests read, not analysis output.
 !tests/data/
+docs/WORKFLOW_REVIEW.md
