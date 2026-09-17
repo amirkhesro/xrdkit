@@ -3320,7 +3320,7 @@ exchange = [["Sr", "Ba"]]
 
 [structures.bronze.atoms]
 A1 = {{ Sr1 = "Sr", Ca1 = "Ca" }}
-A2 = {{ Ba2 = "Ba", Sr2 = "Sr" }}
+A2 = {{ Ba2 = "Ba", Sr2 = "Sr", Ca2 = "Ca" }}
 B1 = {{ Nb1 = "Nb" }}
 B2 = {{ Nb2 = "Nb" }}
 
@@ -3457,36 +3457,43 @@ results/rietveld/toy/toy_occupancies_histogram.csv
 results/rietveld/toy/toy_occupancies_reflections_bronze.csv
 results/rietveld/toy/toy_occupancies.instprm
 results/rietveld/toy/summary.md
-fixed_atoms: scale and background, zero and cell, size, overall Uiso; Rwp 9.611 per cent, reduced chi squared 19.722
-coordinates: profile, Uiso groups, A sites, B sites, O sites; Rwp 3.669 per cent, reduced chi squared 2.894
-occupancies: profile and Uiso, A site occupancies; Rwp 2.703 per cent, reduced chi squared 1.562
+fixed_atoms: scale and background, zero and cell, size, overall Uiso; Rwp 9.232 per cent, reduced chi squared 18.200
+coordinates: profile, Uiso groups, A sites, B sites, O sites; Rwp 2.387 per cent, reduced chi squared 1.225
+occupancies: profile and Uiso, A site occupancies; Rwp 2.387 per cent, reduced chi squared 1.218
 exit status 0
 ## Stage outcomes
 
 | Stage | Status | Passes | Rwp (%) | Rp (%) | Reduced χ² | Why |
 | --- | --- | --- | --- | --- | --- | --- |
-| profile | clean | 2 | 9.611 | 7.889 | 19.715 |  |
-| Uiso groups | clean | 2 | 9.510 | 7.836 | 19.326 |  |
-| A sites | clean | 3 | 8.050 | 6.143 | 13.861 |  |
-| B sites | clean | 3 | 4.572 | 3.481 | 4.476 |  |
-| O sites | clean | 6 | 3.669 | 2.545 | 2.894 |  |
+| profile | clean | 2 | 9.232 | 7.236 | 18.193 |  |
+| Uiso groups | clean | 2 | 9.125 | 7.110 | 17.793 |  |
+| A sites | clean | 5 | 7.683 | 5.532 | 12.627 |  |
+| B sites | clean | 4 | 3.664 | 2.658 | 2.875 |  |
+| O sites | clean | 4 | 2.387 | 1.582 | 1.225 |  |
 
 The final model is that of stage O sites.
 ## Undetermined parameters
 
 An occupancy whose esd is more than half its range, 0 to 1, and a coordinate or an isotropic Uiso whose esd is larger than its shift from the start model: the data do not determine them, and their values are not a result.
 
-- bronze Nb1 Uiso 0.00610, esd 0.00021 more than its shift 0.00010
-- bronze Nb2 z 0.00959, esd 0.00082 more than its shift 0.00041
-- bronze Nb2 Uiso 0.00610, esd 0.00021 more than its shift 0.00010
+- bronze Sr1 z 0.48054, esd 0.00094 more than its shift 0.00054
+- bronze Nb1 Uiso 0.00605, esd 0.00013 more than its shift 0.00005
+- bronze Nb2 Uiso 0.00605, esd 0.00013 more than its shift 0.00005
+- bronze O1 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O2 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O3 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O4 z 0.52296, esd 0.00319 more than its shift 0.00296
+- bronze O4 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze O5 Uiso 0.01222, esd 0.00045 more than its shift 0.00022
+- bronze Ca1 z 0.48054, esd 0.00094 more than its shift 0.00054
 ## Occupancies
 
 Each exchanged element's content over its group's sites, the sum of multiplicity times occupancy, held at its start while the element is traded between the sites, and the occupancies the stage left, whether it was kept or rejected:
 
 | Stage | Status | Phase | Element | Sites | Occupancies | Held total per cell | Stage total |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| A site occupancies | clean | bronze | Sr | Sr1, Ba2 | Sr1 0.6782, Sr2 0.2859 | 2.50000 | 2.50000 |
-| A site occupancies | clean | bronze | Ba | Sr1, Ba2 | Ba1 0.0215, Ba2 0.4892 | 2.00000 | 2.00000 |
+| A site occupancies | clean | bronze | Sr | Sr1, Ba2 | Sr1 0.7454, Sr2 0.2523 | 2.50000 | 2.50000 |
+| A site occupancies | clean | bronze | Ba | Sr1, Ba2 | Ba1 0.0028, Ba2 0.4986 | 2.00000 | 2.00000 |
 ['displacement', 'instrument', 'limits', 'options', 'project', 'refine', 'sample', 'scan_range', 'start_cell', 'start_cell_source', 'structures', 'zero']
 ['cycles', 'driver_version', 'le_bail_cycles', 'max_passes', 'mode', 'pass_tolerance', 'stages', 'xrdkit_version']
 {'bronze': 'the coordinates result toy_coordinates_result.json, stage O sites'}
@@ -3536,17 +3543,20 @@ Section 7.2 uses for `sites`.
 the entry, as a table of the entry's site labels. It is needed in two cases.
 The first is an element of the composition that the entry's prototype does not
 carry: `Sr0.5Ba0.4Ca0.1Nb2O6` holds calcium, which the tungsten bronze
-prototype does not, so `A1 = { Sr1 = "Sr", Ca1 = "Ca" }` places it. An element
-the CIF lacks, under a label the CIF does not have, `Ca1` here, is placed only on
-the sites the `atoms` table names it on, beside the table's other atom on each
-of them, so all the calcium of the composition goes on A1 beside `Sr1`, and none
-on A2 beside `Sr2`. Placed on more than one site, its amount is split among them
-in proportion to the occupancies of its host atoms there. Without an `atoms`
-key, as in the settings file of Section 7.3, such an element goes beside every
-atom of its host element instead, in proportion to their occupancies. Leaving
-such an element unplaced stops the run with a message naming the element and the
-entry's sites. The second
-case is a CIF whose labels differ from the entry's. The Rietveld modes match
+prototype does not, so `Ca1 = "Ca"` on A1 and `Ca2 = "Ca"` on A2 place it. An
+element the CIF lacks, under labels the CIF does not have, is placed only on the
+sites the `atoms` table names it on, beside the atom of its host element on
+each, the host being the element present on all those sites, strontium here.
+Its amount is split among the sites in proportion to the multiplicity and
+occupancy of the host element on each, so the calcium goes beside `Sr1` on A1 at
+0.15 and beside `Sr2` on A2 at 0.05, as in the made up structure. Had the table
+named A1 alone, all the calcium would go there, and the fit would be poorer,
+since the structure the scan was made from has calcium on both. Without an
+`atoms` key, as in the settings file of Section 7.3, such an element goes beside
+every atom of its host element instead, in proportion to their occupancies.
+Leaving such an element unplaced stops the run with a message naming the
+element and the entry's sites. The second case is a CIF whose labels differ
+from the entry's. The Rietveld modes match
 each site the entry names to the CIF atom of the same label, so `O1` to `O5`
 need no line here, while `A1`, `A2`, `B1` and `B2` do, since the CIF calls
 those atoms `Sr1`, `Ba2` and `Sr2`, `Nb1` and `Nb2`.
@@ -3678,13 +3688,9 @@ Every write up begins with the settings and then a stage outcomes table, one
 row for every stage by name, with its status, passes, Rwp, Rp and reduced chi
 squared. A rejected or failed stage keeps its row, saying so and why, with no
 figures in it, and the line under the table names the stage the final model
-comes from. The coordinates table the script printed shows the shape a structure
-refinement ought to have: Rwp falls from 9.611 to 3.669 per cent as the A, B and
-O sites move to where the sample has them, and every stage is clean. It ends at
-a reduced chi squared of 2.894 rather than near 1, because the project file
-places all the calcium on A1, while the made up sample has two fifths of it on
-A2. Naming it there too, `A2 = { Ba2 = "Ba", Sr2 = "Sr", Ca2 = "Ca" }`, splits it
-in proportion to the CIF's Sr1 and Sr2, 0.15 and 0.05, as the sample has it. The
+comes from. The coordinates table the script printed shows what a structure
+refinement ought to look like: Rwp falls from 9.232 to 2.387 per cent as the A,
+B and O sites move to where the sample has them, and every stage is clean. The
 Rp of a stage is left blank when GSAS-II's own record of it is of a trial step
 rather than the model it kept, which can happen in a stage of constrained
 coordinates; the Rwp is then taken from the chi squared of the model kept.
@@ -3712,10 +3718,10 @@ start model is the structure as the fixed_atoms mode set it up, the CIF at the
 nominal composition, and it is carried to every later mode, so a shift is
 always measured from the same place. An undetermined value is not a result:
 the data cannot tell it from where it started. In the list the script printed,
-the Uiso of the niobium sites came out within an esd of the value the CIF gave
-them, which is right, since the made up structure has that value; that is also
-why the data cannot tell them apart from the start. The z of Nb2, which the CIF
-gives as the sample has it, moved less than its esd.
+the Uiso of the niobium and the oxygen sites came out within an esd of the
+values the CIF gave them, which is right, since the made up structure has those
+values; that is also why the data cannot tell them apart from the start. The z
+of Sr1 and of O4 moved less than their esds.
 
 The occupancies table gives, for each element of an exchange group, the sites
 it was traded between, the occupancy of each of its atoms after the stage, the
@@ -3723,10 +3729,8 @@ content per cell held while it was traded, and the content the stage's own
 atoms give, which differs from the held total only if the constraint failed.
 Here strontium holds 2.5 atoms per cell and barium 2.0, the nominal composition
 of five formula units. The mode added Ba1 on A1 at occupancy 0, since A1 held
-no barium to trade, and the refinement left Sr1 at 0.6782 and Ba1 at 0.0215,
-where the made up structure has 0.75 and none. Sr1 comes out low and Sr2, at
-0.2859, high against the sample's 0.25, as strontium stands in on A2 for the
-calcium the model does not place there. Every stage of
+no barium to trade, and the refinement left Sr1 at 0.7454 and Ba1 at 0.0028,
+where the made up structure has 0.75 and none. Every stage of
 a mode is listed, kept or rejected, so a rejected occupancy stage still shows
 where it tried to go.
 

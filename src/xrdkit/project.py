@@ -82,6 +82,7 @@ from pathlib import Path
 from xrdkit.config import (
     UNSETTLED_RULES,
     ConfigError,
+    host_elements,
     read_library_atoms,
     read_sites,
 )
@@ -447,6 +448,7 @@ def _structure(check: _Checker, key: str, value: object) -> StructureSpec:
                 read_library_atoms, table["atoms"], at, entry, False
             )
             _check_placed(check, at, entry, given, formula)
+            _check_hosts(check, at, entry, given)
             atoms = tuple(given)
         else:
             atoms = tuple(check.config(read_sites, table["atoms"], at))
@@ -508,6 +510,24 @@ def _check_placed(
             f"replaces the prototype's; keep {_plural(unplaced, 'it', 'them')} on "
             f"one of the sites {labels}",
         )
+
+
+def _check_hosts(check: _Checker, where: str, entry, given: list[dict]) -> None:
+    """Check that every element ``given`` adds to the sites of ``entry``, one
+    its prototype does not carry, has one host element on the sites it is
+    placed on, raising :class:`ConfigError` if not."""
+    prototype = {element for site in entry.sites for element in site.elements}
+    placed = {site["label"]: site["atoms"] for site in given}
+    added = {
+        element
+        for atoms in placed.values()
+        for element in atoms.values()
+        if element not in prototype
+    }
+    try:
+        host_elements(placed, added, where)
+    except ConfigError as error:
+        raise ConfigError(f"{check.source}: {error}") from None
 
 
 def _origin(

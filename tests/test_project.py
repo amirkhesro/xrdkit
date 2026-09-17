@@ -8,6 +8,7 @@ import pytest
 
 import xrdkit
 from xrdkit.cli import main
+from xrdkit.config import ConfigError
 from xrdkit.project import (
     PROJECT_FILE,
     Instrument,
@@ -689,6 +690,58 @@ def test_library_atoms_place_the_elements_the_prototype_lacks(
     ]
     # origin = false switches the entry's origin off.
     assert (ttb.origin, ttb.origin_fixed) == (None, False)
+
+
+def test_library_atoms_with_two_common_elements_to_host_are_refused(
+    project_dir: Path,
+) -> None:
+    # A1 and A2 both hold Sr and Ba, so either could host La on them.
+    path = rewrite(
+        project_dir,
+        'origin = "B1"',
+        (
+            'origin = "B1"\n'
+            'atoms = { A1 = { Sr1 = "Sr", Ba1 = "Ba", La1 = "La" }, '
+            'A2 = { Ba2 = "Ba", Sr2 = "Sr", La2 = "La" }, B1 = { Nb1 = "Nb", Ti1 = "Ti" } }'
+        ),
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            r"structures\.ttb_x010\.atoms: La is placed on sites A1, A2, which have "
+            r"more than one element in common to host it: Ba, Sr; place it on "
+            r"sites that share exactly one$"
+        ),
+    ) as raised:
+        load_project(path)
+    assert str(raised.value).startswith(str(path))
+
+
+def test_library_atoms_with_no_common_element_to_host_are_refused(
+    project_dir: Path,
+) -> None:
+    # A1 holds Sr and B1 Nb, so nothing could host La on both.
+    path = rewrite(
+        project_dir,
+        'origin = "B1"',
+        (
+            'origin = "B1"\n'
+            'atoms = { A1 = { Sr1 = "Sr", La1 = "La" }, '
+            'B1 = { Nb1 = "Nb", La2 = "La", Ti1 = "Ti" } }'
+        ),
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            r"structures\.ttb_x010\.atoms: La is placed on sites A1, B1, which have "
+            r"no element in common to host it; place it on sites that share "
+            r"exactly one$"
+        ),
+    ) as raised:
+        load_project(path)
+    assert str(raised.value).startswith(str(path))
 
 
 def test_library_atoms_may_be_left_out_for_the_prototype_elements(

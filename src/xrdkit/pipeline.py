@@ -48,7 +48,7 @@ from pathlib import Path
 import numpy as np
 
 from xrdkit import gsas2_driver, writeup
-from xrdkit.config import AXIS_COORDINATE
+from xrdkit.config import AXIS_COORDINATE, ConfigError, host_elements
 from xrdkit.density import parse_formula
 from xrdkit.gsas2 import (
     _same_site,
@@ -1223,29 +1223,52 @@ def _added_rule(
     phase: PhaseInput, cif_atoms: Sequence[Mapping]
 ) -> dict[str, dict[str, str]]:
     """The composition rule of a structure's atoms placement, by host atom:
-    an element a site names by a label the CIF lacks goes beside the first
-    CIF atom the site names, under the label the site gives it, and on no
-    site the placement does not name it on."""
+    an element a site names by a label the CIF lacks goes, under that label,
+    beside the CIF atom of its host element on each site the placement names
+    it on, and on no other. The host element is the one element its sites
+    have in common (:func:`xrdkit.config.host_elements`); on a single site
+    any CIF atom of it hosts it."""
     labels = {str(atom["label"]): _element_of(atom["type"]) for atom in cif_atoms}
     held = set(labels.values())
-    rule: dict[str, dict[str, str]] = {}
-    for site in phase.spec.atoms or ():
-        name = site.get("label") or site["name"]
-        present = [label for label in site["atoms"] if label in labels]
-        absent = {
+    where = f"structures.{phase.key}.atoms"
+    sites = {site.get("label") or site["name"]: site for site in phase.spec.atoms or ()}
+    absent_on = {
+        name: {
             label: element
             for label, element in site["atoms"].items()
             if label not in labels and element not in held
         }
-        if not absent:
-            continue
-        if not present:
+        for name, site in sites.items()
+    }
+    added = {element for absent in absent_on.values() for element in absent.values()}
+    try:
+        hosts = host_elements(
+            {name: site["atoms"] for name, site in sites.items()}, added, where
+        )
+    except ConfigError as error:
+        raise PipelineError(str(error)) from None
+    rule: dict[str, dict[str, str]] = {}
+    for name, site in sites.items():
+        present = [label for label in site["atoms"] if label in labels]
+        if absent_on[name] and not present:
             raise PipelineError(
-                f"structures.{phase.key}.atoms: site {name} names no atom of the CIF, "
-                f"so {', '.join(absent.values())} has nothing to go beside"
+                f"{where}: site {name} names no atom of the CIF, so "
+                f"{', '.join(absent_on[name].values())} has nothing to go beside"
             )
-        for label, element in absent.items():
-            rule.setdefault(element, {})[present[0]] = label
+        for label, element in absent_on[name].items():
+            host = hosts[element]
+            if host is None:
+                # Placed on this site alone, the element takes the whole of its
+                # content here whichever atom hosts it, so the first will do.
+                rule.setdefault(element, {})[present[0]] = label
+                continue
+            beside = [atom for atom in present if labels[atom] == host]
+            if len(beside) != 1:
+                raise PipelineError(
+                    f"{where}: site {name} must name exactly one {host} atom of "
+                    f"the CIF to host {element}, not {len(beside)}"
+                )
+            rule.setdefault(element, {})[beside[0]] = label
     return rule
 
 

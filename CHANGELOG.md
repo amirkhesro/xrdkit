@@ -279,6 +279,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   element the table does not place there, in the CIF or after the edits, stops
   the set up with a `PipelineError` naming the site and element. Structures
   without `atoms` are unchanged.
+- The host of an element an `atoms` table places on more than one site is
+  chosen by element, not by the order of the table: it is the one element all
+  those sites hold, beside whose CIF atom on each site the element goes, so Ca
+  on A1 and A2 goes beside Sr1 and Sr2 even when A2 lists Ba2 first. Sites with
+  more than one element in common, or none, make `load_project` raise
+  `ConfigError` naming the element, the sites and any candidate hosts. An
+  element on a single site goes beside any CIF atom of it, the host deciding
+  only its label. `xrdkit.config.host_elements` holds the rule.
 - `formula_mass` and `theoretical_density` accept a formula string as well as a
   mapping of element to atoms per formula unit.
 - `build_refine_job` makes every path it is given absolute, against the

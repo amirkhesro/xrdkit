@@ -87,13 +87,14 @@ from __future__ import annotations
 import math
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 __all__ = [
     "SITE_KIND",
     "ConfigError",
     "check_composition",
+    "host_elements",
     "load_config",
     "read_library_atoms",
     "read_sites",
@@ -323,6 +324,54 @@ def _library_entry(value: object, where: str):
         return load_entry(name)
     except ValueError as error:
         raise _fail(where, str(error)) from None
+
+
+def host_elements(
+    placed: Mapping[str, Mapping[str, str]], hosted: Iterable[str], where: str
+) -> dict[str, str | None]:
+    """The host element of each element of ``hosted``, the elements an atoms
+    placement adds, placed by ``placed``, the atoms of each site by site name,
+    ``{name: {label: element}}``. Shared with :mod:`xrdkit.project` and
+    :mod:`xrdkit.pipeline`.
+
+    An element placed on more than one site is hosted on all of them by the
+    one element the sites have in common, leaving out the added elements.
+    One placed on a single site is given None: any atom of that site may
+    host it, since the host then decides nothing but its label. The order of
+    the atoms in the placement never decides.
+
+    Raises
+    ------
+    ConfigError
+        If the sites of an element placed on more than one have no element
+        in common, or more than one; the message starts with ``where``.
+    """
+    hosted = set(hosted)
+    hosts: dict[str, str | None] = {}
+    for element in sorted(hosted):
+        sites = [name for name, atoms in placed.items() if element in atoms.values()]
+        if len(sites) < 2:
+            hosts[element] = None
+            continue
+        common = (
+            set.intersection(*(set(placed[name].values()) for name in sites)) - hosted
+        )
+        on = ", ".join(sites)
+        if len(common) > 1:
+            raise _fail(
+                where,
+                f"{element} is placed on sites {on}, which have more than one "
+                f"element in common to host it: {', '.join(sorted(common))}; place "
+                "it on sites that share exactly one",
+            )
+        if not common:
+            raise _fail(
+                where,
+                f"{element} is placed on sites {on}, which have no element in "
+                "common to host it; place it on sites that share exactly one",
+            )
+        hosts[element] = common.pop()
+    return hosts
 
 
 def read_library_atoms(

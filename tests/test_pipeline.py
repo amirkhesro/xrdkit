@@ -1511,6 +1511,35 @@ def test_nominal_edits_place_an_added_element_on_the_named_site_only() -> None:
         "La2": ("Sr2", pytest.approx(0.04)),
     }
 
+    # With Ba2 beside Sr2 on the second site, listed first, the host is still
+    # Sr, the one element both sites have: La goes beside Sr1 and Sr2 in
+    # proportion to their 0.6 and 0.4 of Sr per cell, not beside Ba2.
+    atoms = TWO_SITE_ATOMS + [
+        {
+            "label": "Ba2",
+            "type": "Ba",
+            "xyz": [0.5, 0.0, 0.5],
+            "multiplicity": 2,
+            "occupancy": 0.5,
+        },
+    ]
+    phase = two_site_phase(
+        {
+            "A1": {"Sr1": "Sr", "La1": "La"},
+            "A2": {"Ba2": "Ba", "Sr2": "Sr", "La2": "La"},
+        }
+    )
+    phase.composition = {**TWO_SITE_COMPOSITION, "Ba": 1.0, "La": 0.25}
+    added = {
+        edit["label"]: (edit["copy"], edit["occupancy"])
+        for edit in pipeline._nominal_edits(phase, atoms)
+        if "copy" in edit
+    }
+    assert added == {
+        "La1": ("Sr1", pytest.approx(0.15)),
+        "La2": ("Sr2", pytest.approx(0.05)),
+    }
+
 
 def test_nominal_edits_without_atoms_keep_the_rule_by_element() -> None:
     # Without atoms the composition takes only the CIF's elements, scaled.
