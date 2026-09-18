@@ -1871,8 +1871,374 @@ the progress lines on the error stream so that the JSON stands alone.
 Every phase of the sample is extracted, not only the first; the first is the
 one whose cell `--cell` sets and whose numbers are printed first.
 
-### 8.8 Rietveld
+### 8.8 Running a Rietveld refinement
 
-The Rietveld half of this section, covering `xrdkit rietveld`, its modes and
-stages, the write ups it produces and the undetermined parameters it reports,
-follows here.
+`xrdkit rietveld` takes the Le Bail result of Section 8.3 and carries it
+through three modes in turn. With no options it runs all three.
+
+```console
+xrdkit rietveld powder_a
+```
+
+It reports each stage as it finishes, then every file, then one line per mode.
+
+```text
+powder_a: fixed_atoms started, 4 stages, at most 60 passes each
+powder_a: fixed_atoms: scale and background clean
+powder_a: fixed_atoms: zero and cell clean
+powder_a: fixed_atoms: size clean
+powder_a: fixed_atoms: overall Uiso clean
+powder_a: coordinates started, 5 stages, at most 100 passes each
+powder_a: coordinates: profile clean
+powder_a: coordinates: Uiso groups clean
+powder_a: coordinates: A sites clean
+powder_a: coordinates: B sites clean
+powder_a: coordinates: O sites rejected (sanity check: O2 z moved +0.0872; sanity check: O5 z moved +0.0743)
+powder_a: occupancies started, 2 stages, at most 100 passes each
+powder_a: occupancies: profile and Uiso clean
+powder_a: occupancies: A site occupancies clean
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms_result.json
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms.gpx
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\fixed_atoms.md
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms_histogram.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms_reflections_ttb_p4bm.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_fixed_atoms.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates_result.json
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates.gpx
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\coordinates.md
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates_histogram.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates_reflections_ttb_p4bm.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_coordinates.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies_result.json
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies.gpx
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\occupancies.md
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies_histogram.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies_reflections_ttb_p4bm.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\powder_a_occupancies.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\rietveld\powder_a\summary.md
+fixed_atoms: scale and background, zero and cell, size, overall Uiso; Rwp 4.290 per cent, reduced chi squared 2.190
+coordinates: profile, Uiso groups, A sites, B sites; Rwp 4.158 per cent, reduced chi squared 2.062
+occupancies: profile and Uiso, A site occupancies; Rwp 4.088 per cent, reduced chi squared 1.990
+```
+
+The whole run took under four minutes, and it was not spent evenly. The fixed
+atoms mode took about twenty seconds and the occupancies mode about seventeen,
+while the coordinates mode took a little over three minutes, almost all of it
+in one stage that needed sixty-one passes to settle. That is the usual shape:
+the stages that free many weakly determined parameters at once are the slow
+ones.
+
+Read the three closing lines first. Each names the stages that were accepted,
+so a stage missing from that list was rolled back, and gives the residuals of
+the model the mode ended with. Rwp fell from 4.290 to 4.158 to 4.088 per cent
+across the three modes, and the reduced chi squared from 2.190 to 1.990.
+
+### 8.9 The three modes
+
+Each mode starts from the saved result of the one before it, and the first
+starts from the Le Bail result, so the sequence is a chain of files rather
+than one long refinement held in memory. That is what makes it possible to
+rerun one mode without repeating the others.
+
+| Mode | Starts from | Frees | Holds |
+| --- | --- | --- | --- |
+| `fixed_atoms` | the Le Bail size stage, or its microstrain stage with `--mustrain` | the scale, background, zero or displacement, cell, size, and one Uiso for every atom | the coordinates and occupancies of the CIF, at the nominal composition |
+| `coordinates` | the fixed_atoms result | the profile, the entry's Uiso groups, then the free coordinates of each kind of site in turn | the origin site along its axis, and the occupancies |
+| `occupancies` | the coordinates result | the profile and Uiso groups, then the occupancies of each exchange group over its sites | the coordinates, and each element's content over the group's sites |
+
+The fixed atoms mode puts the structure in at its nominal composition and asks
+only whether the profile can be made to fit with the atoms where the CIF has
+them. Nothing structural is judged until it can, because a peak in the wrong
+place produces intensity errors that look exactly like occupancy errors. The
+one Uiso every atom shares is always determined by the data and soaks up the
+overall falling off of intensity with angle that would otherwise be pushed
+into the occupancies. If it comes out negative, that never means the atoms are
+colder than still; it means intensity is missing at high angle, so look at
+absorption, at the sample height, or at the instrument file.
+
+The coordinates mode frees one kind of site at a time, heaviest scatterers
+first. Heavy atoms dominate the intensities, so their positions are the best
+determined, and moving them first stops the light atoms from chasing errors
+that are not theirs. A kind of site with nothing free, every site of it fixed
+by symmetry or holding the origin, has no stage of its own.
+
+The occupancies mode trades the exchanged elements between their sites under
+the composition constraint, so the refinement decides how the elements are
+distributed without being free to change how much of each the sample contains.
+It is usually the longest and the one most often left undetermined.
+
+The stage order and the pass rule are those of Section 8.5: one new kind of
+parameter at a time, each stage repeated until nothing but the scale moves by
+more than a tenth of an esd, and a stage that raises a sanity check rolled
+back. The pass cap differs by mode, sixty for fixed atoms and a hundred for
+the other two, and the printed lines say which cap is in force.
+
+### 8.10 Choosing modes with --from and --through
+
+`--from` and `--through` run part of the sequence, which is what to use after
+changing something that affects only the later modes.
+
+Because each mode reads the saved result of the one before, the result it
+needs has to be there. `--from coordinates` needs the fixed atoms result in
+the folder, and where it is missing the command stops before writing anything,
+naming the file and the command that writes it. `--from` after `--through` is
+refused outright.
+
+### 8.11 How the structure is set up from the project file
+
+The mode that puts the atoms in has to reconcile three things: the sites the
+library entry names, the atoms the CIF actually has, and the composition the
+sample was weighed out to. The `atoms` table of the structure is what joins
+them, and Section 2.2 gives the one this project uses.
+
+An element of the composition that the CIF does not carry is placed only on
+the sites the `atoms` table names it on, and on each of those it goes beside
+the atom of its host element, the host being the one element present on every
+one of those sites. Its amount is split among them in proportion to
+multiplicity times the host's occupancy, so a site with more room for it, or
+more of its host, takes more of it. Where no single element is present on all
+the named sites the placement is ambiguous, and the file is refused when it
+loads rather than at the end of a refinement.
+
+This project file shows both cases. Lanthanum is named on A1 alone, so all of
+it goes there, beside `Sr1`; had the table named A1 and A2, it would have been
+split between them in proportion to the strontium on each. Titanium is named
+on B1 and B2, and niobium is the element present on both, so the titanium is
+split between the two B sites in proportion to the niobium. Leaving such an
+element out of the table altogether stops the run with a message naming the
+element and the entry's sites.
+
+The other half of the table is `library` beside `cif`. The entry supplies the
+space group, the sites and their kinds, the coordinates each Wyckoff position
+leaves free, the Uiso groups, the anions and the bond limits; the CIF supplies
+the coordinates. Where the CIF labels its atoms differently from the entry's
+site names, the `atoms` table says which atom sits on which site, since a
+refinement matches each site to the CIF atom of the same label.
+
+`origin` names the site whose coordinate along a polar axis is held, to stop
+the whole structure sliding along it. Left out, the entry's own applies, which
+for this tungsten bronze is its B1 site. A site label of the entry chooses
+another and `origin = false` holds none, and in that case the coordinates mode
+refuses to free a coordinate along the polar axis, naming the axis, because
+the refinement would have nothing to fix the structure in place along it.
+
+`exchange` lists the groups of elements whose occupancies are traded, one
+occupancy stage per group, named from the kind of site it works on. The sites
+a group is traded between are every site of one kind that holds any of its
+elements. Where a refinement frees phase fractions as well, the histogram
+scale is held whenever it does, since the scale and the fractions are the same
+quantity counted twice.
+
+### 8.12 The options
+
+`SAMPLE` is a sample key, and as with `xrdkit lebail` there is no way to name
+a scan file.
+
+`--from` and `--through` choose the modes, as Section 8.10 describes.
+
+`--mustrain` refines the microstrain with the size. It is held at zero in
+every Rietveld mode by default, because size and microstrain trade against
+each other on a laboratory scan, and the Le Bail run is where that question is
+settled; give it only when that run found a microstrain worth carrying.
+
+`--preferred-orientation H K L` adds a last fixed atoms stage freeing a
+March-Dollase ratio about that axis. Say plainly what its state is: preferred
+orientation has not yet been exercised on a real refinement. The stage is
+built and its flags are checked, but no measured scan has been carried through
+it, so check any result it gives against a scan of the same sample loaded to
+limit texture before relying on it.
+
+`--out DIR` writes every file into that folder itself, not under a `results`
+folder inside it, so a Rietveld run given the same `--out` as the Le Bail run
+before it finds the Le Bail result waiting there. A relative path is taken
+from the folder the command is run in.
+
+`--overwrite` is needed to replace a result that is already there. The command
+refuses by default: where the result JSON of any mode it is to run is already
+in the folder it stops before refining or writing anything, names the files,
+and returns 1. A mode it is not running is left alone, so `--from coordinates`
+after a fixed atoms run needs no `--overwrite`. There is no dated subfolder,
+because each mode has to read the result of the one before from the same
+place.
+
+`--json` prints the files written and the outcome of each mode as JSON, with
+the progress lines on the error stream.
+
+### 8.13 The files written
+
+Every mode writes the same eight files under `results/rietveld/KEY`, named
+from the sample key and the mode, and the run as a whole adds `summary.md`.
+
+The result JSON is the record of the mode: every stage with its status,
+residuals, parameters, atoms and every value refined or held; the final model;
+and three keys that make it reproducible. `inputs` holds the project, the
+sample, the instrument, every structure as the project file gives it, the
+refine settings, the scan's range and the range refined, the start cell of
+every phase and where it came from, whether the displacement was refined, the
+start zero and the command's options. `method` holds the mode, the stages as
+the job gave them, the cycles, the pass cap and tolerance, the driver's
+version and the version of xrdkit. `date` is when the mode finished.
+
+Beside it are the GSAS-II project, the fitted pattern and the reflections as
+CSVs, the instrument parameters exactly as that mode used them, the figure as
+a png and a pdf, and `MODE.md`, the write up. `summary.md` gathers the modes
+into one table with each mode's outcome, residuals, cell and the status of
+every stage, which is the file to open first when a run is a few days old.
+Where a mode fails, `failure.md` is written in its place, carrying the error,
+the stages that mode did get through and the tail of its GSAS-II log, and the
+modes after it are not run. The jobs, the logs and the start instrument file
+of each mode are under `work/MODE`.
+
+A failure in drawing the figure or writing the write up happens after the
+result JSON is written, so the result is kept and `failure.md` says so.
+
+### 8.14 Reading the write ups
+
+Each write up opens with the settings, in the same form as the Le Bail one,
+then a stage outcomes table with one row per stage: its status, its passes,
+Rwp, Rp and reduced chi squared, and a column saying why where the status is
+not clean. A rejected stage keeps its row and its reason but carries no
+figures, since its numbers are not part of the model. The line under the table
+names the stage the final model came from.
+
+Then the cell with its esds beside the cell it started from, and the zero or
+displacement beside its start.
+
+The structure write ups add four things. Every atom's coordinates, occupancy
+and Uiso with esds, and its shift from the start model in angstroms in the
+refined cell, so that a shift can be read as a distance rather than as a
+fraction. The bond lengths from each cation site to the anions, with the
+limits the library entry gives for that kind of site and a flag on any bond
+outside them, which is the quickest check that a structure has not gone
+somewhere impossible. The occupancies table, giving for each element of an
+exchange group the sites it was traded between, the occupancy of each of its
+atoms after the stage, the content per cell held while it was traded, and the
+content the stage's own atoms give, which differs from the held total only if
+the constraint failed. And the reflection misfits, the reflections whose
+observed and calculated intensities differ most, beside the ratio the Le Bail
+fit gives, which owes nothing to the structure: where the two agree, the
+misfit is the structure's.
+
+Last comes the undetermined list, and it is the section to read before quoting
+anything. A parameter is undetermined when the data do not determine it: an
+occupancy whose esd is more than half its range of 0 to 1, or a coordinate or
+Uiso whose esd is larger than its shift from the start model. The start model
+is the structure as the fixed atoms mode set it up, the CIF at the nominal
+composition, and it is carried to every later mode, so a shift is always
+measured from the same place.
+
+This is independent of a stage's status, and a clean stage can leave
+undetermined parameters. What it means for a number destined for a paper is
+simple: an undetermined value is not a result, because the data cannot tell it
+from where it started. Do not tabulate it as refined. Either hold it and say
+so, or leave that part of the structure out of the claim. A referee can tell
+the difference, and the labels are in the result precisely so that the
+decision is not left to memory.
+
+### 8.15 What this refinement came to
+
+Take the run above as it stands, mode by mode.
+
+The fixed atoms mode came out clean on all four stages, with Rwp falling from
+5.034 to 4.290 per cent and the reduced chi squared from 3.012 to 2.190.
+Almost all of that came from the last stage: freeing the scale, the background,
+the zero, the cell and the size together moved Rwp only from 5.034 to 4.997,
+and the one overall Uiso took it to 4.290. That is the Uiso doing exactly what
+Section 8.9 says it does, taking up the fall of intensity with angle.
+
+The coordinates mode came out clean on four stages and rolled the fifth back.
+The profile and Uiso groups stages settled in two passes each. The A sites
+stage needed sixty-one passes to settle and moved Rwp from 4.222 to 4.198, and
+the B sites stage settled in four and took it to 4.158.
+
+The O sites stage was rejected, and the reason names what happened: O2 moved
+0.0872 along z and O5 moved 0.0743, against the 0.05 fractional the sanity
+check allows. Note what the residual was doing while that went on. Inside the
+stage Rwp had fallen to 4.036, better than the 4.158 the mode ended with, and
+the stage was rejected all the same. That is the whole argument for having a
+sanity check: the residual improved and the structure got worse, because
+weakly determined oxygen coordinates can always find somewhere to go that fits
+the noise a little better. The stage was rolled back, what it alone refined
+was held, and the B sites model is the answer.
+
+Worth recording, since it is easy to assume otherwise: the O sites stage did
+not fail by running out of passes. It settled, within the hundred pass cap,
+and was rejected on the shift check afterwards. A stage that reaches the cap
+is a different label, unsettled, and is kept rather than rolled back.
+
+The occupancies mode came out clean on both stages, taking Rwp to 4.088 per
+cent and the reduced chi squared to 1.990, with the occupancy stage settling
+in six passes. And here the labels matter more than the residual. The
+refinement put strontium at 0.2(9) on A1 and 0.4(4) on A2, and barium at
+0.2(6) on A1 and 0.5(3) on A2, with lanthanum held at its nominal 0.25 on A1.
+The composition constraint held: strontium keeps 2.0 atoms per cell and barium
+2.5, and the stage's own totals match.
+
+Two of those four are named in the undetermined list, the strontium and the
+barium on A1, each with an esd larger than half the range an occupancy can
+take. The other two escape the test but should not be quoted either: an
+occupancy of 0.4 with an esd of 0.4 is not a measurement. What this pattern
+says about the A site distribution is nothing at all, and the honest report is
+that the split was refined, came out undetermined, and is therefore left as
+the nominal composition.
+
+That is a data limitation rather than a model error, and the two have
+different signatures. A data limitation shows as parameters that are
+individually undetermined while the fit as a whole is good: correlated
+coordinates that trade against one another, mixed occupancies on a shared site
+that the scattering contrast cannot separate, esds larger than shifts. That is
+this run, and it is not surprising: strontium and barium differ by eighteen
+electrons on sites that also carry lanthanum, on a scan Section 4 reported as
+unsuitable for a Rietveld refinement. A model error shows instead as a fit
+that is bad in a structured way: a whole class of reflections fitted badly
+points at the wrong space group, intensity under peaks with no tick mark at a
+missing phase, and a residual good at low angle and bad at high angle, or the
+reverse, points at the composition or at the thermal parameters.
+
+What can be quoted from this run is the cell, the profile terms and the
+residuals, with the coordinates of the A and B sites, and the statement that
+the oxygen positions and the A site occupancies were not determined. That is a
+real result and a modest one.
+
+### 8.16 When a stage is rolled back, and when a mode fails
+
+A rolled back stage is not an error and does not stop the run. The refinement
+returns to the state the last kept stage left it in, whatever that stage alone
+was refining stays held, and the run carries on, so a sequence can be left
+unattended and still leave a usable record.
+
+What to do next depends on which label appeared. A rejected stage means the
+model went somewhere the sanity check forbids, and the first question is
+whether the check was right. Look at the shift it names in the write up's
+coordinates table, in angstroms rather than fractions, and at the bond lengths
+for that site: a cation to anion distance outside the entry's limits says the
+structure really had gone wrong. If the shift is large but the bonds are still
+sound, the start model may simply have been poor, and the answer is a better
+CIF rather than a looser check.
+
+An unsettled stage means the pass cap arrived while something was still
+moving. Raising the cap in the `max_passes` key is worth one attempt. If it
+still will not settle, the parameter it names is being traded against another
+and the refinement is not going to resolve them.
+
+A failed mode is different: GSAS-II itself raised an error, `failure.md`
+carries it with the tail of the log, and the modes after it are not run. Read
+the error first, then the last stage that did finish, because a failure
+usually follows a stage that had already gone somewhere unreasonable.
+
+In every case the question to ask before changing the strategy is whether the
+data can answer what is being asked of them. The Rietveld row of the table in
+Section 4.2 is the standard: 5 to 130 degrees, a strongest peak above 20000
+counts, a background above 200 counts per step at high angle, powder sieved
+below 45 micrometres and loaded to limit preferred orientation. The scan used
+here reaches 98 degrees with a strongest peak near 10000 counts, which is a
+good Le Bail scan and a marginal Rietveld one. That, and not the refinement
+strategy, is why the A site occupancies would not resolve, and no rearrangement
+of the stages will change it. Go back for better data when the limitation is
+the data.
