@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `docs/USER_GUIDE.md`: the instrument parameter file the guide's scripts write
+  and read is named `instrument.instprm` rather than after one laboratory's
+  diffractometer, the hkl figure of `plot_pattern.py` takes the same headroom
+  `xrdkit plot` gives it, and the indexing summary prints its rms to four
+  decimals.
 - `docs/USER_GUIDE.md`: the peak over background criterion of 20 is the phase
   check's and not plotting's, and the guide now says why a pellet's displacement
   is freed and its zero held, what a plausible wrong cell from a pseudo-cubic

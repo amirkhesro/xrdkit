@@ -340,10 +340,14 @@ indexed_to_csv(indexed, f"results/indexed_{STEM}.csv")
 print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
 print(f"{fit.n_peaks} peaks used, rms {fit.rms_two_theta:.4f} degrees")
 print(f"zero offset {fit.zero_offset:.3f} degrees")
-print(indexing_summary(indexed))
+summary = indexing_summary(indexed)
+print({**summary, "rms_difference": round(summary["rms_difference"], 4)})
 
 fig, ax = plot_pattern(scan, scale="sqrt")
 ax.set_xlim(10.0, 80.0)
+bottom, top = ax.get_ylim()
+highest = float(max(ax.lines[0].get_ydata()))
+ax.set_ylim(bottom, highest + 0.20 * (top - bottom))
 labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
 print(save_figure(fig, f"figures/pattern_hkl_{STEM}"))
 print(f"{len(labels)} labels written")
@@ -548,14 +552,15 @@ indexed_to_csv(indexed, f"results/indexed_{STEM}.csv")
 print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
 print(f"{fit.n_peaks} peaks used, rms {fit.rms_two_theta:.4f} degrees")
 print(f"zero offset {fit.zero_offset:.3f} degrees")
-print(indexing_summary(indexed))
+summary = indexing_summary(indexed)
+print({**summary, "rms_difference": round(summary["rms_difference"], 4)})
 ```
 
 ```
 a = 12.4799, c = 3.9323 angstrom
 28 peaks used, rms 0.0076 degrees
 zero offset 0.170 degrees
-{'n_peaks': 35, 'n_indexed': 35, 'n_unindexed': 0, 'n_ambiguous': 7, 'rms_difference': 0.007559815493901125}
+{'n_peaks': 35, 'n_indexed': 35, 'n_unindexed': 0, 'n_ambiguous': 7, 'rms_difference': 0.0076}
 ```
 
 A cell refined this way is good enough to label reflections with. It is not a
@@ -580,6 +585,9 @@ from xrdkit import annotate_hkl
 
 fig, ax = plot_pattern(scan, scale="sqrt")
 ax.set_xlim(10.0, 80.0)
+bottom, top = ax.get_ylim()
+highest = float(max(ax.lines[0].get_ydata()))
+ax.set_ylim(bottom, highest + 0.20 * (top - bottom))
 labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
 print(save_figure(fig, f"figures/pattern_hkl_{STEM}"))
 print(f"{len(labels)} labels written")
@@ -1386,7 +1394,7 @@ STANDARD_FILE = "data/standards/lab6.xrdml"
 STANDARD_CIF = "cifs/lab6.cif"
 PHASE = "LaB6"
 STANDARD_A = 4.156826
-STEM = "aeris"
+STEM = "instrument"
 
 install = find_gsas2()
 print(f"GSAS-II Python: {install.python}")
@@ -1478,7 +1486,7 @@ STEM = "x10"
 COMPOSITION = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
 FORMULA_UNITS = 5
 ARCHIMEDES, ESD_ARCHIMEDES = 5.15, 0.02
-INSTPRM = "data/standards/aeris.instprm"
+INSTPRM = "data/standards/instrument.instprm"
 PHASE_CIF = "cifs/ttb.cif"
 PHASE = "TTB"
 
@@ -1620,7 +1628,7 @@ STANDARD_FILE = "data/standards/lab6.xrdml"
 STANDARD_CIF = "cifs/lab6.cif"
 PHASE = "LaB6"
 STANDARD_A = 4.156826
-STEM = "aeris"
+STEM = "instrument"
 
 install = find_gsas2()
 print(f"GSAS-II Python: {install.python}")
@@ -1743,7 +1751,7 @@ Rwp 7.160 per cent, GOF 1.909
 
 That run takes a few seconds. The refined file is the one the run exports,
 `result["exports"]["instprm"]`, not the starting file, so the last line copies
-it to `data/standards/aeris.instprm`, which is where the sample refinements
+it to `data/standards/instrument.instprm`, which is where the sample refinements
 read it from. The starting file keeps the same stem with `_start` on the end,
 so the two are never confused. Note every path handed to `build_refine_job`
 above is made absolute with `resolve`. `run_job` runs the driver inside the
@@ -1804,7 +1812,7 @@ STEM = "x10"
 COMPOSITION = {"Sr": 0.40, "Ba": 0.50, "La": 0.10, "Nb": 1.90, "Ti": 0.10, "O": 6.0}
 FORMULA_UNITS = 5
 ARCHIMEDES, ESD_ARCHIMEDES = 5.15, 0.02
-INSTPRM = "data/standards/aeris.instprm"
+INSTPRM = "data/standards/instrument.instprm"
 PHASE_CIF = "cifs/ttb.cif"
 PHASE = "TTB"
 
@@ -2295,7 +2303,7 @@ from xrdkit import (
 CONFIG_FILE = "config/samples.toml"
 SAMPLE_ID = "10"
 STEM = "x10"
-INSTPRM = "data/standards/aeris.instprm"
+INSTPRM = "data/standards/instrument.instprm"
 
 config = load_config(CONFIG_FILE)
 sample, structure = sample_settings(config, SAMPLE_ID)
@@ -2526,7 +2534,7 @@ from xrdkit import load_config, sample_settings
 CONFIG_FILE = "config/samples.toml"
 SAMPLE_ID = "10"
 STEM = "x10"
-INSTPRM = "data/standards/aeris.instprm"
+INSTPRM = "data/standards/instrument.instprm"
 
 config = load_config(CONFIG_FILE)
 sample, structure = sample_settings(config, SAMPLE_ID)
