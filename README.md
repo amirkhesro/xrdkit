@@ -218,19 +218,19 @@ installed and your own scan copied into it:
 
 ```bash
 xrdkit init --name demo
-xrdkit add-sample data/raw/10c.xrdml --structure ttb_x010
-xrdkit check 10c
-xrdkit lattice 10c
-xrdkit lebail 10c
+xrdkit add-sample data/raw/sample1.xrdml --structure ttb_p4bm
+xrdkit check sample1
+xrdkit lattice sample1
+xrdkit lebail sample1
 ```
 
 `init` writes `xrdkit.toml` and makes its folders. `add-sample` appends a
-`[samples.10c]` table naming the scan. `check` reports the data quality of the
-sample's scan with a verdict per workflow. `lattice` refines its cell, volume
-and density to `results/lattice/10c`. `lebail` extracts the cell in GSAS-II to
-`results/lebail/10c`. Fill in the instrument and structure tables that `init`
-leaves commented in `xrdkit.toml` before adding a sample; `check` and `lattice`
-also take a scan file in place of a sample key.
+`[samples.sample1]` table naming the scan. `check` reports the data quality of
+the sample's scan with a verdict per workflow. `lattice` refines its cell,
+volume and density to `results/lattice/sample1`. `lebail` extracts the cell in
+GSAS-II to `results/lebail/sample1`. Fill in the instrument and structure
+tables that `init` leaves commented in `xrdkit.toml` before adding a sample;
+`check` and `lattice` also take a scan file in place of a sample key.
 
 ## Status
 

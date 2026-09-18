@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `docs/GETTING_STARTED.md` matches the package as it is: the formats the
+  reader accepts and where a text pattern's wavelength comes from, Section 8
+  as the known limitations rather than a script, the `xrdkit` commands beside
+  the scripts, and the folders `xrdkit init` and the figure writer make.
 - The README reads as the page a user meets on PyPI: install from PyPI, a
   worked example of five commands run in a folder of your own, no repository
   in any of them, links that resolve off GitHub, and an email route for a bug
@@ -186,6 +190,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The command help no longer says a scan is a `.xrdml`: `check`, `plot`,
+  `stack` and `lattice` describe their argument as a `.xrdml`, `.xy` or `.xye`
+  file, or a sample key. No behaviour changed.
 - `xrdkit rietveld` refuses to replace an existing result: when the result
   JSON of a mode it is to run is already in the output folder it stops before
   refining, names the files and returns 1. `--overwrite` replaces them. It used

@@ -112,6 +112,12 @@ C:\Users\<name>\xrd\
 
 Check it with `ls`, which should list the six folders just made.
 
+Three of those folders, `data/raw`, `cifs` and `results`, are also made by
+`xrdkit init`, which writes the project file `xrdkit.toml` beside them; run it
+in this folder once Step A4 has installed the kit, if a project file is
+wanted. `figures` is made by the figure writer the first time a script saves
+one, so it need not exist in advance.
+
 ### Step A4. Install xrdkit
 
 With the terminal still open, type:
@@ -254,6 +260,12 @@ The result is the layout that Section 3 of the user guide describes.
 
 Check it with `ls`, which should list the six folders just made.
 
+Three of those folders, `data/raw`, `cifs` and `results`, are also made by
+`xrdkit init`, which writes the project file `xrdkit.toml` beside them; run it
+in this folder once Step B4 has installed the kit, if a project file is
+wanted. `figures` is made by the figure writer the first time a script saves
+one, so it need not exist in advance.
+
 ### Step B4. Install xrdkit
 
 With the terminal still open, type:
@@ -342,11 +354,13 @@ or Part B.
 ### Step 6. Running the scripts in the user guide
 
 There is no menu and no dialogue to click through in
-[USER_GUIDE.md](USER_GUIDE.md): the way to use the kit is to put the lines of a
-code block into a file, save the file, and run it. Section 2, each of the four
-workflows, and Section 8 begin with a part headed Start here: the complete
-script, which gives the whole of a script in one block under the name to save
-it as, so one copy is all it takes. The procedure is the same every time.
+[USER_GUIDE.md](USER_GUIDE.md): the way to follow it is to put the lines of a
+code block into a file, save the file, and run it. Section 2 and each of the
+four workflows begin with a part headed Start here: the complete script, which
+gives the whole of a script in one block under the name to save it as, so one
+copy is all it takes. Section 8 is the known limitations and has no script of
+its own; its 8.1 is prose, and points to Section 3.1 for the formats the reader
+accepts. The procedure is the same every time.
 
 1. In the editor, make a new file and paste the block into it.
 2. Save it in the project folder made in Step 3, under the name the guide gives
@@ -357,6 +371,13 @@ it as, so one copy is all it takes. The procedure is the same every time.
    `cd C:\Users\<name>\xrd` on Windows or `cd ~/xrd` on macOS.
 4. Run it, with `py plot_pattern.py` on Windows or `python3 plot_pattern.py` on
    macOS.
+
+The kit is also a command. `xrdkit check`, `plot`, `stack`, `density`,
+`lattice`, `lebail` and `rietveld` do the same work from the terminal, each
+taking a scan file or the key of a sample recorded in `xrdkit.toml`, and
+`xrdkit COMMAND --help` describes one in full. The scripts and the commands
+reach the same results; the guide is written as scripts because a script is
+easier to change and to keep.
 
 Four things follow from running a script that way.
 
@@ -457,9 +478,14 @@ resolved.
 
 ### Step 8. Copying a scan from the diffractometer
 
-The diffractometer writes a file ending in `.xrdml`, which is the only format
-the reader accepts. Copy it, by USB stick or over the network share the
-instrument writes to, into the `data/raw` folder of the project.
+The diffractometer writes the scan to a file. The reader accepts `.xrdml` and
+the two and three column text patterns `.xy` and `.xye`: most diffractometer
+software exports one of these directly, and for any other format a converter
+that writes `.xy` will do. Copy the file, by USB stick or over the network
+share the instrument writes to, into the `data/raw` folder of the project. A
+`.xy` or `.xye` carries no wavelength, so it is given on the command line with
+`--wavelength`, or by the instrument table of the project file when the scan is
+named as a sample.
 
 Copy it rather than moving it, and do not open it in anything that might write
 it back. The raw file is the record of what the instrument measured, the kit
@@ -517,8 +543,8 @@ run. Three things go wrong at this point more often than anything else. A
 finish, or was run under a different Python from the one running the script. A `FileNotFoundError`
 means the terminal is not in the project folder, or the scan is not in
 `data/raw` under the name the script uses. An error from the reader means the
-file is not an `.xrdml`; Section 3 of the user guide gives what the reader
-accepts and Section 8.1 gives what to do with a scan in another format.
+file is not one of the formats it accepts; Section 3.1 of the user guide lists
+them and says how to supply the wavelength a text pattern leaves out.
 
 ### Step 10. VESTA, if structures are to be looked at
 

@@ -305,7 +305,7 @@ def _add_check(subparsers) -> None:
         "check",
         help="report the data quality of a scan, with a verdict per workflow",
         description=(
-            "Read a .xrdml scan, print its range, step, counting time and "
+            "Read a scan, print its range, step, counting time and "
             "intensities, and say whether it is good enough for plotting, phase "
             "identification, a Le Bail fit and a Rietveld refinement, by the "
             "criteria of the user guide, Section 2. For a sample of the project "
@@ -314,7 +314,9 @@ def _add_check(subparsers) -> None:
         ),
     )
     parser.add_argument(
-        "scan", metavar="SCAN", help="path to a .xrdml file, or a sample key"
+        "scan",
+        metavar="SCAN",
+        help="path to a .xrdml, .xy or .xye file, or a sample key",
     )
     parser.add_argument(
         "--json", action="store_true", help="print the result as JSON instead"
@@ -621,7 +623,7 @@ def _add_plot(subparsers) -> None:
         "plot",
         help="plot one scan, list its peaks, and label them with hkl given a cell",
         description=(
-            "Plot one .xrdml scan and write its peak list. With --cell the peaks "
+            "Plot one scan and write its peak list. With --cell the peaks "
             "are indexed from that start cell, of any crystal system, the "
             "indexing is written out, and a second figure is labelled with hkl; "
             "if they cannot be indexed the command fails. Without --cell no "
@@ -635,7 +637,9 @@ def _add_plot(subparsers) -> None:
         ),
     )
     parser.add_argument(
-        "scan", metavar="SCAN", help="path to a .xrdml file, or a sample key"
+        "scan",
+        metavar="SCAN",
+        help="path to a .xrdml, .xy or .xye file, or a sample key",
     )
     parser.add_argument(
         "--label",
@@ -714,14 +718,17 @@ def _add_stack(subparsers) -> None:
         "stack",
         help="plot several scans stacked one above the other",
         description=(
-            "Plot several .xrdml scans stacked vertically, drawn bottom to top in "
+            "Plot several scans stacked vertically, drawn bottom to top in "
             "the order given, each with its label. Files and sample keys of the "
             "project file may be mixed; with a sample among them and no --out "
             "the figure goes to results/stack/STEM under the project root."
         ),
     )
     parser.add_argument(
-        "scans", metavar="SCAN", nargs="+", help="paths to .xrdml files, or sample keys"
+        "scans",
+        metavar="SCAN",
+        nargs="+",
+        help="paths to .xrdml, .xy or .xye files, or sample keys",
     )
     parser.add_argument(
         "--labels",
@@ -1538,7 +1545,9 @@ def _add_lattice(subparsers) -> None:
         ),
     )
     parser.add_argument(
-        "scan", metavar="SCAN", help="path to a .xrdml file, or a sample key"
+        "scan",
+        metavar="SCAN",
+        help="path to a .xrdml, .xy or .xye file, or a sample key",
     )
     _add_cell_options(parser, "start cell to index from")
     parser.add_argument(
