@@ -2242,3 +2242,321 @@ good Le Bail scan and a marginal Rietveld one. That, and not the refinement
 strategy, is why the A site occupancies would not resolve, and no rearrangement
 of the stages will change it. Go back for better data when the limitation is
 the data.
+
+## 9. What the commands write
+
+Every command prints one line per file it writes, so the terminal is always
+the first answer to where something went. This section is the second: what
+each file holds, and where the record of how it was made is kept.
+
+The rule the kit follows is that any file carrying a number you might put in a
+paper also carries the inputs it came from, the method in one sentence, the
+date and the version of xrdkit that wrote it. For a CSV those are columns; for
+a result JSON they are the `inputs`, `method` and `date` keys; for a write up
+they are the settings block at the top. Nothing that matters is left to be
+remembered.
+
+Running every command of Sections 2 to 8 once, as this guide did, adds 144
+files to the project folder, counting the project file itself and the eleven
+CIFs fetched from the database. Most of them are the GSAS-II working files of
+the refinements, which are kept so that a run can be reproduced or inspected
+and which nobody reads day to day.
+
+### 9.1 init
+
+`xrdkit.toml`, the project file, is the only file written, and `data/raw`,
+`cifs` and `results` are created if missing. Nothing is recorded in it but the
+project name and the format version, because nothing has been measured yet. An
+existing project file is never overwritten.
+
+### 9.2 add-sample
+
+`xrdkit.toml` is appended to, with a `[samples.KEY]` table, and the rest of the
+file is left byte for byte as it was. Nothing else is written. The whole file
+is checked with the new table in place before anything is saved, and a key
+already present is refused.
+
+### 9.3 instrument
+
+Two files you will use and several you will not, all under `data/standards`
+when the command is run in a project.
+
+`data/standards/STEM.instprm` is the instrument parameter file itself, the one
+GSAS-II exported, and is what every later refinement reads.
+`data/standards/STEM_instrument.csv` is its record, appended one row per run,
+with the scan, the CIF, the phase, the wavelength, the six cell parameters
+held, the fitting window, the width fit's peak count, U, V, W and rms, every
+refined parameter with its esd, the Rwp and goodness of fit, the radius, the
+path of the file written, and then the method, date and version.
+
+`data/standards/STEM_start.instprm` is the starting file the refinement began
+from, kept so that the two are never confused, and
+`data/standards/work/STEM/` holds the GSAS-II project, its backup and listing,
+the two column copy of the scan, the exported histogram and reflections, the
+job as JSON, the result as JSON and the log.
+
+With `--name`, `xrdkit.toml` is appended to as well, with an
+`[instruments.KEY]` table.
+
+### 9.4 check
+
+For a sample key, `results/check/KEY/check_KEY.txt`, the report exactly as it
+was printed, headed by the key and composition. For a scan named as a path,
+nothing is written at all. With `--json` the report goes to the terminal as
+JSON instead and, for a sample, `check_KEY.json` is written in place of the
+text.
+
+The report is a snapshot of the scan rather than a derived number, so it
+carries no method or version line; what makes it reproducible is that it is
+computed from the scan alone.
+
+### 9.5 plot
+
+Six files for a sample with a cell to index against, under
+`results/plot/KEY`: `peaks_KEY.csv`, `pattern_KEY.png` and `.pdf`,
+`indexed_KEY.csv`, and `pattern_hkl_KEY.png` and `.pdf`. Without a cell the
+indexing file and the hkl figure are not written. For a scan named as a path
+the peak list and indexing go to `results` and the figures to `figures` under
+the working folder, which is why this guide's second plot run left
+`results/peaks_powder_a.csv`, `results/indexed_powder_a.csv` and four files in
+`figures`.
+
+`peaks_KEY.csv` gives each peak its position, intensity, prominence, width, d
+spacing and relative intensity. `indexed_KEY.csv` gives each peak the
+reflection assigned to it, how far the two differ and how many candidates were
+within tolerance. Both are replaced on a rerun, and neither carries a method
+line: the refined cell they came from is printed and belongs in the lattice
+record rather than here.
+
+### 9.6 stack
+
+Two files, `stack_STEM.png` and `.pdf`, under `results/stack/STEM` when a
+sample is among the scans and under `figures` otherwise. Nothing else, and
+both are replaced on a rerun.
+
+### 9.7 phases
+
+The CIFs go to `cifs/cod/<id>.cif`, one per candidate, and are not fetched
+again once they are there. `cifs/cod/index.csv` is the register of reference
+CIFs, with the file, source, identifier, formula, space group, the six cell
+parameters, the reference and your notes. It is updated rather than rewritten,
+so a row you have annotated survives a fresh download.
+
+Under `results/phases/KEY` go three files. `phases_KEY.csv` is the ranking,
+with the rank, COD id, formula, space group, the explained and missing counts,
+the score, the rejection reason and the path of the CIF.
+`phases_KEY_unexplained.csv` is one row per peak no candidate explained, with
+its two theta, d spacing, and the main phase and reflection that account for
+it or nothing where none does. `phases_KEY_record.csv` is the record of the
+run, appended one row per run: the scan, the sample, the wavelength, the
+elements, the space group filter, the zero, the window, the tolerance, the
+peaks observed, the candidates searched and fetched, the peaks left over, the
+main phase, the index path, and the method, date and version. The ranking and
+the unexplained list are replaced on a rerun; the record grows.
+
+### 9.8 lattice
+
+Two files, under `results/lattice/KEY` for a sample and directly under
+`results/lattice` for a scan named as a path.
+
+`peaks_STEM.csv` is one row per peak with the seventeen columns Section 7.7
+describes, from the found position through the flags to the assigned
+reflection, and is replaced on a rerun. `lattice_KEY.csv` is appended one row
+per run, so a series of samples or a series of attempts builds into one table,
+and carries the inputs, the refined cell and volume with esds, the zero and
+displacement with their refined flags, the radius, the seven peak counts, the
+rms and coarse window, the density block, and the method, date and version.
+
+### 9.9 density
+
+One file, `results/density.csv`, appended one row per run, or
+`results/density_STEM.csv` with `--stem`, or
+`results/density/KEY/density_KEY.csv` for a sample key. Its columns are the
+formula and Z, the crystal system and the six cell parameters with esds, the
+volume with its esd, the formula mass, the theoretical density with its esd,
+the Archimedes density with its esd, the relative density with its esd, and
+the method, date and version.
+
+### 9.10 lebail
+
+Nine files are printed, under `results/lebail/KEY` or under the folder
+`--out` names, and two more sit beside them unannounced: the project backup
+and the GSAS-II listing. With the four working files that is fifteen in all.
+
+`KEY_lebail_result.json` is the full record: every stage with its status,
+residuals, parameters and atoms, the final model, and the `inputs`, `method`
+and `date` keys that make the run reproducible. `KEY_lebail.gpx` is the GSAS-II
+project, with a `.bak0.gpx` backup and a `.lst` listing beside it.
+`KEY_lebail_histogram.csv` holds the observed, calculated, background and
+difference curves point by point, and `KEY_lebail_reflections_PHASE.csv` every
+reflection with its position, indices and extracted intensity.
+`KEY_lebail.instprm` is the instrument file exactly as the run used it.
+`KEY_lebail.png` and `.pdf` are the fitted pattern. `lebail.md` is the write
+up, whose settings block carries the same record in prose. `summary.md`
+gathers the run into one table.
+
+`work/lebail/` holds the job as JSON, the two column copy of the scan, the
+start instrument file and the GSAS-II log.
+
+All of these are replaced on a rerun of the same mode into the same folder,
+which is why `--out` exists.
+
+### 9.11 rietveld
+
+Eight files per mode are printed, under `results/rietveld/KEY`, named from the sample key
+and the mode, and the same shape as the Le Bail set: the result JSON with its
+`inputs`, `method` and `date` keys, the GSAS-II project with its backup and
+listing, the histogram and reflections CSVs, the instrument file as used, the
+figure as png and pdf, and `MODE.md`. One `summary.md` covers the modes
+together. `work/MODE/` holds the jobs, the logs, the start instrument file and
+the CIF the mode built for GSAS-II.
+
+Counting the project backup and the listing that go unprinted, a full three
+mode run leaves sixty-three files: thirty-one in the folder itself and
+thirty-two under `work`. That is what the `results/rietveld/powder_a` folder
+of this guide holds.
+
+Unlike every other command, `xrdkit rietveld` refuses to replace a result it
+would write. Where the result JSON of any mode it is to run is already in the
+folder it stops before refining or writing anything, names the files, and
+returns 1. `--overwrite` replaces them and `--out` writes the new run
+elsewhere. The reason is that each mode reads the result of the one before
+from the same folder, so a half replaced folder would be a mixture of two
+runs.
+
+### 9.12 Appended, replaced and refused
+
+Four files grow a row at a time and are never rewritten: the instrument record
+`STEM_instrument.csv`, the lattice record `lattice_KEY.csv`, the density
+record `results/density.csv` and the phases record
+`phases_KEY_record.csv`. Each is a history of every run of that command on
+that sample, in the order they were made, and each carries its own method,
+date and version, so a row read a year later says what made it. A file with
+columns other than the ones this version writes is refused rather than
+appended to, with a message saying to move it aside.
+
+`cifs/cod/index.csv` is updated in place, row by row, keeping notes you have
+added.
+
+Everything else is replaced by a rerun, except the Rietveld results, which are
+refused without `--overwrite`.
+
+## 10. Known limitations
+
+Eleven things the kit does not do yet, or does in a way worth knowing about
+before you rely on it. Each says what the limitation is, when you meet it and
+what to do meanwhile.
+
+### 10.1 Space group coverage is partial
+
+Indexing and refinement take a cell of any of the seven crystal systems, but
+reflection conditions, the equivalence of reflections and their multiplicities
+come from the symmetry operations of eight space groups only: Pm-3m, P4mm,
+P4bm, P4/mbm, R3c, R3m, Pbnm and Amm2. Given any other symbol `xrdkit plot`
+and `xrdkit lattice` print a note and index without conditions, so a peak may
+be labelled with a reflection the group forbids and the labels are provisional
+until checked by hand. With no space group at all no conditions are applied.
+Trigonal and rhombohedral groups are handled on hexagonal axes only, so a cell
+in the rhombohedral setting has to be converted first.
+
+### 10.2 A recovered satellite carries a bias
+
+A peak `xrdkit lattice` recovers from the K alpha 2 satellites is necessarily
+a blend. To have been flagged at all, a good part of its height must come from
+its parent's K alpha 2 line, and the refit models it as a lone doublet, so its
+fitted position carries a bias. The report prints the number recovered so that
+you can see how much of a refinement rests on such peaks; where that number is
+more than a few, run again with `--no-satellites` and compare.
+
+### 10.3 The Rietveld modes need a CIF beside a library entry
+
+A library entry carries the sites, their kinds and what their Wyckoff
+positions leave free, but no coordinates. A structure given as `library` alone
+runs `xrdkit lebail` and then stops at the fixed atoms mode with a message
+asking for `cif`. Find a CIF of the structure type, from the COD as Section 6
+describes or from a licensed database, and name it beside the entry.
+
+### 10.4 A CIF whose labels differ from the entry's must be mapped by hand
+
+The coordinates and occupancies modes match each site the entry names to the
+CIF atom of the same label and to nothing else. Where a CIF labels its atoms
+otherwise, the `atoms` table has to name them site by site, as Section 8.11
+describes, and the run stops naming the site when there is none.
+
+### 10.5 The amount of an added element follows its host
+
+An element the CIF lacks is placed only on the sites the `atoms` table names
+it on, and its amount is split among them in proportion to multiplicity times
+the host element's occupancy. There is no way to say how much of it goes on
+each site. Where the real distribution is known to be different, the way round
+it at present is to edit a CIF that already has the element where you want it
+and name that CIF instead.
+
+### 10.6 Preferred orientation has not been exercised
+
+`--preferred-orientation H K L` adds a stage freeing a March-Dollase ratio
+about that axis, and its flags are checked, but no refinement of a measured
+scan has yet been run with it. Check any result it gives against a scan of the
+same sample loaded to limit texture before relying on it.
+
+### 10.7 One instrument, one histogram, one wavelength
+
+The commands assume one instrument with a constant wavelength: one histogram,
+with K alpha 1 and 2 or K alpha 1 alone, as the instrument parameter file
+describes it. Time of flight and energy dispersive data, and several
+histograms of one sample refined together, are not handled.
+
+### 10.8 The instrument file cannot be made without GSAS-II
+
+`xrdkit instrument` does the Caglioti width fit itself and needs nothing but
+the scan for it, but the fit is not written out on its own: only the refined
+file is, and the refinement is GSAS-II's. So there is no way to get an
+instrument parameter file, even a starting one, without GSAS-II installed. If
+you only want to look at the widths, the library function behind the command
+returns them, and Part II says how to call it.
+
+### 10.9 What xrdkit phases can and cannot find
+
+Three limits meet here, and Section 6 shows all of them.
+
+The search is for entries made of exactly the elements given. A doped
+composition therefore finds nothing, and has to be searched on the elements of
+its parent, with the dopants left out. This is a property of the search rather
+than a defect, but it catches everyone once.
+
+The figure of merit counts lines explained and lines missing without weighting
+either by intensity, so a structure with many weak lines in the right places
+can score well, and the rejection rule, which throws out any candidate whose
+strongest line is absent, is doing most of the real work. Read the missing
+count before the score.
+
+The zero offset is not searched for. A displaced specimen shifts every peak by
+more than the matching tolerance, and the ranking is then meaningless unless
+`--zero` is given, which is why Section 6 takes the offset from the plot run
+of Section 5.
+
+### 10.10 The refined range comes only from the project file
+
+`xrdkit lebail` and `xrdkit rietveld` take the two theta range from the
+`[refine]` table or a sample's own, and there is no command line option for
+it. Trying a different range means editing the project file, as Section 8.4
+does, which is awkward when comparing two ranges on one sample. Use `--out` to
+keep the two runs apart while you do it.
+
+### 10.11 A text pattern carries no counting time
+
+A two or three column `.xy` or `.xye` file records positions and intensities
+and nothing else. `xrdkit check` therefore reports its time per step as
+unknown rather than as a number, and the counting statistics have to be judged
+from the intensities alone. Where the counting time matters to the record,
+keep the instrument's own file beside the converted one.
+
+### 10.12 Where to go next
+
+Part I ends here. Everything above is done with the commands, and for most
+work that is all that is needed.
+
+Part II is the library reference: one section per module, with the functions a
+command calls and the ones it does not, for anyone who wants to do something
+the commands do not cover, to process a series in a loop, or to build a figure
+of their own. It follows below.
