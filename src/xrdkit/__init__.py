@@ -71,7 +71,7 @@ from xrdkit.indexing import (
     indexing_summary,
     refine_cell,
 )
-from xrdkit.io import XRDScan, read_xrdml
+from xrdkit.io import XRDScan, read_scan, read_xrdml, read_xy
 from xrdkit.lattice import LatticeFit, lattice_fit_to_dict, refine_lattice
 from xrdkit.library import Site, StructureEntry, list_entries, load_entry
 from xrdkit.peaks import (
@@ -256,7 +256,9 @@ __all__ = [
     "pseudo_voigt",
     "pseudo_voigt_components",
     "pseudo_voigt_from_components",
+    "read_scan",
     "read_xrdml",
+    "read_xy",
     "refine_cell",
     "refine_lattice",
     "relative_density",

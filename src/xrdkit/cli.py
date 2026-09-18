@@ -61,7 +61,7 @@ from xrdkit.indexing import (
     indexed_to_csv,
     indexing_summary,
 )
-from xrdkit.io import XRDScan, read_xrdml
+from xrdkit.io import XRDScan, read_scan
 from xrdkit.lattice import LatticeFit, refine_lattice
 from xrdkit.library import CELL_PARAMETERS, CRYSTAL_SYSTEMS, load_entry
 from xrdkit.peaks import (
@@ -145,8 +145,11 @@ def _read_scans(paths: Sequence[str]) -> list[XRDScan]:
     scans = []
     for path in paths:
         try:
-            scans.append(read_xrdml(path))
+            scans.append(read_scan(path))
         except (ET.ParseError, ValueError) as error:
+            # A reader that already names the file says it once.
+            if str(error).startswith(str(Path(path))):
+                raise CommandError(str(error)) from error
             raise CommandError(f"cannot read {path}: {error}") from error
     return scans
 
@@ -227,6 +230,17 @@ def _read_inputs(
             instrument = item.project.instruments[item.sample.instrument]
             scans[index] = replace(scans[index], wavelength=instrument.wavelength[0])
     return scans
+
+
+def _require_wavelength(scan: XRDScan, item: _Input) -> float:
+    """The scan's wavelength, refusing a pattern that carries none and was
+    given none: a two column file says nothing about the radiation."""
+    if scan.wavelength is None:
+        raise CommandError(
+            f"{item.path} carries no wavelength; give --wavelength ANGSTROM "
+            "or a sample key"
+        )
+    return scan.wavelength
 
 
 def _output_folders(
@@ -567,7 +581,7 @@ def _run_plot(args: argparse.Namespace) -> int:
             indexed, fit = index_and_refine(
                 peaks,
                 start_cell=cell,
-                wavelength=scan.wavelength,
+                wavelength=_require_wavelength(scan, item),
                 zero_offset=args.zero,
                 space_group=space_group,
             )
@@ -1355,6 +1369,7 @@ def _run_lattice(args: argparse.Namespace) -> int:
             raise CommandError(str(error)) from error
 
     (scan,) = _read_inputs([item], args.wavelength)
+    _require_wavelength(scan, item)
     found = _peaks(item, scan)
     if not found:
         raise CommandError(f"no peaks found in {item.path}")

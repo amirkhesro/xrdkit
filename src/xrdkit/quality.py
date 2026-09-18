@@ -84,7 +84,7 @@ class ScanQuality:
     end_angle: float
     step_size: float
     points: int
-    time_per_step: float
+    time_per_step: float | None
     maximum: float
     median: float
     peak_over_median: float
@@ -194,7 +194,9 @@ def assess_scan(scan: XRDScan) -> ScanQuality:
         end_angle=float(scan.end_angle),
         step_size=float(scan.step_size),
         points=int(intensity.size),
-        time_per_step=float(scan.time_per_step),
+        time_per_step=(
+            None if scan.time_per_step is None else float(scan.time_per_step)
+        ),
         maximum=maximum,
         median=median,
         peak_over_median=_ratio(maximum, median),
@@ -221,7 +223,12 @@ def format_report(quality: ScanQuality) -> str:
         f"range   {q.start_angle:.2f} to {q.end_angle:.2f} degrees",
         f"step    {q.step_size:.4f} degrees",
         f"points  {q.points}",
-        f"time    {q.time_per_step:.1f} s per step",
+        "time    "
+        + (
+            "unknown"
+            if q.time_per_step is None
+            else f"{q.time_per_step:.1f} s per step"
+        ),
         f"maximum {q.maximum:.0f} counts",
         f"median  {q.median:.0f} counts",
         f"peak over median {q.peak_over_median:.0f}",

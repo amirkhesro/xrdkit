@@ -14,14 +14,13 @@ If Python is not yet installed on your machine, start with
 on Windows or macOS, sets up the folder layout used below, and shows how to
 run the scripts in this guide.
 
-Section 2, each of the four workflows, and Section 8 begin with the complete
-script they need, ready to be copied, saved and run: `check_scan.py` in
-Section 2.1, `plot_pattern.py` and `stack_patterns.py` in Section 4.1,
-`identify_phases.py` in Section 5.3, `make_instprm.py` and
-`lattice_density.py` in Section 6.2, `config/samples.toml` and
-`refine_rietveld.py` in Section 7.2, and `read_xy.py` in Section 8.1. What
-follows each of those parts is the same script explained in pieces, and does
-not have to be copied at all.
+Section 2 and each of the four workflows begin with the complete script they
+need, ready to be copied, saved and run: `check_scan.py` in Section 2.1,
+`plot_pattern.py` and `stack_patterns.py` in Section 4.1, `identify_phases.py`
+in Section 5.3, `make_instprm.py` and `lattice_density.py` in Section 6.2, and
+`config/samples.toml` and `refine_rietveld.py` in Section 7.2. What follows
+each of those parts is the same script explained in pieces, and does not have
+to be copied at all.
 
 ## 1. Introduction
 
@@ -197,7 +196,7 @@ one line for the next sample and run it again.
 
 | What you supply | Format | One per | Where it comes from | Required |
 | --- | --- | --- | --- | --- |
-| Raw scan | `.xrdml` | Scan | The diffractometer. PANalytical Aeris, X'Pert3 and Empyrean all write this form, and the reader takes them unchanged | Required |
+| Raw scan | `.xrdml`, `.xy` or `.xye` | Scan | The diffractometer. PANalytical Aeris, X'Pert3 and Empyrean all write `.xrdml`, and the reader takes them unchanged; most other software exports a two column `.xy`, which carries no wavelength, so one has to be supplied | Required |
 | Standard scan | `.xrdml` | Instrument and optical configuration | A LaB6 (SRM 660) or silicon (SRM 640) powder measured on the same instrument with the same optics. It gives the instrumental peak widths and, through them, the instrument parameter file | Required for the Le Bail and Rietveld workflows |
 | CIF | `.cif` | Phase | The Crystallography Open Database, the ICSD, or the supporting information of a paper. Record which, and the entry number, alongside the file | Required for the Rietveld workflow, and for phase matching |
 | Instrument parameter file | `.instprm` | Instrument and optical configuration | Written by the kit from the LaB6 scan, with `xrdkit.gsas2.write_instprm`, from a Caglioti fit to the standard's peak widths | Required for the Rietveld workflow |
@@ -207,22 +206,54 @@ one line for the next sample and run it again.
 
 ### 3.1 What the reader accepts
 
-The reader in `xrdkit.io` is `read_xrdml`, and `.xrdml` is the only format it
-accepts. It parses the XML, takes the intensities from the `counts` element or,
-where the writer used that name instead, from `intensities`, takes the start
-and the end of the two theta axis and derives the step from the number of
-points, takes the counting time per step, takes the K alpha 1 wavelength from
-the used wavelength block, and takes the sample identifier. It returns an
-`XRDScan` whose fields are `two_theta`, `intensity`, `wavelength`,
-`start_angle`, `end_angle`, `step_size`, `time_per_step`, `sample_id` and
-`source_path`.
+`xrdkit.io` reads three formats, and `read_scan` picks the reader by the
+suffix: `read_xrdml` for `.xrdml`, and `read_xy` for a two column `.xy` or a
+three column `.xye`. Every command, and the project file's sample `file` key,
+goes through `read_scan`, so a text pattern is accepted wherever an `.xrdml`
+is, the Le Bail and Rietveld commands included.
 
-Plain text column formats are not supported: there is no reader for two column
-or three column `.xy` or `.xye` files, none for Bruker `.raw` or `.brml`, and
-none for `.gsas` or `.fxye`. A scan in one of those forms has to be converted
-to `.xrdml`, or an `XRDScan` has to be built directly from the columns, since
-it is an ordinary dataclass and every routine downstream of the reader takes an
-`XRDScan` rather than a file path. Section 8.1 shows how.
+`read_xrdml` parses the XML, takes the intensities from the `counts` element
+or, where the writer used that name instead, from `intensities`, takes the
+start and the end of the two theta axis and derives the step from the number of
+points, takes the counting time per step, takes the K alpha 1 wavelength from
+the used wavelength block, and takes the sample identifier.
+
+`read_xy` reads the first two columns as the two theta and the intensity, and a
+third, which an `.xye` carries, as the esd of the intensity. Any number of
+header or comment lines may come first: a line counts as one until the data
+begins, and the data begins at the first line whose first character could begin
+a number, so column headings and comments opened with a hash or a semicolon are
+passed over alike. Fields may be separated by one or more spaces, by tabs, or
+by a comma with or without spaces around it; intensities may be written as
+integers or as decimals; either line ending is read; and blank lines are
+ignored wherever they fall. A line of fewer than two numbers, a field that is
+not a number once the data has begun, or a two theta that does not increase on
+the line before it is refused, with a message naming the file and the line.
+
+Both return an `XRDScan`, whose fields are `two_theta`, `intensity`,
+`wavelength`, `start_angle`, `end_angle`, `step_size`, `time_per_step`,
+`sample_id`, `source_path` and `esd`. A text pattern carries neither a
+wavelength nor a counting time, so after `read_xy` `time_per_step` is None,
+`wavelength` is None unless one was given, and `esd` is None unless the file
+had a third column.
+
+A `.xy` file therefore has to be told what radiation measured it. A sample key
+takes its wavelength from the instrument table of the project file and needs
+nothing further, which is the way to run the Le Bail and Rietveld workflows on
+one. A file named directly on the command line needs `--wavelength ANGSTROM` on
+any command that uses the wavelength: `xrdkit lattice` always, and `xrdkit
+plot` when it is labelling hkl. `xrdkit check` and `xrdkit stack` never use it
+and need nothing. A command that needs the wavelength and is given neither
+refuses before it writes anything, with one line: `xrdkit lattice:
+data/raw/sample.xy carries no wavelength; give --wavelength ANGSTROM or a
+sample key`.
+
+Most diffractometer software exports a two column `.xy` directly, and where it
+does not, any converter that writes one will do; PowDLL and ConvX are two free
+examples. The reader was written to take what such converters produce, which is
+why the rules above are as loose as they are. There is still no reader for
+Bruker `.raw` or `.brml`, or for `.gsas` or `.fxye`; convert one of those to
+`.xy` first.
 
 ### 3.2 Folder layout
 
@@ -3755,70 +3786,24 @@ esds.
 
 ## 8. Known limitations
 
-Eight things the kit does not do yet. The first three are met somewhere in this
-guide and are on the list for the next release; the fourth concerns the K alpha
+Seven things the kit does not do yet. The first two are met somewhere in this
+guide and are on the list for the next release; the third concerns the K alpha
 2 satellites in `xrdkit lattice`, and the last four the `xrdkit lebail` and
-`xrdkit rietveld` commands of Section 7.8. Only the first of them needs code to
-work round, and that code is the script below.
+`xrdkit rietveld` commands of Section 7.8. None of them needs code to work
+round any more.
 
-### 8.1 Start here: the complete script
+### 8.1 The reader is no longer one of them
 
-The reader accepts `.xrdml` and nothing else, so a scan in any other format has
-to be loaded by hand. `XRDScan` is an ordinary dataclass and every routine
-downstream of the reader takes one of those rather than a file path, so filling
-its fields in from two columns of text is the whole of the work.
-`read_xy.py` does that and then finds the peaks, to show that the scan it built
-goes on into the rest of the kit unchanged.
+Until this release the reader took `.xrdml` and nothing else, and this section
+began with a complete script, `read_xy.py`, that filled an `XRDScan` in from
+two columns of text by hand so that a pattern in any other form could be used.
+That script has gone, and with it the limitation it worked round: `read_scan`
+reads `.xy` and `.xye` wherever a scan is named, on the command line or as a
+sample's `file` in the project file. Section 3.1 gives the layouts it accepts
+and how to supply the wavelength that a text pattern leaves out. There is
+nothing in this section to copy.
 
-Save this as `read_xy.py` in the project folder, edit the settings lines at the
-top, and run it with `py read_xy.py` on Windows, or `python3 read_xy.py` on
-macOS.
-
-Start a new file named `read_xy.py`.
-
-```python
-import numpy as np
-
-from xrdkit import XRDScan, find_peaks
-
-# Edit these lines for each new sample. Nothing below needs changing.
-SCAN_FILE = "data/raw/sample.xy"
-SAMPLE = "x10"
-WAVELENGTH = 1.540598
-
-two_theta, intensity = np.loadtxt(SCAN_FILE, unpack=True)
-scan = XRDScan(
-    two_theta=two_theta,
-    intensity=intensity,
-    wavelength=WAVELENGTH,
-    start_angle=float(two_theta[0]),
-    end_angle=float(two_theta[-1]),
-    step_size=float(two_theta[1] - two_theta[0]),
-    time_per_step=0.0,
-    sample_id=SAMPLE,
-    source_path=SCAN_FILE,
-)
-print(
-    f"{scan.sample_id}: {scan.start_angle:.2f} to {scan.end_angle:.2f} degrees, "
-    f"{len(find_peaks(scan))} peaks"
-)
-```
-
-```
-x10: 10.01 to 99.98 degrees, 49 peaks
-```
-
-That one block is the whole of `read_xy.py`. There is nothing further to copy:
-the rest of the section is the eight limitations themselves, this one included.
-
-### 8.2 The eight limitations
-
-The reader accepts `.xrdml` and nothing else. There is no reader for two or
-three column `.xy` or `.xye`, for Bruker `.raw` or `.brml`, or for `.gsas` or
-`.fxye`. A scan in another format can still be used, because `XRDScan` is an
-ordinary dataclass and every routine downstream of the reader takes one of those
-rather than a file path. Load the columns yourself and fill the fields in, as
-`read_xy.py` above does.
+### 8.2 The seven limitations
 
 Space group coverage is partial. Indexing and refinement take a `Cell` of any of
 the seven crystal systems, but reflection conditions, the equivalence of

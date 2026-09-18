@@ -61,7 +61,7 @@ from xrdkit.gsas2 import (
     structure_edits,
     summary_markdown,
 )
-from xrdkit.io import read_xrdml
+from xrdkit.io import read_scan
 from xrdkit.library import DEFAULT_ANIONS, StructureEntry, load_entry
 from xrdkit.plotting import plot_rietveld, save_figure
 from xrdkit.project import (
@@ -1040,7 +1040,7 @@ def resolve_inputs(
             "refinement needs"
         )
     try:
-        scan = read_xrdml(sample.file)
+        scan = read_scan(sample.file)
     except (OSError, ValueError) as error:
         raise PipelineError(f"{sample.file}: cannot be read: {error}") from None
     scan_range = (float(np.min(scan.two_theta)), float(np.max(scan.two_theta)))

@@ -2390,7 +2390,13 @@ def _add_histogram(project, job):
     Returns the histogram and a note of how it was read.
     """
     data_file = job["data_file"]
-    hint = XRDML_HINT if data_file.lower().endswith(".xrdml") else None
+    lowered = data_file.lower()
+    if lowered.endswith(".xrdml"):
+        hint = XRDML_HINT
+    elif lowered.endswith((".xy", ".xye")):
+        hint = XY_HINT
+    else:
+        hint = None
     try:
         histogram = project.add_powder_histogram(
             data_file, job["instprm"], fmthint=hint

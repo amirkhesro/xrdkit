@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `read_xy` reads a two column `.xy` or three column `.xye` pattern: two
+  theta, intensity and, in an `.xye`, the esd of the intensity, which
+  `XRDScan` now carries as `esd`. Any number of header or comment lines may
+  come first, fields are separated by spaces, tabs or a comma, and either
+  line ending is read; a line of fewer than two numbers, a field that is not
+  a number, or a two theta that does not increase is refused by file and
+  line. The file carries no wavelength, so `XRDScan.wavelength` and
+  `time_per_step` may be None.
+- `read_scan` reads a scan of any format the package knows, dispatching on
+  the suffix, and every command and the project file's sample `file` key now
+  go through it: a sample, a scan named on the command line, and a Le Bail or
+  Rietveld refinement all take a `.xy` as readily as an `.xrdml`. Where the
+  wavelength is needed and the file carries none, give `--wavelength` or use a
+  sample key, whose instrument supplies it.
 - `docs/USER_GUIDE.md` — a user guide covering the data each workflow needs in
   numbers, the files and formats to supply, and the three workflows end to end:
   plotting with hkl indices, lattice parameters and theoretical density by Le

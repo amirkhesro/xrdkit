@@ -671,9 +671,9 @@ def _environment(install: Gsas2Install) -> dict[str, str]:
 
 def _write_xy(data_file: Path, workdir: Path) -> Path:
     """A two column copy of an ``.xrdml`` scan in ``workdir``, read by xrdkit."""
-    from xrdkit.io import read_xrdml
+    from xrdkit.io import read_scan
 
-    scan = read_xrdml(data_file)
+    scan = read_scan(data_file)
     path = workdir / f"{data_file.stem}.xy"
     rows = (f"{t:.6f} {i:.10g}" for t, i in zip(scan.two_theta, scan.intensity))
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")

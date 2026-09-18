@@ -1886,3 +1886,100 @@ def test_lebail_json(refinement, capsys) -> None:
     assert any(path.endswith("chain_lebail_result.json") for path in output["files"])
     # The progress lines go to stderr, so that stdout is the JSON alone.
     assert "chain: lebail started" in captured.err
+
+
+def _as_xy(xrdml: Path, path: Path) -> Path:
+    """The same pattern as ``xrdml`` written as two columns, the layout a
+    converter produces. The tests write their own: .gitignore ignores *.xy."""
+    scan = read_xrdml(xrdml)
+    rows = (f"{t:.5f} {i:.3f}" for t, i in zip(scan.two_theta, scan.intensity))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def _on_xy(argv: list[str], xrdml: Path, xy: Path) -> list[str]:
+    """``argv`` with the scan swapped for the .xy copy."""
+    return [str(xy) if part == str(xrdml) else part for part in argv]
+
+
+def test_lattice_on_an_xy_matches_the_equivalent_xrdml(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+    assert main([*argv, "--json"]) == 0
+    from_xrdml = json.loads(capsys.readouterr().out)
+    xrdml = tmp_path / "ttb.xrdml"
+    xy = _as_xy(xrdml, tmp_path / "ttb.xy")
+
+    argv = _on_xy(argv, xrdml, xy) + ["--wavelength", str(LATTICE_WAVELENGTH)]
+    assert main([*argv, "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["wavelength_angstrom"] == LATTICE_WAVELENGTH
+    assert result["n_peaks_indexed"] == from_xrdml["n_peaks_indexed"]
+    for key in ("a_angstrom", "c_angstrom", "volume_a3", "zero_deg"):
+        assert result[key] == pytest.approx(from_xrdml[key], rel=1e-5), key
+
+
+def test_lattice_refuses_an_xy_with_no_wavelength(tmp_path, capsys) -> None:
+    argv, _ = _ttb_lattice_argv(tmp_path)
+    xrdml = tmp_path / "ttb.xrdml"
+    xy = _as_xy(xrdml, tmp_path / "ttb.xy")
+
+    assert main(_on_xy(argv, xrdml, xy)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        f"xrdkit lattice: {xy} carries no wavelength; give --wavelength ANGSTROM "
+        "or a sample key"
+    )
+    assert not (tmp_path / "out").exists()
+
+
+def test_check_reads_an_xy_with_no_wavelength(tmp_path, capsys) -> None:
+    # check never uses the wavelength, so a bare .xy needs nothing.
+    xy = _as_xy(_write_xrdml(tmp_path / "scan.xrdml"), tmp_path / "scan.xy")
+
+    assert main(["check", str(xy)]) == 0
+
+    report = capsys.readouterr().out
+    assert "range   10.00 to 100.00 degrees" in report
+    assert "time    unknown" in report
+
+
+def test_lattice_of_an_xy_sample_takes_the_instrument_wavelength(
+    project, capsys
+) -> None:
+    with (project / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(
+            '\n[structures.sto]\nlibrary = "perovskite/Pm-3m"\n'
+            'composition = "SrTiO3"\ncell = { a = 3.95 }\n'
+        )
+    raw = project / "data" / "raw"
+    _write_doublet_xrdml(raw / "sto.xrdml", Cell.cubic(3.905), "Pm-3m")
+    _as_xy(raw / "sto.xrdml", raw / "sto.xy")
+    assert main(["add-sample", "data/raw/sto.xy", "--structure", "sto"]) == 0
+    capsys.readouterr()
+
+    assert main(["lattice", "sto"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "sample  sto, SrTiO3"
+    assert lines[3].startswith("cubic cell a = 3.905")
+    (row,) = _rows(project / "results" / "lattice" / "sto" / "lattice_sto.csv")
+    assert float(row["a_angstrom"]) == pytest.approx(3.905, abs=0.001)
+
+
+def test_lebail_reads_an_xy_sample(refinement, capsys) -> None:
+    root = refinement.root
+    _as_xy(root / "toy.xrdml", root / "toy.xy")
+    path = root / PROJECT_FILE
+    path.write_text(
+        path.read_text(encoding="utf-8").replace('"toy.xrdml"', '"toy.xy"'),
+        encoding="utf-8",
+    )
+
+    assert main(["lebail", "chain"]) == 0
+
+    result = root / "results" / "lebail" / "chain" / "chain_lebail_result.json"
+    assert result.is_file()
+    assert str(result) in capsys.readouterr().out
