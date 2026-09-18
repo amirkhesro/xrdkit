@@ -71,6 +71,13 @@ from xrdkit.indexing import (
     indexing_summary,
     refine_cell,
 )
+from xrdkit.instrument import (
+    InstrumentRefinement,
+    WidthFit,
+    fit_instrument_widths,
+    kalpha2_wavelength,
+    refine_instrument,
+)
 from xrdkit.io import XRDScan, read_scan, read_xrdml, read_xy
 from xrdkit.lattice import LatticeFit, lattice_fit_to_dict, refine_lattice
 from xrdkit.library import Site, StructureEntry, list_entries, load_entry
@@ -171,6 +178,7 @@ __all__ = [
     "Gsas2Error",
     "Gsas2Install",
     "IndexedPeak",
+    "InstrumentRefinement",
     "LatticeFit",
     "Options",
     "Outcome",
@@ -187,6 +195,7 @@ __all__ = [
     "StartPoint",
     "StructureEntry",
     "TetragonalCell",
+    "WidthFit",
     "WilliamsonHall",
     "XRDScan",
     "ZeroSearch",
@@ -215,6 +224,7 @@ __all__ = [
     "find_project",
     "fit_breadth_models",
     "fit_caglioti",
+    "fit_instrument_widths",
     "fit_profile",
     "fixed_atoms_stages",
     "flag_kalpha2",
@@ -232,6 +242,7 @@ __all__ = [
     "interatomic_distances",
     "is_absent",
     "kalpha2_position",
+    "kalpha2_wavelength",
     "lattice_fit_to_dict",
     "laue_group",
     "laue_orbit",
@@ -260,6 +271,7 @@ __all__ = [
     "read_xrdml",
     "read_xy",
     "refine_cell",
+    "refine_instrument",
     "refine_lattice",
     "relative_density",
     "representative",

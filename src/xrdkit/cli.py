@@ -50,6 +50,7 @@ from xrdkit.density import (
     relative_density,
     theoretical_density,
 )
+from xrdkit.gsas2 import Gsas2Error, find_gsas2
 from xrdkit.indexing import (
     DEFAULT_TOLERANCE,
     DEFAULT_ZERO_OFFSET,
@@ -60,6 +61,13 @@ from xrdkit.indexing import (
     index_peaks,
     indexed_to_csv,
     indexing_summary,
+)
+from xrdkit.instrument import (
+    REFINED_KEYS,
+    WIDTH_WINDOW,
+    fit_instrument_widths,
+    kalpha2_wavelength,
+    refine_instrument,
 )
 from xrdkit.io import XRDScan, read_scan
 from xrdkit.lattice import LatticeFit, refine_lattice
@@ -1813,6 +1821,306 @@ def _run_refinement(
     return 0
 
 
+# What the instrument command records as its method, for the CSV row.
+INSTRUMENT_METHOD = (
+    "Caglioti width fit of a standard scan, then a GSAS-II refinement of the "
+    "zero and the profile terms with the cell held at the certified one"
+)
+
+
+def _instrument_column(key: str) -> str:
+    """A refined parameter's name as a column name: ``SH/L`` as ``sh_l``."""
+    return key.lower().replace("/", "_")
+
+
+def _instrument_table(
+    key: str,
+    wavelength: Sequence[float],
+    ka2: bool,
+    radius: float | None,
+    instprm: str,
+) -> list[str]:
+    """The lines of the ``[instruments.<key>]`` table the command appends."""
+    header = key if BARE_KEY.fullmatch(key) else toml_string(key)
+    lines = [
+        f"[instruments.{header}]",
+        "wavelength = [" + ", ".join(_toml_number(v) for v in wavelength) + "]",
+        f"ka2 = {str(bool(ka2)).lower()}",
+    ]
+    if radius is not None:
+        lines.append(f"radius = {_toml_number(radius)}")
+    lines.append(f"instprm = {toml_string(instprm)}")
+    return lines
+
+
+def _instrument_project(args: argparse.Namespace, item: _Input):
+    """The project the command writes into, and its file, or ``(None, None)``.
+
+    A bad project file is only fatal where ``--name`` has to be appended to it;
+    otherwise the command falls back to the working folder.
+    """
+    if item.project is not None:
+        return item.project, item.project.root / PROJECT_FILE
+    try:
+        path = find_project()
+    except FileNotFoundError:
+        return None, None
+    try:
+        return load_project(path), path
+    except ValueError as error:
+        if args.name is not None:
+            raise CommandError(str(error)) from None
+        return None, path
+
+
+def _run_instrument(args: argparse.Namespace) -> int:
+    # Every input and option is checked, and GSAS-II located, before anything
+    # is written: a standard is refined once and its file read for months.
+    cell = _cell_option(args)
+    if cell is None:
+        raise CommandError(
+            "--cell is required: the certified cell of the standard, one number "
+            "for a cubic one"
+        )
+    low, high = args.window
+    if not low < high:
+        raise CommandError(
+            f"--window takes MIN MAX with MIN below MAX, not {low:g} {high:g}"
+        )
+    cif = Path(args.cif)
+    if not cif.is_file():
+        raise CommandError(f"no such file: {args.cif}")
+    item = _resolve(args.scan, {})
+    (scan,) = _read_inputs([item], args.wavelength)
+    _require_wavelength(scan, item)
+
+    project, project_path = _instrument_project(args, item)
+    stem = args.stem or item.path.stem
+    if args.out is not None:
+        folder = Path(args.out)
+    elif project is not None:
+        folder = project.root / "data" / "standards"
+    else:
+        folder = Path(".")
+    instprm_path = (folder / f"{stem}.instprm").resolve()
+
+    relative = None
+    if args.name is not None:
+        if project is None:
+            raise CommandError(
+                f"no {PROJECT_FILE} in the current folder or above it to add "
+                f"[instruments.{args.name}] to; run xrdkit init"
+            )
+        if args.name in project.instruments:
+            raise CommandError(
+                f"instrument {args.name!r} is in {project_path} already; give "
+                "another --name"
+            )
+        try:
+            relative = instprm_path.relative_to(project.root)
+        except ValueError:
+            raise CommandError(
+                f"{instprm_path} is outside the project folder {project.root}; "
+                "--name needs the instrument file inside it"
+            ) from None
+    try:
+        install = find_gsas2()
+    except FileNotFoundError as error:
+        raise CommandError(str(error)) from None
+
+    report = _printer(args)
+    try:
+        fit = fit_instrument_widths(scan, (low, high))
+    except ValueError as error:
+        raise CommandError(str(error)) from None
+    report(f"peaks   {fit.n_peaks} fitted from {low:g} to {high:g} degrees")
+    report(f"U = {fit.u:.4f}, V = {fit.v:.4f}, W = {fit.w:.4f} degrees squared")
+    report(f"rms of the width fit {fit.rms:.5f} degrees")
+
+    try:
+        refined = refine_instrument(
+            fit,
+            item.path,
+            cif,
+            args.phase or cif.stem,
+            (cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma),
+            folder,
+            stem,
+            folder / "work" / stem,
+            install,
+            args.radius,
+        )
+    except (Gsas2Error, KeyError, OSError, ValueError) as error:
+        raise CommandError(
+            f"the GSAS-II refinement of the standard failed: {error}"
+        ) from None
+    report("stages  " + ", ".join(refined.stages))
+    report(f"Rwp {refined.rwp:.3f} per cent, GOF {refined.gof:.3f}")
+    for key, entry in refined.parameters.items():
+        esd = "held" if entry["esd"] is None else f"esd {entry['esd']:.3g}"
+        report(f"  {key:5s} {entry['value']:11.6g}  {esd}")
+
+    row = {
+        "scan": str(item.path),
+        "cif": str(cif),
+        "phase": args.phase or cif.stem,
+        "wavelength_angstrom": fit.wavelength,
+        **{
+            name: value
+            for name, value in _cell_columns(cell, None).items()
+            if not name.startswith("esd_")
+        },
+        "window_min_deg": fit.window[0],
+        "window_max_deg": fit.window[1],
+        "n_peaks_fitted": fit.n_peaks,
+        "fit_u_deg2": fit.u,
+        "fit_v_deg2": fit.v,
+        "fit_w_deg2": fit.w,
+        "fit_rms_deg": fit.rms,
+    }
+    for key in REFINED_KEYS:
+        entry = refined.parameters.get(key) or {}
+        name = _instrument_column(key)
+        row[f"refined_{name}"] = entry.get("value")
+        row[f"esd_{name}"] = entry.get("esd")
+    row.update(
+        {
+            "rwp_percent": refined.rwp,
+            "gof": refined.gof,
+            "radius_mm": args.radius,
+            "instprm": str(refined.instprm),
+            "method": INSTRUMENT_METHOD,
+            "date": datetime.datetime.now(datetime.UTC).astimezone().date().isoformat(),
+            "xrdkit_version": __version__,
+        }
+    )
+    written = [refined.instprm, _append_row(folder / f"{stem}_instrument.csv", row)]
+
+    if args.name is not None:
+        kalpha2 = kalpha2_wavelength(item.path)
+        wavelengths = [fit.wavelength] if kalpha2 is None else [fit.wavelength, kalpha2]
+        lines = _instrument_table(
+            args.name,
+            wavelengths,
+            kalpha2 is not None,
+            args.radius,
+            relative.as_posix(),
+        )
+        # As add-sample does: the file as it is, byte for byte, with the table
+        # appended in its own line endings, and only once it still reads.
+        original = project_path.read_bytes()
+        newline = "\r\n" if b"\r\n" in original else "\n"
+        text = original.decode("utf-8")
+        ending = "" if not text or text.endswith("\n") else newline
+        addition = ending + newline + newline.join(lines) + newline
+        try:
+            load_project_text(text + addition, project_path)
+        except ValueError as error:
+            raise CommandError(str(error)) from None
+        project_path.write_bytes(original + addition.encode("utf-8"))
+        report("\n".join(lines))
+        written.append(project_path)
+
+    return _finish(
+        args,
+        written,
+        n_peaks_fitted=fit.n_peaks,
+        fit_u_deg2=fit.u,
+        fit_v_deg2=fit.v,
+        fit_w_deg2=fit.w,
+        fit_rms_deg=fit.rms,
+        stages=list(refined.stages),
+        rwp_percent=refined.rwp,
+        gof=refined.gof,
+        parameters=refined.parameters,
+        instrument=args.name,
+    )
+
+
+def _add_instrument(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "instrument",
+        help="instrument parameter file from a standard scan, refined in GSAS-II",
+        description=(
+            "Fit the widths of a standard's reflections to the Caglioti "
+            "relation, refine the zero and the profile terms in GSAS-II with "
+            "the cell held at --cell, and write the instrument parameter file "
+            "every later Le Bail and Rietveld refinement reads, with a record "
+            "of how it was made beside it. The starting file keeps the same "
+            "stem with _start on the end, and the GSAS-II project and its logs "
+            "go under work/ in the same folder. Every input and option is "
+            "checked, and GSAS-II located, before anything is written."
+        ),
+    )
+    parser.add_argument(
+        "scan",
+        metavar="SCAN",
+        help="the standard's scan: a .xrdml, .xy or .xye file, or a sample key",
+    )
+    parser.add_argument(
+        "--cif", metavar="CIF", required=True, help="the standard's CIF"
+    )
+    _add_cell_options(parser, "the standard's certified cell")
+    parser.add_argument(
+        "--phase",
+        metavar="NAME",
+        help="phase name for GSAS-II (default: the CIF's file stem)",
+    )
+    parser.add_argument(
+        "--wavelength",
+        type=float,
+        metavar="ANGSTROM",
+        help="K alpha 1 wavelength (default: the scan's own, or the instrument's)",
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        metavar="MM",
+        help=(
+            "goniometer radius in mm, written into the instrument file so that "
+            "GSAS-II refines a specimen displacement in the right geometry"
+        ),
+    )
+    parser.add_argument(
+        "--window",
+        nargs=2,
+        type=float,
+        default=list(WIDTH_WINDOW),
+        metavar=("MIN", "MAX"),
+        help=(
+            "two theta range the widths are fitted over (default: "
+            f"{WIDTH_WINDOW[0]:g} {WIDTH_WINDOW[1]:g})"
+        ),
+    )
+    parser.add_argument(
+        "--name",
+        metavar="KEY",
+        help=(
+            f"also append an [instruments.KEY] table to {PROJECT_FILE}, with the "
+            "wavelengths, ka2, the radius where given and the path of the file "
+            "written; refused if the key is there already"
+        ),
+    )
+    parser.add_argument(
+        "--stem", help="name the output files take (default: the scan's file stem)"
+    )
+    parser.add_argument(
+        "--out",
+        metavar="DIR",
+        help=(
+            "folder for the instrument file and its record (default: "
+            f"data/standards under the project root when {PROJECT_FILE} is "
+            "found, else the current folder)"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the files written and the numbers as JSON, progress on stderr",
+    )
+    parser.set_defaults(handler=_run_instrument)
+
+
 def _run_lebail(args: argparse.Namespace) -> int:
     # Every option and input is checked before anything is written.
     cell = _cell_option(args)
@@ -2175,6 +2483,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_stack(subparsers)
     _add_density(subparsers)
     _add_lattice(subparsers)
+    _add_instrument(subparsers)
     _add_lebail(subparsers)
     _add_rietveld(subparsers)
     return parser

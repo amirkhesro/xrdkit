@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `xrdkit instrument SCAN --cif CIF --cell ...`, which makes the instrument
+  parameter file from a standard's scan: it fits the widths of the standard's
+  reflections to the Caglioti relation, refines the zero and the profile terms
+  in GSAS-II with the cell held at `--cell`, and writes `STEM.instprm` with a
+  record of how it was made beside it. `--window`, `--phase`, `--radius`,
+  `--wavelength`, `--stem`, `--out` and `--json` tune it, and `--name KEY`
+  appends an `[instruments.KEY]` table to `xrdkit.toml`. Every input and
+  option is checked, and GSAS-II located, before anything is written.
+- `xrdkit.instrument`: `fit_instrument_widths`, which gives the Caglioti width
+  fit of a standard scan as a `WidthFit` and needs no GSAS-II, and
+  `refine_instrument`, which runs the refinement from one and gives back the
+  refined parameters with their esds, Rwp and GOF as an `InstrumentRefinement`.
+  `kalpha2_wavelength` reads the K alpha 2 an `.xrdml` records.
 - `read_xy` reads a two column `.xy` or three column `.xye` pattern: two
   theta, intensity and, in an `.xye`, the esd of the intensity, which
   `XRDScan` now carries as `esd`. Any number of header or comment lines may

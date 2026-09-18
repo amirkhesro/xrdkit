@@ -1,5 +1,6 @@
 """Tests for xrdkit.cli."""
 
+import copy
 import csv
 import datetime
 import json
@@ -14,10 +15,13 @@ import numpy as np
 import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
+import xrdkit
 from xrdkit import (
     Cell,
+    Gsas2Install,
     TetragonalCell,
     cli,
+    find_gsas2,
     find_peaks,
     generate_reflections,
     index_and_refine,
@@ -26,6 +30,7 @@ from xrdkit import (
 )
 from xrdkit.cli import HKL_HEADROOM, main
 from xrdkit.indexing import DEFAULT_TOLERANCE
+from xrdkit.instrument import REFINED_KEYS
 from xrdkit.project import PROJECT_FILE, Sample, load_project
 from xrdkit.quality import WORKFLOWS
 
@@ -98,6 +103,60 @@ def _write_indexable_xrdml(
     )
     path.write_text(text, encoding="utf-8")
     return path, len(isolated)
+
+
+# A cubic standard for xrdkit instrument: Pm-3m near LaB6, drawn as K alpha
+# doublets on a flat background, wide enough for the width fit to have peaks
+# across the window.
+STANDARD_A = 4.15683
+STANDARD_CIF = """data_LaB6
+_cell_length_a  4.15683
+_cell_length_b  4.15683
+_cell_length_c  4.15683
+_cell_angle_alpha  90
+_cell_angle_beta   90
+_cell_angle_gamma  90
+_symmetry_space_group_name_H-M  "P m -3 m"
+loop_
+   _atom_site_label
+   _atom_site_type_symbol
+   _atom_site_fract_x
+   _atom_site_fract_y
+   _atom_site_fract_z
+   _atom_site_occupancy
+   _atom_site_U_iso_or_equiv
+La  La  0.0  0.0  0.0     1.0  0.0086
+B   B   0.5  0.5  0.2021  1.0  0.0090
+"""
+
+
+def _write_standard_xrdml(path: Path) -> Path:
+    """The standard drawn from a Caglioti relation, as an .xrdml."""
+    step = 0.013
+    two_theta = np.arange(8.0, 100.0, step)
+    counts = np.full(two_theta.size, 200.0)
+    reflections = generate_reflections(
+        Cell.cubic(STANDARD_A), 1.540598, 99.0, space_group="Pm-3m"
+    )
+    for reflection in reflections:
+        centre = reflection.two_theta
+        if centre < 10.0:
+            continue
+        tan_theta = np.tan(np.radians(centre / 2.0))
+        fwhm = np.sqrt(0.0060 * tan_theta**2 - 0.0035 * tan_theta + 0.0045)
+        sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        height = 6000.0 * reflection.multiplicity / 8.0
+        counts += height * np.exp(-0.5 * ((two_theta - centre) / sigma) ** 2)
+        theta = np.radians(centre / 2.0)
+        satellite = 2.0 * np.degrees(np.arcsin(np.sin(theta) * 1.544426 / 1.540598))
+        counts += 0.5 * height * np.exp(-0.5 * ((two_theta - satellite) / sigma) ** 2)
+    text = XRDML.format(
+        start=two_theta[0],
+        end=two_theta[-1],
+        counts=" ".join(str(round(v)) for v in counts),
+    )
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
 def test_check_prints_the_report(tmp_path, capsys) -> None:
@@ -1983,3 +2042,414 @@ def test_lebail_reads_an_xy_sample(refinement, capsys) -> None:
     result = root / "results" / "lebail" / "chain" / "chain_lebail_result.json"
     assert result.is_file()
     assert str(result) in capsys.readouterr().out
+
+
+# xrdkit instrument
+
+
+class FakeInstrumentGsas2:
+    """Plays run_job for the instrument command: it writes the exported
+    instrument parameter file the command copies into place, and a result of
+    the stages the job asked for, keeping every job it was given."""
+
+    def __init__(self, rwp: float = 8.125, gof: float = 1.406):
+        self.jobs = []
+        self.rwp = rwp
+        self.gof = gof
+
+    def __call__(self, job, workdir, install=None):
+        self.jobs.append(copy.deepcopy(job))
+        workdir = Path(workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "refine.log").write_text("fake GSAS-II log\n", encoding="utf-8")
+        prefix = Path(job["export_prefix"])
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        exported = prefix.with_name(prefix.name + ".instprm")
+        # GSAS-II exports the file with the refined values in it; the starting
+        # file the job points at is copied and its Zero replaced, which is
+        # enough for the command to have something real to copy.
+        start = Path(job["instprm"]).read_text(encoding="utf-8")
+        exported.write_text(start.replace("Zero:0.0", "Zero:0.0123"), encoding="utf-8")
+        values = {
+            "Zero": 0.0123,
+            "U": 6.01,
+            "V": -3.52,
+            "W": 4.49,
+            "X": 0.5,
+            "Y": -1.6,
+            "SH/L": 0.0221,
+        }
+        return {
+            "stages": [
+                {
+                    "name": stage["name"],
+                    "status": "clean",
+                    "rwp": self.rwp,
+                    "gof": self.gof,
+                }
+                for stage in job["stages"]
+            ],
+            "completed": True,
+            "final": {
+                "instrument": {
+                    key: {"value": value, "esd": abs(value) * 0.01 + 0.001}
+                    for key, value in values.items()
+                }
+            },
+            "exports": {"instprm": str(exported)},
+        }
+
+
+@pytest.fixture
+def standard(tmp_path, monkeypatch):
+    """A folder with a synthetic standard scan and its CIF, GSAS-II faked."""
+    from xrdkit import instrument as instrument_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cifs").mkdir()
+    (tmp_path / "data" / "standards").mkdir(parents=True)
+    _write_standard_xrdml(tmp_path / "data" / "standards" / "lab6.xrdml")
+    (tmp_path / "cifs" / "lab6.cif").write_text(STANDARD_CIF, encoding="utf-8")
+    monkeypatch.setattr(
+        cli, "find_gsas2", lambda: Gsas2Install(Path("py"), Path("home"))
+    )
+    fake = FakeInstrumentGsas2()
+    monkeypatch.setattr(instrument_module, "run_job", fake)
+    return fake
+
+
+def _instrument_argv(**extra) -> list[str]:
+    argv = [
+        "instrument",
+        "data/standards/lab6.xrdml",
+        "--cif",
+        "cifs/lab6.cif",
+        "--cell",
+        "4.15683",
+    ]
+    for key, value in extra.items():
+        argv.append(f"--{key.replace('_', '-')}")
+        if value is not True:
+            argv.extend(value if isinstance(value, list) else [str(value)])
+    return argv
+
+
+def test_instrument_writes_the_file_and_its_record(tmp_path, standard, capsys) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"))) == 0
+
+    folder = tmp_path / "out"
+    instprm, record = folder / "lab6.instprm", folder / "lab6_instrument.csv"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2:] == [str(instprm), str(record)]
+    assert instprm.is_file() and record.is_file()
+    # The starting file and the GSAS-II project are kept, under their own names.
+    assert (folder / "lab6_start.instprm").is_file()
+    assert (folder / "work" / "lab6").is_dir()
+    assert "Zero:0.0123" in instprm.read_text(encoding="utf-8")
+
+
+def test_instrument_record_columns(tmp_path, standard) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"), radius=145.0)) == 0
+
+    (row,) = _rows(tmp_path / "out" / "lab6_instrument.csv")
+    assert list(row) == [
+        "scan",
+        "cif",
+        "phase",
+        "wavelength_angstrom",
+        "a_angstrom",
+        "b_angstrom",
+        "c_angstrom",
+        "alpha_deg",
+        "beta_deg",
+        "gamma_deg",
+        "window_min_deg",
+        "window_max_deg",
+        "n_peaks_fitted",
+        "fit_u_deg2",
+        "fit_v_deg2",
+        "fit_w_deg2",
+        "fit_rms_deg",
+        "refined_zero",
+        "esd_zero",
+        "refined_u",
+        "esd_u",
+        "refined_v",
+        "esd_v",
+        "refined_w",
+        "esd_w",
+        "refined_x",
+        "esd_x",
+        "refined_y",
+        "esd_y",
+        "refined_sh_l",
+        "esd_sh_l",
+        "rwp_percent",
+        "gof",
+        "radius_mm",
+        "instprm",
+        "method",
+        "date",
+        "xrdkit_version",
+    ]
+    assert row["phase"] == "lab6"
+    assert float(row["a_angstrom"]) == pytest.approx(4.15683)
+    assert float(row["window_min_deg"]) == 10.0
+    assert float(row["window_max_deg"]) == 98.0
+    assert int(row["n_peaks_fitted"]) >= 6
+    assert float(row["refined_zero"]) == pytest.approx(0.0123)
+    assert float(row["rwp_percent"]) == pytest.approx(8.125)
+    assert float(row["radius_mm"]) == 145.0
+    assert row["method"].startswith("Caglioti width fit")
+    assert row["xrdkit_version"] == xrdkit.__version__
+
+
+def test_instrument_radius_reaches_the_instprm(tmp_path, standard) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"), radius=145.0)) == 0
+
+    start = (tmp_path / "out" / "lab6_start.instprm").read_text(encoding="utf-8")
+    assert "Gonio. radius:145.0" in start.splitlines()
+
+
+def test_instrument_without_a_radius_writes_no_radius_line(tmp_path, standard) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"))) == 0
+
+    start = (tmp_path / "out" / "lab6_start.instprm").read_text(encoding="utf-8")
+    assert not [line for line in start.splitlines() if line.startswith("Gonio.")]
+
+
+def test_instrument_prints_the_fit_and_the_parameters(
+    tmp_path, standard, capsys
+) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"), window=["10", "80"])) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("peaks   ") and "from 10 to 80 degrees" in lines[0]
+    assert lines[1].startswith("U = ") and "degrees squared" in lines[1]
+    assert lines[2].startswith("rms of the width fit ")
+    assert lines[3] == "stages  background and scale, zero, U V W, X Y, SH/L"
+    assert lines[4] == "Rwp 8.125 per cent, GOF 1.406"
+    assert [line.split()[0] for line in lines[5:12]] == list(REFINED_KEYS)
+    assert "esd" in lines[5]
+
+
+def test_instrument_json_puts_progress_on_stderr(tmp_path, standard, capsys) -> None:
+    assert main(_instrument_argv(out=str(tmp_path / "out"), json=True)) == 0
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["files"] == [
+        str(tmp_path / "out" / "lab6.instprm"),
+        str(tmp_path / "out" / "lab6_instrument.csv"),
+    ]
+    assert result["rwp_percent"] == pytest.approx(8.125)
+    assert result["gof"] == pytest.approx(1.406)
+    assert result["stages"][0] == "background and scale"
+    assert result["parameters"]["Zero"]["value"] == pytest.approx(0.0123)
+    assert result["n_peaks_fitted"] >= 6
+    assert "Rwp 8.125 per cent" in captured.err
+
+
+def test_instrument_stem_and_phase(tmp_path, standard) -> None:
+    argv = _instrument_argv(out=str(tmp_path / "out"), stem="aeris", phase="LaB6")
+
+    assert main(argv) == 0
+
+    assert (tmp_path / "out" / "aeris.instprm").is_file()
+    (row,) = _rows(tmp_path / "out" / "aeris_instrument.csv")
+    assert row["phase"] == "LaB6"
+    (job,) = [j for j in standard.jobs if j.get("phases")]
+    assert job["phases"][0]["name"] == "LaB6"
+    assert job["phases"][0]["cell"] == [4.15683] * 3 + [90.0] * 3
+    assert [stage["name"] for stage in job["stages"]] == [
+        "background and scale",
+        "zero",
+        "U V W",
+        "X Y",
+        "SH/L",
+    ]
+
+
+# --name, and the project file
+
+
+def _instrument_project(tmp_path, monkeypatch) -> Path:
+    root = (tmp_path / "project").resolve()
+    root.mkdir()
+    (root / "cifs").mkdir()
+    (root / "data" / "standards").mkdir(parents=True)
+    _write_standard_xrdml(root / "data" / "standards" / "lab6.xrdml")
+    (root / "cifs" / "lab6.cif").write_text(STANDARD_CIF, encoding="utf-8")
+    (root / PROJECT_FILE).write_text(
+        '[project]\nname = "demo"\nversion = 1\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(root)
+    return root
+
+
+def test_instrument_appends_the_instrument_table(
+    tmp_path, standard, monkeypatch, capsys
+) -> None:
+    root = _instrument_project(tmp_path, monkeypatch)
+    path = root / PROJECT_FILE
+    before = path.read_bytes()
+
+    assert main(_instrument_argv(name="aeris", radius=145.0)) == 0
+
+    table = [
+        "[instruments.aeris]",
+        "wavelength = [1.540598, 1.544426]",
+        "ka2 = true",
+        "radius = 145",
+        'instprm = "data/standards/lab6.instprm"',
+    ]
+    out = capsys.readouterr().out.splitlines()
+    start = out.index("[instruments.aeris]")
+    assert out[start : start + len(table)] == table
+    after = path.read_bytes()
+    assert after[: len(before)] == before
+    # Appended in the file's own line endings, as add-sample does.
+    newline = "\r\n" if b"\r\n" in before else "\n"
+    assert newline.join(table) in after.decode("utf-8")
+    instrument = load_project(root).instruments["aeris"]
+    assert instrument.wavelength == (1.540598, 1.544426)
+    assert instrument.ka2 is True
+    assert instrument.radius == 145.0
+    assert instrument.instprm == root / "data" / "standards" / "lab6.instprm"
+    # The default folder of a project is data/standards under its root.
+    assert (root / "data" / "standards" / "lab6.instprm").is_file()
+
+
+def test_instrument_refuses_an_instrument_key_that_exists(
+    tmp_path, standard, monkeypatch, capsys
+) -> None:
+    root = _instrument_project(tmp_path, monkeypatch)
+    with (root / PROJECT_FILE).open("a", encoding="utf-8") as handle:
+        handle.write("\n[instruments.aeris]\nwavelength = [1.540598]\nka2 = false\n")
+    before = (root / PROJECT_FILE).read_bytes()
+
+    assert main(_instrument_argv(name="aeris")) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        f"xrdkit instrument: instrument 'aeris' is in {root / PROJECT_FILE} "
+        "already; give another --name"
+    )
+    assert (root / PROJECT_FILE).read_bytes() == before
+    assert not (root / "data" / "standards" / "lab6.instprm").exists()
+
+
+def test_instrument_refuses_name_with_no_project_file(
+    tmp_path, standard, capsys
+) -> None:
+    assert main(_instrument_argv(name="aeris")) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        f"xrdkit instrument: no {PROJECT_FILE} in the current folder or above it "
+        "to add [instruments.aeris] to; run xrdkit init"
+    )
+    assert not (tmp_path / "data" / "standards" / "lab6.instprm").exists()
+
+
+def test_instrument_refuses_an_xy_with_no_wavelength(
+    tmp_path, standard, capsys
+) -> None:
+    scan = tmp_path / "data" / "standards" / "lab6.xy"
+    source = read_xrdml(tmp_path / "data" / "standards" / "lab6.xrdml")
+    scan.write_text(
+        "\n".join(
+            f"{t:.5f} {i:.3f}" for t, i in zip(source.two_theta, source.intensity)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    argv = ["instrument", str(scan), "--cif", "cifs/lab6.cif", "--cell", "4.15683"]
+
+    assert main(argv) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        f"xrdkit instrument: {scan} carries no wavelength; give --wavelength "
+        "ANGSTROM or a sample key"
+    )
+
+
+def test_instrument_refuses_when_gsas2_is_absent(
+    tmp_path, standard, monkeypatch, capsys
+) -> None:
+    def absent():
+        raise FileNotFoundError("no GSAS-II: set XRDKIT_GSAS2_PYTHON")
+
+    monkeypatch.setattr(cli, "find_gsas2", absent)
+
+    assert main(_instrument_argv(out=str(tmp_path / "out"))) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        "xrdkit instrument: no GSAS-II: set XRDKIT_GSAS2_PYTHON"
+    )
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (
+            ["instrument", "data/standards/lab6.xrdml", "--cif", "cifs/lab6.cif"],
+            "--cell is required",
+        ),
+        (_instrument_argv() + ["--window", "98", "10"], "--window takes MIN MAX"),
+        (
+            [
+                "instrument",
+                "data/standards/lab6.xrdml",
+                "--cif",
+                "cifs/absent.cif",
+                "--cell",
+                "4.15683",
+            ],
+            "no such file: cifs/absent.cif",
+        ),
+    ],
+    ids=["no cell", "backwards window", "no cif"],
+)
+def test_instrument_option_errors(tmp_path, standard, capsys, argv, message) -> None:
+    assert main([*argv, "--out", str(tmp_path / "out")]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("xrdkit instrument: ")
+    assert message in captured.err
+    assert not (tmp_path / "out").exists()
+
+
+def test_instrument_with_gsas2(tmp_path, monkeypatch) -> None:
+    try:
+        install = find_gsas2()
+    except FileNotFoundError as error:
+        pytest.skip(str(error))
+
+    (tmp_path / "cifs").mkdir()
+    (tmp_path / "data" / "standards").mkdir(parents=True)
+    _write_standard_xrdml(tmp_path / "data" / "standards" / "lab6.xrdml")
+    (tmp_path / "cifs" / "lab6.cif").write_text(STANDARD_CIF, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(_instrument_argv(out=str(tmp_path / "out"), phase="LaB6")) == 0
+
+    instprm = tmp_path / "out" / "lab6.instprm"
+    assert instprm.is_file()
+    assert install.home.is_dir()
+    (row,) = _rows(tmp_path / "out" / "lab6_instrument.csv")
+    # The pattern is drawn by multiplicity rather than from structure
+    # factors, so the residual is large; that it refined at all is the point.
+    assert 0.0 < float(row["rwp_percent"]) < 100.0
+    assert float(row["gof"]) > 0.0
+    assert float(row["refined_w"]) != 0.0
+    values = dict(line.split(":", 1) for line in instprm.read_text().splitlines()[1:])
+    assert float(values["Lam1"]) == pytest.approx(1.540598, abs=1e-4)
