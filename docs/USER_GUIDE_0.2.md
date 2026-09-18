@@ -122,7 +122,7 @@ command shown, in a folder laid out as Section 2 describes, on these files:
 | --- | --- |
 | `data/raw/pellet_a.xrdml` | a sintered pellet of a tetragonal tungsten bronze, the composition Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6 |
 | `data/raw/pellet_b.xrdml` | a sintered pellet of the same series at a different composition |
-| `data/raw/powder_a.xrdml` | the calcined powder of the first composition, counted for longer |
+| `data/raw/powder_a.xrdml` | the calcined powder of the first composition, measured with the same range, step and counting time |
 | `data/standards/lab6.xrdml` | a scan of NIST SRM 660c lanthanum hexaboride on the same instrument |
 | `cifs/lab6.cif` | the structure of that standard |
 | `cifs/2100720.cif` | the tungsten bronze of COD entry 2100720, the reference structure of the samples |
@@ -534,3 +534,405 @@ whole file is checked with the new table added before anything is written, so
 a table that would not load is refused rather than saved. A key that is
 already in the file is refused too; give `--name` to add the same scan under
 another key.
+
+The other two example samples are added the same way. The second pellet is a
+pellet too.
+
+```console
+xrdkit add-sample data/raw/pellet_b.xrdml --structure ttb_p4bm --form pellet
+```
+
+```text
+[samples.pellet_b]
+file = "data/raw/pellet_b.xrdml"
+instrument = "diffractometer"
+structures = ["ttb_p4bm"]
+form = "pellet"
+```
+
+The calcined powder takes the default form, so `--form` is left out.
+
+```console
+xrdkit add-sample data/raw/powder_a.xrdml --structure ttb_p4bm
+```
+
+```text
+[samples.powder_a]
+file = "data/raw/powder_a.xrdml"
+instrument = "diffractometer"
+structures = ["ttb_p4bm"]
+form = "powder"
+```
+
+The project now names three samples, and every command from here on can be
+given a key rather than a path.
+
+## 4. Checking a scan
+
+What the data must be depends on what you intend to get out of them. A scan
+that is ample for a phase check is not good enough for a lattice parameter,
+and a scan that gives a good lattice parameter is still not good enough for
+refined occupancies. `xrdkit check` measures a scan against the criteria of
+each workflow and says which of them it is within reach of, which is worth
+knowing before you spend an afternoon on a refinement the counting statistics
+will not support.
+
+### 4.1 Running the command
+
+Given a sample key, the command reads the scan the project file names for it.
+
+```console
+xrdkit check pellet_a
+```
+
+It prints the sample and its composition, the numbers it measured, and a
+verdict for each workflow, then the file it wrote.
+
+```text
+sample  pellet_a, Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6
+range   10.01 to 99.98 degrees
+step    0.0217 degrees
+points  4141
+time    34.2 s per step
+maximum 13964 counts
+median  998 counts
+peak over median 14
+high angle maximum 1833 counts, from 69.99 degrees
+high angle median  1012 counts
+
+plotting: suitable
+phase_identification: not suitable (peak over median 14.0, below 20, weak phases may not be visible)
+le_bail: not suitable (range 10.01 to 99.98 degrees, short of 10 to 120; high angle peak over median 1.8, below 10)
+rietveld: not suitable (range 10.01 to 99.98 degrees, short of 5 to 130; step 0.0217 degrees, outside 0.01 to 0.02; strongest peak 13964 counts, below 20000)
+```
+
+The numbers are the measured range and step, the number of points, the
+counting time per step, and the intensities. The median stands in for the
+background, since most of the points in a powder pattern are background, and
+the peak over median is the strongest peak divided by it. The high angle
+numbers are the same two over the last third of the scanned range, which for
+this scan begins at 69.99 degrees, because a cell is refined on the high angle
+reflections and it is their contrast with the background that decides whether
+that can be done.
+
+A workflow that is out of reach is followed by every criterion it failed, each
+with the value measured and the threshold it fell short of, so there is no
+guessing about which number to improve.
+
+For a sample of the project file the report is also kept, under
+`results/check/KEY`, so that the state of a scan at the time it was analysed
+stays on the record.
+
+```text
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\check\pellet_a\check_pellet_a.txt
+```
+
+The same command takes a path instead of a key, which is the way to look at a
+scan that is not in the project at all.
+
+```console
+xrdkit check data/raw/powder_a.xrdml
+```
+
+There is no sample line, because a bare file has no key and no composition,
+and nothing is written: the report goes to the terminal alone.
+
+```text
+range   10.01 to 99.98 degrees
+step    0.0217 degrees
+points  4141
+time    34.2 s per step
+maximum 10032 counts
+median  1079 counts
+peak over median 9
+high angle maximum 1505 counts, from 69.99 degrees
+high angle median  1008 counts
+
+plotting: suitable
+phase_identification: not suitable (peak over median 9.3, below 20, weak phases may not be visible)
+le_bail: not suitable (range 10.01 to 99.98 degrees, short of 10 to 120; high angle peak over median 1.5, below 10)
+rietveld: not suitable (range 10.01 to 99.98 degrees, short of 5 to 130; step 0.0217 degrees, outside 0.01 to 0.02; strongest peak 10032 counts, below 20000)
+```
+
+### 4.2 The criteria, in numbers
+
+These are the criteria the command applies. Plotting and phase identification
+share a column, because they ask nearly the same of a scan; where they differ,
+the counting statistics row says so.
+
+| | Plotting and phase check | Lattice parameters and density, by Le Bail | Rietveld refinement |
+| --- | --- | --- | --- |
+| Purpose | Show what the sample is, identify the phases, label the reflections | Refine a and c, and the cell volume, well enough for a theoretical density | Refine the structure: coordinates, occupancies, displacement parameters |
+| Angular range | 10 to 80 degrees two theta, extended to 90 for a figure meant for publication | 10 to 120 degrees. The reflections above 90 degrees are what pin the cell down, because a given error in d shifts them furthest in two theta | 5 to 130 degrees, or wider where the instrument allows |
+| Step size | 0.01 to 0.03 degrees | 0.013 to 0.026 degrees | 0.01 to 0.02 degrees |
+| Counting statistics | Strongest peak above about 2000 counts, which is all plotting asks of a scan. The phase check adds a background of at least 100 counts per step and a strongest peak at least 20 times it. For a secondary phase at 1 to 2 weight per cent to be visible on a square root or logarithmic scale, the background itself needs at least 100 counts per step, which means three to five times the count time of a quick scan | Strongest peak above 10000 counts, and the high angle peaks at least 10 times the background, since those are the ones the cell is refined on | Strongest peak above 20000 counts, and background above 200 counts per step at high angle. On a laboratory instrument this normally means several hours per scan |
+| Sample preparation | Flat sample, flush with the surface of the holder | Crushed pellet powder preferred. A pellet surface is acceptable if a displacement term is refined | Powder crushed and sieved below about 45 micrometres, then back loaded, side loaded or mounted in a capillary, to limit preferred orientation |
+| Standards needed | None | Either an internal standard, silicon SRM 640 at 10 to 20 weight per cent mixed into the powder, or a refined displacement term. Also an instrument parameter file from a LaB6 (SRM 660) scan on the same instrument and the same optics | An instrument parameter file from a LaB6 scan on the same configuration, a CIF of the expected structure, and a known composition |
+| Radiation | K alpha 2 present is acceptable | K alpha 2 present is acceptable, since the fit follows the K alpha 1 positions | Monochromatic Cu K alpha 1 strongly preferred |
+| What goes wrong otherwise | Weak phases hide in the noise and are missed, so the sample is reported as single phase when it is not. Peaks are too noisy for the peak finder to separate, and labels go on the wrong reflections | The cell is refined on low angle reflections alone, where a displacement error and a cell error look alike, so a and c come out precise and wrong, and the density with them | The refinement runs, but the parameters are not determined by the data. Occupancies and coordinates drift to whatever fits the noise, and the esds do not say so unless they are examined |
+
+Only the angular range, the step size and the counting statistics are checked
+by the command, because only those can be read off a scan. The other rows are
+for you: nothing in a data file says how the powder was mounted or whether a
+standard was measured, and those decide as much as the numbers do.
+
+Two further numbers govern the first three workflows. For hkl labelling, peak
+positions good to about 0.02 degrees are enough, and a zero error of up to
+0.05 degrees does not change which reflection a peak is assigned to. That same
+zero error does change the lattice parameters, which is why the lattice
+workflow either uses an internal standard or refines a displacement or zero
+term: an uncorrected specimen displacement of 0.1 mm shifts a by about 0.001
+angstrom. For a useful density, a and c are needed to a relative precision of
+0.01 per cent, which is about 0.001 angstrom on a 12 angstrom axis, because
+the density goes as the reciprocal of the cell volume and the relative error
+in the density is therefore about three times the relative error in a lattice
+parameter.
+
+### 4.3 What the verdicts said about the example scans
+
+Read against the table, `pellet_a` is comfortable for plotting: it runs from
+10.01 to 99.98 degrees at 0.0217 degrees per step, both inside the plotting
+row, and its strongest peak of 13964 counts is well above the 2000 that row
+asks for. Its peak over median of 14 is short of the 20 the phase check wants,
+so a secondary phase at a per cent or two could be sitting in the background
+unseen, and the phase check is reported as out of reach for that reason alone.
+
+For a Le Bail fit it fails twice over, and the second failure is the
+instructive one. The range stops at 100 degrees rather than 120, which loses
+the reflections that pin the cell down. More telling, the high angle peak over
+median is 1.8 against the 10 asked for: above 70 degrees the strongest peak
+reaches 1833 counts on a background of 1012, so the reflections the cell would
+be refined on are barely clear of the noise. A longer count at high angle is
+what that number is asking for, not a wider range alone.
+
+The Rietveld verdict adds a step size outside 0.01 to 0.02 degrees and a
+strongest peak of 13964 against the 20000 wanted. Taken together the three
+verdicts say what these scans are: quick survey scans, good for seeing what
+the sample is and for labelling its reflections, and not counted long enough
+for a refined cell or a refined structure.
+
+`powder_a` tells the same story a little more sharply. Its strongest peak is
+10032 counts against the pellet's 13964, and its peak over median is 9.3, so
+it is the weaker of the two for a phase check even though it is the calcined
+powder rather than a pellet surface. The two scans were measured with the same
+range, step and counting time, so the difference is in the samples and not in
+the measurement.
+
+### 4.4 The options
+
+`SCAN` is the only argument: a path to a `.xrdml`, `.xy` or `.xye` file, or a
+sample key of the project file. A key brings the composition into the heading
+and sends the report to `results/check/KEY`; a path prints the report and
+writes nothing.
+
+`--json` prints the same numbers and verdicts as JSON instead of the report,
+for a script that wants to read them rather than a person.
+
+The command never uses the wavelength, so a `.xy` or `.xye` scan needs no
+`--wavelength` here. What such a scan does not carry is the counting time, and
+the report says so rather than inventing a number: the time line reads
+`unknown` instead of a value in seconds. Every other line is measured from the
+two theta and intensity columns and reads the same as for an `.xrdml`.
+
+## 5. Plotting and indexing
+
+`xrdkit plot` draws one pattern and writes its peak list, and where it can
+index the peaks it writes the indexing too and labels a second figure with
+hkl. `xrdkit stack` draws several patterns one above another, which is how a
+composition series is shown. Between them they cover the first thing anyone
+does with a new scan.
+
+### 5.1 Plotting a sample
+
+Given a sample key, the command takes the wavelength from the instrument
+table and the start cell, crystal system and space group from the sample's
+first structure, so there is nothing to type but the key.
+
+```console
+xrdkit plot pellet_a
+```
+
+It prints the refined cell and how the indexing went, then every file it
+wrote.
+
+```text
+a = 12.4803, c = 3.9324 angstrom, zero 0.170 degrees, 45 of 49 peaks indexed, rms 0.0109 degrees
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\peaks_pellet_a.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\pattern_pellet_a.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\pattern_pellet_a.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\indexed_pellet_a.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\pattern_hkl_pellet_a.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\plot\pellet_a\pattern_hkl_pellet_a.pdf
+```
+
+Six files: the peak list, the pattern as a png and a pdf, the indexing, and
+the hkl labelled pattern as a png and a pdf. The peak list gives each
+reflection its position, intensity, prominence, full width at half maximum, d
+spacing and relative intensity as a percentage of the strongest peak found.
+The indexing file gives each peak the reflection assigned to it, how far the
+two differ, and whether more than one reflection was within reach. Figures are
+written as a png to look at and a pdf to put in a document, at 300 dots per
+inch.
+
+The zero offset of 0.170 degrees on this scan is worth noticing. It is a
+pellet, and a pellet surface that sits a little proud of the holder shifts
+every peak in the same direction, which is exactly what an apparent zero
+offset looks like. It does not change which reflection a peak is assigned to,
+which is why the labels are sound, but it would change a lattice parameter,
+which is what the lattice workflow deals with.
+
+### 5.2 Plotting a scan that is not in the project
+
+Without a sample key there is no structure to take a cell from, so the cell is
+given on the command line. The reflection conditions of the space group are
+worth giving too, to keep reflections the group forbids out of the labels.
+
+```console
+xrdkit plot data/raw/powder_a.xrdml --cell 12.45 3.94 --space-group P4bm
+```
+
+The same line is printed, and the files go to `results` and `figures` under
+the folder the command was run in rather than to a sample's own folder.
+
+```text
+a = 12.4761, c = 3.9323 angstrom, zero -0.030 degrees, 48 of 49 peaks indexed, rms 0.0159 degrees
+results\peaks_powder_a.csv
+figures\pattern_powder_a.png
+figures\pattern_powder_a.pdf
+results\indexed_powder_a.csv
+figures\pattern_hkl_powder_a.png
+figures\pattern_hkl_powder_a.pdf
+```
+
+This is the same material as `pellet_a` in powder rather than pellet form, and
+the zero offset of minus 0.030 degrees against the pellet's plus 0.170 is the
+difference between a flat powder bed and a pellet surface. The cell comes out
+within a few thousandths of an angstrom of the pellet's, as it should.
+
+### 5.3 What the indexing does
+
+The cell is given as the free parameters of its crystal system, and the count
+of numbers chooses the system: one number is cubic, two are tetragonal, three
+are orthorhombic, four are monoclinic and six are triclinic. Two numbers are
+ambiguous, since tetragonal, hexagonal and trigonal all take a and c, so
+`--system` settles it; tetragonal is taken when nothing is said. The cell
+above, 12.45 and 3.94 angstrom, is the tetragonal tungsten bronze.
+
+The indexing assigns a reflection of the cell to each peak and refines the
+cell as it goes. It works in cycles: the first indexes only the low angle
+peaks with a loose tolerance, where a cell that is still some way off can be
+trusted to put reflections near the right peaks, and each later cycle indexes
+the whole list against the cell the cycle before gave. It searches for the
+zero offset first, unless `--zero` gives one.
+
+Reflection conditions are known for eight space groups: Pm-3m, P4mm, P4bm,
+P4/mbm, R3c, R3m, Pbnm and Amm2. Given one of those, the reflections the group
+forbids are never offered to a peak. Given any other symbol the command says
+so in a note and indexes without conditions, which means a peak may be
+labelled with a reflection its group does not allow, so the labels are
+provisional until the group is checked. Given no space group at all, no
+conditions are applied, which is the same situation without the note.
+
+A cell refined this way is good enough to label reflections with. It is not a
+lattice parameter for publication, which is what `xrdkit lattice` is for: the
+fit here is a linear least squares on the indexed peaks alone, and the zero
+offset it reports is the one that indexed the most peaks rather than one
+refined alongside the cell.
+
+Peaks that look like K alpha 2 satellites are flagged rather than dropped, and
+are removed before the indexing, because a satellite sits at the position its
+parent's d spacing gives at the longer wavelength and indexing it against the
+cell is meaningless. Below about 50 degrees the doublet is not resolved and
+there is nothing to flag. `--no-satellites` drops them from the peak list as
+well, for a list meant to be read rather than to be indexed.
+
+The count of peaks indexed is the number to look at. Of the 49 peaks found in
+`pellet_a`, 45 were assigned a reflection and four were not. A peak that
+matched no reflection is exactly the peak a reader should be looking at, and
+there are four common explanations. A secondary phase gives peaks that do not
+move with composition across a series and that keep a fixed ratio to one
+another; naming that phase is what `xrdkit phases` is for. K beta gives a
+faint copy of a strong reflection at lower angle, where the filter or the
+monochromator is imperfect, at the position the parent's d spacing gives at
+about 1.392 angstrom for copper. Tungsten L lines come from a contaminated or
+an aged tube and appear at fixed angles that do not move with the sample, so
+the same stray peaks turn up in every pattern measured on that instrument. A
+surviving K alpha 2 satellite sits just above its parent and carries roughly
+half the intensity, and is a sign that the flagging did not suit the pattern
+rather than a sign of anything wrong with the sample.
+
+### 5.4 The hkl labels
+
+Each label rides on top of its own peak, a couple of points above the trace,
+which keeps the label and the reflection it names together however the pattern
+rises and falls. The top of the axes is raised above the tallest point of the
+trace before the labels are placed, so that the label on the strongest peak
+stays inside the figure.
+
+Labels are placed strongest first and each is tested against the ones already
+placed, so a weaker peak whose label would collide with one already there
+keeps no label at all. Labels are never stacked or shifted sideways onto a
+neighbour: in a crowded stretch it is the weak reflections that lose theirs,
+which is the behaviour that keeps every label that is drawn pointing at the
+peak it belongs to. Peaks below a few per cent of the strongest are skipped
+from the start, for the same reason.
+
+### 5.5 Stacking several scans
+
+A stack takes two or more scans, files and sample keys mixed as you like, and
+one label for each in the same order.
+
+```console
+xrdkit stack pellet_a pellet_b --labels "x = 0.10" "x = 0.12"
+```
+
+It writes one figure and prints it.
+
+```text
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\stack\pellet_a_pellet_b\stack_pellet_a_pellet_b.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\stack\pellet_a_pellet_b\stack_pellet_a_pellet_b.pdf
+```
+
+The traces are drawn bottom to top in the order given, each labelled at its
+upper right, and are normalised by default so that scans counted for different
+times can be compared. The spacing is 1.2 times the tallest scaled trace,
+which keeps the tallest peak of one pattern clear of the pattern above it.
+
+### 5.6 The options
+
+`--scale` takes `linear`, `sqrt` or `log` and belongs to both commands. A
+linear scale shows the strong reflections in proportion, which suits a figure
+about the main phase. A square root scale brings up the weak ones, which is
+what a phase check wants and what a stack is usually drawn on. Normalisation,
+where it applies, happens after the transform, so a normalised square root
+trace runs from 0 to 1 on the square root scale.
+
+`--label` gives `xrdkit plot` the legend label for its trace, and defaults to
+the scan's sample identifier, or to a sample's key and composition.
+`--labels` gives `xrdkit stack` one label per scan in the same order as the
+scans, and is required: a stack with unlabelled traces says nothing.
+
+`--offset` sets the vertical spacing of a stack in place of the default of 1.2
+times the tallest scaled trace. Raise it where labels crowd the trace above,
+lower it to fit more traces in one figure. `--no-normalise` keeps the measured
+intensities instead of scaling each trace to 1, which is what to use when the
+point of the figure is that one sample counted higher than another.
+
+`--cell` and `--system` are the start cell and its crystal system, as Section
+5.3 describes. `--space-group` names the group whose reflection conditions
+apply, and defaults to the structure's for a sample and to none for a file.
+`--zero` gives the zero offset in degrees rather than letting the indexing
+search for one.
+
+`--no-satellites` drops the peaks flagged as K alpha 2 satellites from the
+peak list and the indexing. `--wavelength` overrides the K alpha 1 wavelength
+used for the d spacings and the indexing, and is needed for a `.xy` or `.xye`
+file that is being indexed, since such a file carries no wavelength of its
+own.
+
+`--stem` names the output files, and defaults to the scan's file stem, or for
+a stack to the scan stems joined by an underscore. `--out` is the output root,
+under which `results` and `figures` are created as needed; without it a sample
+writes to `results/COMMAND/KEY` under the project root and a bare file writes
+to the current folder. `--json` prints the files written and the results as
+JSON.
