@@ -3725,7 +3725,10 @@ whose esd is more than half its range, 0 to 1, and a coordinate or an
 isotropic Uiso whose esd is larger than its shift from the start model. The
 start model is the structure as the fixed_atoms mode set it up, the CIF at the
 nominal composition, and it is carried to every later mode, so a shift is
-always measured from the same place. An undetermined value is not a result:
+always measured from the same place. Where the CIF gives an atom anisotropic
+Uij and so no Uiso of its own, the start model records the Uiso the mode makes
+it isotropic with, so that atom's Uiso is judged like any other. An
+undetermined value is not a result:
 the data cannot tell it from where it started. In the list the script printed,
 the Uiso of the niobium and the oxygen sites came out within an esd of the
 values the CIF gave them, which is right, since the made up structure has those

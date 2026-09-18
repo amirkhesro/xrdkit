@@ -272,6 +272,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The undetermined list never named a Uiso for a structure whose CIF gives
+  anisotropic Uij: `fixed_atoms` makes every atom isotropic before it refines
+  but recorded the CIF atoms, which carry no Uiso, as the start model. The
+  start model now records the Uiso every atom is started at.
 - `xrdkit lebail` and `xrdkit rietveld` given a relative `--out` refined the
   sample and then failed writing the result JSON with `FileNotFoundError`:
   the GSAS-II driver runs in a work folder of its own and took the path from

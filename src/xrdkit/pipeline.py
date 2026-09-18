@@ -1360,6 +1360,18 @@ def _mean_ueq(atoms: Sequence[Mapping], cell: Mapping[str, float]) -> float:
     return total / weight_sum if weight_sum else 0.01
 
 
+def _with_start_uiso(atoms: Sequence[Mapping], start: float) -> list[dict]:
+    """``atoms`` with the Uiso the fixed_atoms mode starts each one at: its
+    own where it has one, else ``start``, the Uiso the driver gives an atom
+    when it makes it isotropic. A CIF with anisotropic Uij carries no Uiso,
+    and an atom recorded without one has nothing for the undetermined check
+    to judge its refined Uiso against."""
+    return [
+        {**atom, "uiso": float(start if atom.get("uiso") is None else atom["uiso"])}
+        for atom in atoms
+    ]
+
+
 def _metric(cell: Mapping[str, float]) -> np.ndarray:
     a, b, c, alpha, beta, gamma = (float(cell[gsas]) for _, gsas in _CELL_KEYS)
     ca, cb, cg = (math.cos(math.radians(angle)) for angle in (alpha, beta, gamma))
@@ -1674,8 +1686,9 @@ def run_mode(
     composition; ``coordinates`` and ``occupancies`` start from the result
     of the mode before, its atoms carried over, and ``occupancies`` adds
     every exchanged element a site lacks at occupancy 0. The job's
-    ``start_model``, the structure as the Rietveld modes first set it up, is
-    what undetermined parameters are judged against. ``reporter``, a
+    ``start_model``, the structure as the Rietveld modes first set it up,
+    every atom carrying the Uiso it is started at, is what undetermined
+    parameters are judged against. ``reporter``, a
     callable taking a line of text, hears what the run does.
 
     Raises
@@ -1793,10 +1806,12 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
                 for phase in inputs.phases
             }
             set_up = _create(inputs, instprm, work / "set_up", edits)
-            start_model = {key: set_up[key]["atoms"] for key in edits}
             uiso = {
                 key: _mean_ueq(set_up[key]["atoms"], set_up[key]["cell"])
                 for key in edits
+            }
+            start_model = {
+                key: _with_start_uiso(set_up[key]["atoms"], uiso[key]) for key in edits
             }
             stages = fixed_atoms_stages(
                 {

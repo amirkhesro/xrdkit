@@ -1401,6 +1401,50 @@ def test_run_mode_passes_the_start_model(tmp_path, fake) -> None:
     }
 
 
+def test_start_model_records_the_starting_uiso_of_anisotropic_atoms(
+    tmp_path, fake, monkeypatch
+) -> None:
+    # A CIF with anisotropic Uij carries no Uiso, but fixed_atoms makes every
+    # atom isotropic before it refines. Unless the start model says what Uiso
+    # each atom starts from, the undetermined check has nothing to judge a
+    # refined Uiso against and never fires.
+    anisotropic = [
+        {**atom, "adp": "A", "uiso": None, "uij": [0.012, 0.012, 0.012, 0.0, 0.0, 0.0]}
+        for atom in TOY_ATOMS
+    ]
+    monkeypatch.setitem(globals(), "TOY_ATOMS", anisotropic)
+    project = fake_project(tmp_path)
+
+    run_mode(project, "chain", "lebail")
+    run_mode(project, "chain", "fixed_atoms")
+
+    start = refine_jobs(fake)[1]["start_model"]["toy"]
+    # Ueq of the diagonal Uij above, which is what the driver is told to make
+    # the atoms isotropic with.
+    assert [atom["uiso"] for atom in start] == pytest.approx([0.012] * len(start))
+    # Nb1 barely moved and its esd is eight times the shift; every other atom
+    # moved by ten times its esd.
+    refined = [
+        {
+            **atom,
+            "adp": "I",
+            "uij": None,
+            "uiso": 0.0125 if atom["label"] == "Nb1" else 0.013,
+            "uiso_esd": 0.004 if atom["label"] == "Nb1" else 0.0001,
+            "occupancy_esd": None,
+            "xyz_esd": [None, None, None],
+        }
+        for atom in start
+    ]
+
+    found = driver.find_undetermined(refined, start)
+
+    assert [(entry["atom"], entry["parameter"]) for entry in found] == [("Nb1", "uiso")]
+    assert found[0]["message"] == (
+        "Nb1 Uiso 0.01250, esd 0.00400 more than its shift 0.00050"
+    )
+
+
 def test_run_mode_unplaced_element(tmp_path, fake) -> None:
     project = fake_project(tmp_path)
 
