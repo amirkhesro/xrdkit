@@ -1244,3 +1244,328 @@ file stem. `--out` is the output root, under which the CIFs and the results
 are placed. `--json` prints the candidates, the peaks left over and the files
 written as JSON on standard output, with the progress lines on standard error
 so that the JSON stands alone.
+
+## 7. Lattice parameters and density
+
+`xrdkit lattice` refines the cell of a scan and, given a composition and the
+formula units per cell, turns it into a theoretical density. `xrdkit density`
+does the density half on its own, from a cell you already have. This is the
+workflow a composition series or a solid solution study rests on, and it is
+also the one where a careless answer looks exactly like a careful one, so the
+section spends as much space on judging the result as on getting it.
+
+### 7.1 Refining a pellet
+
+Given a sample key, the command takes the start cell, crystal system and space
+group from the sample's first structure, the wavelength and the goniometer
+radius from its instrument, the formula and the formula units from the
+structure's composition and `z`, and the form from the sample table. For
+`pellet_a` the form is `pellet`, so the specimen displacement is refined and
+the zero is held.
+
+```console
+xrdkit lattice pellet_a
+```
+
+```text
+sample  pellet_a, Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6
+peaks   49 found, 43 refitted, 1 fits rejected, 5 satellites excluded, 1 recovered; 43 of 44 indexed (97.7 per cent), 33 used in the refinement
+coarse window to 35.00 degrees
+tetragonal cell a = 12.4740 +/- 0.0011, c = 3.9295 +/- 0.0004 angstrom
+V = 611.426 +/- 0.136 cubic angstrom
+zero 0.0000 degrees (held)
+displacement -0.2033 +/- 0.0069 mm, radius 145 mm
+rms 0.0128 degrees; a low indexed fraction or a high rms means the cell should not be trusted
+M = 394.905 g/mol per formula unit, Z = 5
+theoretical density 5.3625 +/- 0.0012 g/cm3
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\pellet_a\peaks_pellet_a.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\pellet_a\lattice_pellet_a.csv
+```
+
+### 7.2 The five steps behind that line of counts
+
+The peaks line is the whole method in one row, and it is worth reading slowly,
+because every later judgement rests on it.
+
+First the peaks are found, and each is examined for the signature of a K alpha
+2 satellite: a peak sitting where its neighbour's d spacing would put the
+longer wavelength, at no more than a set fraction of that neighbour's height.
+Forty-nine peaks were found here and five were flagged.
+
+Second, every peak that is not flagged is refitted, as the K alpha 1 line of a
+doublet rather than as a single line, so that its position is the K alpha 1
+position rather than the centre of a blend. A fit that does not converge, or
+that lands somewhere the peak is not, is rejected and the peak is dropped:
+forty-three were refitted and one fit was rejected.
+
+Third, those positions are indexed against the start cell and the cell is
+refined by least squares, with the zero or the displacement.
+
+Fourth comes the recovery pass. A flagged peak takes no part in any of that,
+because a satellite indexed against the cell is meaningless. Some flagged
+peaks, though, are not satellites at all: they are genuine reflections that
+happened to sit where a satellite would. The refined cell is used to test
+each one, and a flagged peak that falls within the indexing tolerance of a
+real reflection, and whose doublet refit is accepted, is brought back in. One
+peak was recovered here.
+
+Fifth, with the recovered peaks added, the indexing and the refinement are run
+once more, and that second result is what is reported.
+
+The counts relate as follows: the peaks found split into those refitted,
+those whose fit was rejected and those excluded as satellites, and the indexed
+fraction is quoted against the peaks that were never flagged, forty-four here
+and forty-nine for a scan with nothing flagged, of which a subset carries
+enough weight to be used in the refinement.
+
+A recovered peak is worth treating with some suspicion. To have been flagged
+at all it had to sit under the ceiling on its height over its parent's, which
+means a good part of its intensity really does come from the parent's K alpha
+2 line, and the refit models it as a lone doublet all the same. Its fitted
+position therefore carries a bias. The count is printed so that a reader can
+see how much of a refinement rests on such peaks: one out of thirty-three is
+nothing to worry about, and ten would be worth a second look with
+`--no-satellites`, which excludes every flagged peak and recovers none.
+
+The coarse window is the two theta limit of the first indexing cycle, chosen
+from the data rather than fixed. The first cycle works on the low angle peaks
+alone with a loose tolerance, where a cell that is still some way off can be
+trusted to put reflections near the right peaks; later cycles use the whole
+list against the cell the cycle before gave.
+
+### 7.3 Refining a powder, and why the form matters
+
+`powder_a` is the calcined powder of the same composition. Its form is
+`powder`, so the zero is refined and no displacement is fitted.
+
+```console
+xrdkit lattice powder_a
+```
+
+```text
+sample  powder_a, Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6
+peaks   49 found, 46 refitted, 3 fits rejected, 0 satellites excluded, 0 recovered; 46 of 49 indexed (93.9 per cent), 35 used in the refinement
+coarse window to 35.00 degrees
+tetragonal cell a = 12.4728 +/- 0.0016, c = 3.9312 +/- 0.0006 angstrom
+V = 611.581 +/- 0.218 cubic angstrom
+zero -0.0388 +/- 0.0079 degrees
+displacement not refined
+rms 0.0185 degrees; a low indexed fraction or a high rms means the cell should not be trusted
+M = 394.905 g/mol per formula unit, Z = 5
+theoretical density 5.3611 +/- 0.0019 g/cm3
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\powder_a\peaks_powder_a.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\powder_a\lattice_powder_a.csv
+```
+
+The powder refines a zero of minus 0.039 degrees, which is a real instrument
+zero and is small. The pellet, in Section 7.1, refines a displacement of minus
+0.203 millimetres with its zero held. The two cells agree: a of 12.4740
+against 12.4728 and c of 3.9295 against 3.9312, within about one and two esds,
+and volumes of 611.426 against 611.581 cubic angstrom.
+
+That agreement is the point. A zero point is a constant offset and a specimen
+displacement follows the cosine of theta, and over a short angular range the
+two are nearly the same parameter, so a fit that refines both will report
+small esds for two numbers trading against each other. What decides which to
+refine is not the data but the mounting: a powder bed is flush with the holder
+and its offset is the instrument's, while a pellet surface sits where the
+press and the polishing left it and its offset is geometric. Choosing the
+wrong one does not fail. It gives a precise and wrong answer.
+
+### 7.4 The same pellet done the wrong way
+
+The command chooses by the sample's form, so the way to see the error is to
+run the same scan as a bare file, where there is no form to consult and the
+zero is refined instead.
+
+```console
+xrdkit lattice data/raw/pellet_a.xrdml --cell 12.45 3.94 --space-group P4bm --formula "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6" --z 5
+```
+
+```text
+peaks   49 found, 43 refitted, 1 fits rejected, 5 satellites excluded, 1 recovered; 43 of 44 indexed (97.7 per cent), 33 used in the refinement
+coarse window to 35.00 degrees
+tetragonal cell a = 12.4801 +/- 0.0013, c = 3.9314 +/- 0.0005 angstrom
+V = 612.324 +/- 0.167 cubic angstrom
+zero 0.1707 +/- 0.0059 degrees
+displacement not refined
+rms 0.0131 degrees; a low indexed fraction or a high rms means the cell should not be trusted
+M = 394.905 g/mol per formula unit, Z = 5
+theoretical density 5.3546 +/- 0.0015 g/cm3
+results\lattice\peaks_pellet_a.csv
+results\lattice\lattice.csv
+```
+
+Read the two runs side by side. The displacement of the pellet has been
+absorbed into a false zero of plus 0.171 degrees, which is the same number
+Section 5 reported as the indexing zero of this scan. The cell has moved with
+it: a from 12.4740 to 12.4801, an increase of 0.0061 angstrom, and the volume
+from 611.426 to 612.324, an increase of 0.898 cubic angstrom, which carries
+the density down from 5.3625 to 5.3546 grams per cubic centimetre. Against the
+powder of the same composition the wrong run is out by 0.0073 angstrom in a
+and 0.743 cubic angstrom in volume, while the right one sits within one esd of
+it.
+
+Now look at the residuals. The rms is 0.0131 degrees for the wrong run and
+0.0128 for the right one. The fit is not worse. Nothing in the goodness of the
+fit says which of the two answers to believe, and that is exactly why the form
+is a property of the sample recorded in the project file rather than something
+chosen after seeing the numbers.
+
+Where a zero has been measured on a standard, give it with `--zero` and it is
+held at that value whatever the form, which is the honest arrangement: the
+zero comes from the instrument, and whatever offset is left over is the
+sample's own and is fitted as a displacement.
+
+### 7.5 The indexed fraction and the rms
+
+The last line of the report carries its own warning, and it is not decoration.
+
+The indexed fraction says how much of the pattern the cell accounts for. A
+cell that is wrong in a way that matters usually leaves peaks unindexed, so
+97.7 per cent for the pellet and 93.9 per cent for the powder are both
+reassuring. The rms says how far the indexed peaks sit from where the cell
+puts them, and a hundredth or two of a degree is what a good scan on a lab
+instrument gives.
+
+Neither number on its own proves the cell is right. The case to be wary of is
+a pseudo-cubic pattern, where the sub cell reflections very nearly coincide
+and a wrong cell with a spurious zero can be made to index every peak in the
+list with a respectable residual. What that combination means is that the
+model has enough freedom to follow the data wherever they go, and the fit has
+stopped being a test. A low fraction or a high rms is therefore evidence
+against a cell, but a high fraction and a low rms are not, on their own,
+evidence for one. Check the cell against the phase identification of Section
+6, against another sample of the same composition, and against a scan that
+reaches to high angle.
+
+Two more checks are worth making before a cell is quoted. The esds of a and c
+should be about a thousandth of an angstrom for a density to be worth
+calculating, and several thousandths is a sign that the high angle
+reflections carried too little weight, which is a counting problem and not a
+refinement problem. And a scan that stops at eighty degrees cannot give a
+publishable cell at all, because the reflections that pin it down were never
+measured and no refinement recovers them. Know when to remeasure rather than
+refine.
+
+### 7.6 The theoretical density, and the measured one
+
+The density follows from the cell, the composition and the number of formula
+units per cell: the mass of the contents of one cell divided by its volume.
+The report gives the formula mass and Z before it so that both can be checked
+at a glance, since a wrong Z is the commonest way to get a density wrong by a
+clean factor.
+
+`xrdkit density` does that calculation from a cell you already have, which is
+the way to redo a density after a better cell arrives without rerunning the
+refinement. The cell here is the one the pellet run gave, with its esds.
+
+```console
+xrdkit density --formula "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6" --z 5 --cell 12.4740 3.9295 --esd-cell 0.0011 0.0004
+```
+
+```text
+M = 394.905 g/mol per formula unit
+tetragonal cell a = 12.4740 +/- 0.0011, c = 3.9295 +/- 0.0004 angstrom
+V = 611.433 +/- 0.125 cubic angstrom
+theoretical density 5.3624 +/- 0.0011 g/cm3
+results\density.csv
+```
+
+The volume differs from the refinement's in the third decimal place, and the
+density in the fourth, because the refinement propagates the full covariance
+of the fit while this calculation has only the two esds you typed. Quote the
+refinement's number where you have it.
+
+The relative density is the measured density as a percentage of this one, and
+it is what says how well a pellet sintered. Give the measurement with
+`--archimedes`, followed optionally by its own esd, and the report adds the
+relative density with the two relative errors added in quadrature. For a
+sample of the project file the measurement is better recorded once in the
+sample table, as the `archimedes` key that `xrdkit add-sample --archimedes`
+writes, and then `xrdkit lattice` picks it up without being told. Neither
+example sample carries one here, which is why no run above prints a relative
+density.
+
+A word on what the theoretical density is worth. It is the density the
+structure would have with no porosity and with the composition exactly as
+weighed out, so it is an upper bound and not a prediction. Its relative error
+is about three times the relative error in a lattice parameter, because the
+volume goes as the cube of a length, which is why a cell good to 0.001
+angstrom on a twelve angstrom axis is the target.
+
+### 7.7 The files written
+
+Two files come out of every lattice run, both under `results/lattice/KEY` for
+a sample and under `results/lattice` for a bare file.
+
+`peaks_STEM.csv` has one row per peak found and seventeen columns. The first
+is `found_two_theta`, the position the peak finder gave. Then
+`fitted_two_theta` and `esd_fitted_two_theta`, the position the doublet refit
+gave and its esd, and `corrected_two_theta`, that position after the zero or
+the displacement correction has been applied, which is the number the indexing
+actually used. Then `d_spacing`, from the corrected position and the
+wavelength. Then three flags: `fit_rejected`, true where the refit was thrown
+out; `kalpha2_satellite`, true where the peak was flagged; and `recovered`,
+true for a flagged peak the refined cell brought back in. Then `intensity`,
+`relative_intensity` as a percentage of the strongest, and `fwhm`. Then the
+indexing: `h`, `k` and `l` of the reflection assigned, `calculated_two_theta`
+where the refined cell puts that reflection, `difference` between the
+corrected and the calculated positions, and `n_candidates`, how many
+reflections were within tolerance, which is worth reading because a peak with
+several candidates is assigned on intensity and could have been assigned
+otherwise.
+
+`lattice_KEY.csv` is appended rather than rewritten, one row per run, so a
+series of samples or a series of attempts on one sample builds up in a single
+table ready to be plotted. Its columns carry, in order, what identified the
+run and what went in: the sample, structure and scan file, the wavelength, the
+form, the space group and crystal system, and the six start cell parameters.
+Then what came out: the six refined cell parameters with their esds, the
+volume with its esd, the zero and the displacement each with an esd and a flag
+saying whether it was refined, and the radius. Then the seven counts of the
+peaks line, the rms and the coarse window. Then the density block: the
+formula, Z, the formula mass, the theoretical density and its esd, the
+Archimedes density and its esd, and the relative density and its esd. The last
+three columns are the standing record: the method in one sentence, the date
+and the version of xrdkit that wrote the row. `xrdkit density` appends to
+`results/density.csv` in the same way, with the inputs, the results and the
+same three closing columns.
+
+### 7.8 The options
+
+Both commands share `--stem`, which names the output files and defaults to the
+sample key or the scan's file stem, `--out`, the output root, and `--json`,
+which prints the numbers and the files as JSON.
+
+For `xrdkit lattice`, `SCAN` is a path or a sample key. `--cell` and
+`--system` give the start cell and settle its crystal system by the count of
+numbers, as Section 5.3 describes; for a sample they default to the first
+structure's. `--space-group` names the group whose reflection conditions
+apply, and defaults to the structure's; a symbol outside the eight groups
+whose conditions are known is indexed without them, with a note.
+`--wavelength` overrides the K alpha 1 wavelength.
+
+`--zero` holds the zero at a value in degrees instead of refining it, and is
+how a zero measured on a standard is imposed. `--displacement` refines the
+specimen displacement for a scan that is not a pellet, and is unnecessary for
+one that is, since a pellet always refines it. `--radius` is the goniometer
+radius in millimetres and defaults to the instrument's; a displacement cannot
+be refined without one.
+
+`--no-satellites` excludes every peak flagged as a K alpha 2 satellite and
+recovers none, which is the conservative setting where the recovered count is
+high enough to worry about. `--formula` and `--z` give the composition and the
+formula units per cell for the density, and default to the structure's for a
+sample. `--archimedes` takes the measured density in grams per cubic
+centimetre and optionally its esd, and adds the relative density to the
+report.
+
+For `xrdkit density`, the cell is given either as `--cell` with `--system`, in
+which case `--esd-cell` takes the esds of those numbers in the same order, or
+as `--volume` with `--esd-volume`, which is the way in for a crystal system
+the kit does not otherwise handle or for a volume from elsewhere. `--formula`
+and `--z` are required unless the optional `SAMPLE` argument is given, in
+which case the formula, Z, cell and Archimedes density not given as options
+come from the sample and its first structure, and the row goes to
+`results/density/KEY` instead.
