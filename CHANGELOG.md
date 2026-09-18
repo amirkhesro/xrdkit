@@ -286,6 +286,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A refinement of a `.xy` or `.xye` scan used GSAS-II's default goniometer
+  radius of 200 mm: its text pattern importer carries no radius, and nothing
+  set one. The instrument parameter file every job reads now carries a
+  `Gonio. radius` line from the instrument's `radius`, which GSAS-II applies
+  whatever importer read the pattern, so a refined specimen displacement is
+  now in the project's geometry rather than 200 mm. `write_instprm` takes
+  `radius_mm` to write the same line. An instrument with no `radius` is
+  unchanged. `xrdkit lattice`'s own displacement fit never used GSAS-II and
+  is unaffected.
 - The undetermined list never named a Uiso for a structure whose CIF gives
   anisotropic Uij: `fixed_atoms` makes every atom isotropic before it refines
   but recorded the CIF atoms, which carry no Uiso, as the start model. The

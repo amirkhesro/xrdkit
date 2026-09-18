@@ -1757,3 +1757,60 @@ def test_a_flagged_stage_is_rolled_back_in_gsas2(tmp_path) -> None:
     final = _atoms_by_label(kept_result)["O1"]
     assert final["xyz"] != pytest.approx([0.3, 0.1, 0.1], abs=1e-3)
     assert all(esd for esd in final["xyz_esd"])
+
+
+def test_write_instprm_carries_the_goniometer_radius(tmp_path) -> None:
+    # GSAS-II's own writer spells the key with the space and its reader
+    # strips every space before comparing, so this form is read back.
+    path = write_instprm(tmp_path / "cu.instprm", CAGLIOTI, radius_mm=145.0)
+    _, values = _parse_instprm(path)
+
+    assert list(values)[-1] == "Gonio. radius"
+    assert float(values["Gonio. radius"]) == 145.0
+
+
+def test_write_instprm_without_a_radius_emits_no_line(tmp_path) -> None:
+    _, values = _parse_instprm(write_instprm(tmp_path / "cu.instprm", CAGLIOTI))
+
+    assert "Gonio. radius" not in values
+
+
+def test_create_from_an_xy_takes_the_radius_from_the_instprm(tmp_path) -> None:
+    # The .xy importer carries no geometry, so without the instprm line the
+    # histogram would keep GSAS-II's default of 200 mm.
+    try:
+        install = find_gsas2()
+    except FileNotFoundError as error:
+        pytest.skip(str(error))
+
+    two_theta = np.linspace(20.0, 50.0, 1501)
+    counts = 50.0 + sum(
+        height * np.exp(-0.5 * ((two_theta - centre) / 0.03) ** 2)
+        for centre, height in ((21.36, 600.0), (30.39, 1000.0), (37.44, 400.0))
+    )
+    data_file = tmp_path / "lab6.xy"
+    data_file.write_text(
+        "\n".join(f"{t:.5f} {c:.3f}" for t, c in zip(two_theta, counts)) + "\n",
+        encoding="utf-8",
+    )
+    cif = tmp_path / "lab6.cif"
+    cif.write_text(LAB6_CIF, encoding="utf-8")
+    instprm = write_instprm(tmp_path / "cu.instprm", CAGLIOTI, radius_mm=145.0)
+
+    result = run_job(
+        {
+            "action": "create",
+            "gpx": str(tmp_path / "lab6.gpx"),
+            "data_file": str(data_file),
+            "instprm": str(instprm),
+            "phases": [{"cif": str(cif), "name": "LaB6"}],
+        },
+        tmp_path / "work",
+        install,
+    )
+
+    sample = result["histogram"]["sample"]
+    assert sample["gonio_radius"] == pytest.approx(145.0)
+    assert sample["gonio_radius"] != pytest.approx(200.0)
+    # The Lam1 key of the instprm is what tells GSAS-II the geometry.
+    assert sample["type"] == "Bragg-Brentano"

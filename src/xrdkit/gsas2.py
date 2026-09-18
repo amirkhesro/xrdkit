@@ -154,6 +154,12 @@ def find_gsas2() -> Gsas2Install:
     return Gsas2Install(python=python, home=home)
 
 
+# The goniometer radius line, spelled as GSAS-II's writer spells it. Its
+# reader strips every space before comparing, so the space is immaterial to
+# being read back, and keeping it makes our file identical to GSAS-II's.
+GONIOMETER_RADIUS = "Gonio. radius"
+
+
 def write_instprm(
     path: str | Path,
     caglioti: Caglioti,
@@ -165,6 +171,7 @@ def write_instprm(
     lam2: float = 1.54439,
     ratio: float = 0.5,
     polariz: float = 0.7,
+    radius_mm: float | None = None,
 ) -> Path:
     """Write a GSAS-II instrument parameter file for a Cu K alpha lab pattern.
 
@@ -199,6 +206,12 @@ def write_instprm(
         K alpha 2 over K alpha 1 intensity.
     polariz
         Polarisation fraction.
+    radius_mm
+        Goniometer radius, in mm. Written as the ``Gonio. radius`` line GSAS-II
+        writes itself, which its reader takes into the histogram's sample
+        parameters whatever importer read the pattern: a text pattern carries
+        no radius, and GSAS-II would otherwise leave it at its default 200 mm.
+        None, the default, writes no line and leaves the default in place.
 
     Returns
     -------
@@ -225,6 +238,8 @@ def write_instprm(
         "SH/L": shl,
         "Azimuth": 0.0,
     }
+    if radius_mm is not None:
+        values[GONIOMETER_RADIUS] = radius_mm
     lines = [INSTPRM_HEADER] + [f"{key}:{value}" for key, value in values.items()]
     path = Path(path)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

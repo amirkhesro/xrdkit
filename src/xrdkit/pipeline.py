@@ -51,6 +51,7 @@ from xrdkit import gsas2_driver, writeup
 from xrdkit.config import AXIS_COORDINATE, ConfigError, host_elements
 from xrdkit.density import parse_formula
 from xrdkit.gsas2 import (
+    GONIOMETER_RADIUS,
     _same_site,
     accepted_stages,
     build_refine_job,
@@ -1139,8 +1140,16 @@ def mode_paths(
     }
 
 
-def _write_start_instprm(source: Path, zero: float, path: Path) -> Path:
-    """The instrument parameter file with the zero to start from."""
+def _write_start_instprm(
+    source: Path, zero: float, path: Path, radius_mm: float | None = None
+) -> Path:
+    """The instrument parameter file with the zero to start from, and the
+    goniometer radius where the instrument gives one.
+
+    GSAS-II's text pattern importer carries no radius and leaves it at its
+    default 200 mm, so the file every job reads names the project's instead;
+    the .xrdml importer's own value is replaced by the same line. An
+    instrument without a radius leaves the file as it found it."""
     lines = Path(source).read_text(encoding="utf-8").splitlines()
     written = False
     for index, line in enumerate(lines):
@@ -1149,6 +1158,9 @@ def _write_start_instprm(source: Path, zero: float, path: Path) -> Path:
             written = True
     if not written:
         lines.append(f"Zero:{zero!r}")
+    if radius_mm is not None:
+        lines = [line for line in lines if not line.startswith(f"{GONIOMETER_RADIUS}:")]
+        lines.append(f"{GONIOMETER_RADIUS}:{radius_mm}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -1735,7 +1747,10 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
     sources: dict[str, str] = {}
     if mode == "lebail":
         instprm = _write_start_instprm(
-            inputs.instprm, inputs.zero, paths["start_instprm"]
+            inputs.instprm,
+            inputs.zero,
+            paths["start_instprm"],
+            inputs.instrument.radius,
         )
         phases = []
         cells = {}
@@ -1792,7 +1807,10 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
                 f"{before_result}: has no phase {', '.join(missing)} of the sample"
             )
         instprm = _write_start_instprm(
-            inputs.instprm, start.zero, paths["start_instprm"]
+            inputs.instprm,
+            start.zero,
+            paths["start_instprm"],
+            inputs.instrument.radius,
         )
         cells = {key: dict(phase.cell) for key, phase in by_name.items()}
         sources = {

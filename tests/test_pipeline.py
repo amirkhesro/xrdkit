@@ -1847,3 +1847,32 @@ form = "powder"
     assert set(saved["start_model"]) == {"bronze"}
     assert saved["inputs"]["structures"][0]["library"] == "ttb/P4bm"
     assert (root / "results" / "rietveld" / "toy" / "summary.md").is_file()
+
+
+def _instprm_lines(job: dict) -> list[str]:
+    return Path(job["instprm"]).read_text(encoding="utf-8").splitlines()
+
+
+def test_the_start_instprm_carries_the_instrument_radius(tmp_path, fake) -> None:
+    # The .xy importer leaves the radius at GSAS-II's default, so every job's
+    # instprm names the project's instead, on whatever route the scan took.
+    project = fake_project(tmp_path)
+
+    run_mode(project, "chain", "lebail")
+
+    (job,) = refine_jobs(fake)
+    assert "Gonio. radius:240.0" in _instprm_lines(job)
+
+
+def test_an_instrument_without_a_radius_writes_no_radius_line(tmp_path, fake) -> None:
+    project = fake_project(tmp_path)
+    path = project.root / "xrdkit.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("radius = 240.0\n", ""),
+        encoding="utf-8",
+    )
+
+    run_mode(load_project(project.root), "chain", "lebail")
+
+    (job,) = refine_jobs(fake)
+    assert not [line for line in _instprm_lines(job) if line.startswith("Gonio.")]
