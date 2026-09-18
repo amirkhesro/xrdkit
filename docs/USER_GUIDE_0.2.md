@@ -120,9 +120,9 @@ command shown, in a folder laid out as Section 2 describes, on these files:
 
 | Path in the examples | What it is |
 | --- | --- |
-| `data/raw/sample_a.xrdml` | a sintered pellet of a tetragonal tungsten bronze, the composition Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6 |
-| `data/raw/sample_b.xrdml` | a sintered pellet of the same series at a different composition |
-| `data/raw/sample_a_long.xrdml` | the calcined powder of the first composition, counted for longer |
+| `data/raw/pellet_a.xrdml` | a sintered pellet of a tetragonal tungsten bronze, the composition Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6 |
+| `data/raw/pellet_b.xrdml` | a sintered pellet of the same series at a different composition |
+| `data/raw/powder_a.xrdml` | the calcined powder of the first composition, counted for longer |
 | `data/standards/lab6.xrdml` | a scan of NIST SRM 660c lanthanum hexaboride on the same instrument |
 | `cifs/lab6.cif` | the structure of that standard |
 | `cifs/2100720.cif` | the tungsten bronze of COD entry 2100720, the reference structure of the samples |
@@ -366,7 +366,7 @@ uncertainty of 0.000 008 nm at 22.5 degrees Celsius, from the NIST certificate
 of 10 March 2015, which is 4.156826 angstrom.
 
 ```console
-xrdkit instrument data/standards/lab6.xrdml --cif cifs/lab6.cif --cell 4.156826 --radius 145 --stem instrument --name diffractometer
+xrdkit instrument data/standards/lab6.xrdml --cif cifs/lab6.cif --cell 4.156826 --radius 145 --name diffractometer
 ```
 
 It prints the width fit, the stages it ran, the residuals and every refined
@@ -389,9 +389,9 @@ Rwp 7.160 per cent, GOF 1.909
 wavelength = [1.540598, 1.544426]
 ka2 = true
 radius = 145
-instprm = "data/standards/instrument.instprm"
-C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\data\standards\instrument.instprm
-C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\data\standards\instrument_instrument.csv
+instprm = "data/standards/lab6.instprm"
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\data\standards\lab6.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\data\standards\lab6_instrument.csv
 C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\xrdkit.toml
 ```
 
@@ -413,13 +413,13 @@ percentage point, since one fewer parameter and a fixed rather than a negative
 Y is the simpler description of the same widths.
 
 Two files are written, both in `data/standards` when the command is run in a
-project. `instrument.instprm` is the file itself, the one GSAS-II exported
+project. `lab6.instprm` is the file itself, the one GSAS-II exported
 after the refinement rather than the starting point, and is what the
 `instprm` key of the instrument table points at. The starting file keeps the
 same stem with `_start` on the end, so the two are never confused, and the
 GSAS-II project and its logs go under `work/` beside them.
 
-`instrument_instrument.csv`, named from the stem, is the record of how the
+`lab6_instrument.csv`, named from the same stem, is the record of how the
 file was made, so that a file found months later can be traced back to the
 scan it came from. Its first columns say what went in: the scan and the CIF,
 the phase name, the wavelength, the six cell parameters held, and the two
@@ -472,9 +472,11 @@ checked with the rest of the file before anything is written, and a key that
 is already there is refused so that an existing instrument is never
 overwritten.
 
-`--stem` names the output files, and defaults to the stem of the scan. The run
-above gives `instrument` so that the file is named for what it is rather than
-for the standard.
+`--stem` names the output files, and defaults to the stem of the scan, which
+is what the run above takes, so the files are named after the standard they
+were measured from. Give it where one folder holds the files of more than one
+optical configuration and the standard's name alone would not tell them
+apart.
 
 `--out` is the folder the two files go in, and defaults to `data/standards`
 under the project root when an `xrdkit.toml` is found and to the current
@@ -494,30 +496,35 @@ you to write one by hand. It comes after Section 3 rather than in Section 2
 because the table it writes names an instrument, and unless you give
 `--instrument` it expects the project to hold exactly one, which is true only
 once `xrdkit instrument --name` has appended it. It also needs a structures
-key, so the structure table of Section 2.2 must be in the file first.
+key, so the structure table of Section 2.2 must be in the file first. The
+scan added here is a sintered pellet, so `--form pellet` is given rather than
+left at the default.
 
 ```console
-xrdkit add-sample data/raw/sample_a.xrdml --structure ttb_p4bm
+xrdkit add-sample data/raw/pellet_a.xrdml --structure ttb_p4bm --form pellet
 ```
 
 It prints the table it appended.
 
 ```text
-[samples.sample_a]
-file = "data/raw/sample_a.xrdml"
+[samples.pellet_a]
+file = "data/raw/pellet_a.xrdml"
 instrument = "diffractometer"
 structures = ["ttb_p4bm"]
-form = "powder"
+form = "pellet"
 ```
 
 `FILE` is the sample's scan and must lie inside the project folder, since the
 table stores it relative to the project. `--structure KEY` is required and is
 repeated once for each phase the sample holds. `--name` is the sample key and
-defaults to the stem of the file, `sample_a` here. `--instrument` names the
+defaults to the stem of the file, `pellet_a` here. `--instrument` names the
 instrument and defaults to the only one when the project has exactly one.
-`--form` is `powder` or `pellet` and defaults to `powder`; a pellet is the
-case where a refinement frees a specimen displacement rather than the zero
-point, so it is worth setting correctly. `--stage` is free text for the
+`--form` is `powder` or `pellet` and defaults to `powder`, and is given as
+`pellet` above because that is what the scan is. It is worth setting
+correctly, because a pellet is the case where a refinement frees a specimen
+displacement rather than the zero point: the surface of a pellet sits where
+the press left it rather than flush with the holder, and that shift looks
+exactly like a cell error at low angle. `--stage` is free text for the
 processing stage, such as calcined or sintered. `--temperature-c` and
 `--archimedes` record the processing temperature in degrees Celsius and the
 measured density in grams per cubic centimetre, and `--notes` is free text.
