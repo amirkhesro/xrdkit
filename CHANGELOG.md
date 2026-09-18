@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- The README reads as the page a user meets on PyPI: install from PyPI, a
+  worked example of five commands run in a folder of your own, no repository
+  in any of them, links that resolve off GitHub, and an email route for a bug
+  report beside GitHub Issues.
+
 ### Added
 
 - `read_xy` reads a two column `.xy` or three column `.xye` pattern: two

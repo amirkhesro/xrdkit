@@ -6,11 +6,11 @@ A reusable X-ray diffraction analysis toolkit for electroceramics research.
 analysing XRD patterns, so that the same analysis code can be reused across
 projects instead of being copied between one-off scripts.
 
-New here? [docs/USER_GUIDE.md](docs/USER_GUIDE.md) says what data you need, in
+New here? [docs/USER_GUIDE.md](https://github.com/amirkhesro/xrdkit/blob/main/docs/USER_GUIDE.md) says what data you need, in
 what form, and how to get from a raw scan to each result.
 
 Starting from a machine with nothing installed?
-[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) sets up Python, xrdkit and
+[docs/GETTING_STARTED.md](https://github.com/amirkhesro/xrdkit/blob/main/docs/GETTING_STARTED.md) sets up Python, xrdkit and
 the folder layout on Windows and macOS.
 
 ## Installation
@@ -20,7 +20,7 @@ pip install xrdkit
 ```
 
 Phase matching against the COD needs pymatgen, which comes with the `phases`
-extra. It is what Workflow 2 of [docs/USER_GUIDE.md](docs/USER_GUIDE.md) uses
+extra. It is what Workflow 2 of [docs/USER_GUIDE.md](https://github.com/amirkhesro/xrdkit/blob/main/docs/USER_GUIDE.md) uses
 to identify the phases in a pattern:
 
 ```bash
@@ -54,19 +54,22 @@ whose instrument gives an `instprm`.
 ## Feedback and bug reports
 
 Bug reports and feature requests go through GitHub Issues, at
-<https://github.com/amirkhesro/xrdkit/issues>. A useful bug report gives the
-xrdkit version (`python -c "import xrdkit; print(xrdkit.__version__)"`), the
-operating system, the smallest script that shows the problem and the full
-error message. Questions about method are welcome in the same place.
+<https://github.com/amirkhesro/xrdkit/issues>. Questions about method are
+welcome in the same place. Anyone without a GitHub account can send the same
+information by email to <am.khesro@gmail.com>.
+
+A useful report gives the xrdkit version (`python -c "import xrdkit; print(xrdkit.__version__)"`),
+the command you ran, the full error text, and a scan or a small sample file if
+it can be shared.
 
 Please do not attach measured data from unpublished work to a public issue:
 describe the pattern instead, or use a public standard such as LaB6.
 
 ## Data
 
-This repository contains **code only**. Raw and processed diffraction data
-(including `.xrdml` files) live in a separate data repository and are never
-committed here.
+xrdkit ships no data. Your scans, your CIFs and your `xrdkit.toml` live in a
+folder of your own, and the commands write their results and figures beside
+them, under `results/` in that folder.
 
 ## GSAS-II refinement
 
@@ -208,23 +211,26 @@ factor over its sites, which keeps its distribution, and each added element
 goes on its host's sites in proportion to the host's occupancy.
 `cell_contents` gives the atoms of each element per cell.
 
-For example, the sample pipeline of the XRD analysis repository reads every
-sample and structure setting from its `config/samples.toml` and runs Le Bail,
-fixed atoms, coordinates and occupancies in turn, each from the saved result
-of the one before:
+## A first run
 
-```
-python -B scripts/refine_sample.py 10                          # Le Bail only
-python -B scripts/refine_sample.py 10 --trials                 # Le Bail with the configured trial ranges and background terms
-python -B scripts/refine_sample.py 10 --through occupancies    # all four modes
-python -B scripts/refine_sample.py 10 --from coordinates       # one mode, from the saved fixed atoms result
-python -B scripts/refine_sample.py 10 --from coordinates --through occupancies
+These five commands run in an empty folder of your own, with the package
+installed and your own scan copied into it:
+
+```bash
+xrdkit init --name demo
+xrdkit add-sample data/raw/10c.xrdml --structure ttb_x010
+xrdkit check 10c
+xrdkit lattice 10c
+xrdkit lebail 10c
 ```
 
-It passes each mode's `unsettled` rule and pass cap to its job, writes the
-mode's write up with `failure_markdown` and stops with a non-zero status
-where a mode cannot be finished, and writes `summary.md` beside the write
-ups with `summary_markdown` at the end of every run.
+`init` writes `xrdkit.toml` and makes its folders. `add-sample` appends a
+`[samples.10c]` table naming the scan. `check` reports the data quality of the
+sample's scan with a verdict per workflow. `lattice` refines its cell, volume
+and density to `results/lattice/10c`. `lebail` extracts the cell in GSAS-II to
+`results/lebail/10c`. Fill in the instrument and structure tables that `init`
+leaves commented in `xrdkit.toml` before adding a sample; `check` and `lattice`
+also take a scan file in place of a sample key.
 
 ## Status
 
@@ -234,9 +240,9 @@ notice.
 ## Citing
 
 If xrdkit contributes to work you publish, please cite it. The metadata is in
-[CITATION.cff](CITATION.cff), which GitHub renders as a ready-made citation
+[CITATION.cff](https://github.com/amirkhesro/xrdkit/blob/main/CITATION.cff), which GitHub renders as a ready-made citation
 under **Cite this repository**.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/amirkhesro/xrdkit/blob/main/LICENSE).
