@@ -936,3 +936,311 @@ under which `results` and `figures` are created as needed; without it a sample
 writes to `results/COMMAND/KEY` under the project root and a bare file writes
 to the current folder. `--json` prints the files written and the results as
 JSON.
+
+## 6. Identifying phases
+
+`xrdkit phases` searches the Crystallography Open Database for structures made
+of the elements your sample is made of, simulates the pattern of each, weighs
+it against the peaks of your scan, and ranks them. It is what says whose
+pattern the rest of the analysis is describing.
+
+The command needs the `phases` extra, `pip install "xrdkit[phases]"`, because
+the simulation is done with pymatgen, and it needs an internet connection,
+because the database is fetched rather than shipped. Both are checked before
+anything is written.
+
+### 6.1 When it is needed
+
+Three occasions, and none of them is optional.
+
+The first scan of a new composition. Until the phases are known, a cell
+refinement is fitting a model to a pattern that may not be that model's, and
+the numbers it gives will look no different for being wrong. Identify the
+phases once per composition, not once per sample: the next batch of the same
+nominal composition, made the same way, is a phase purity check against the
+first rather than an identification from nothing.
+
+Any peak the main phase leaves unindexed. Section 5 reports these as the
+difference between the peaks found and the peaks indexed, and Section 5.3 gives
+the four things they are usually made of. Two of those, K beta and a tungsten L
+line, belong to the instrument and are settled by where they sit. The other
+two, a secondary phase and a mis-set cell, are settled here.
+
+Every phase purity scan of a sintered pellet. Sintering is where second phases
+appear that the calcined powder did not have, from a reaction with the
+crucible or the setter, from a volatile component leaving, or from a melt at a
+grain boundary. A pellet that fired well and looks right can still carry two
+weight per cent of something else, which is enough to change a dielectric
+measurement and not enough to be obvious in the pattern unless it is looked
+for.
+
+### 6.2 Running the command
+
+Given a sample key and nothing else, the elements searched on are those of the
+compositions of the sample's structures, which for `pellet_a` is the whole
+doped formula.
+
+```console
+xrdkit phases pellet_a
+```
+
+That finds nothing at all.
+
+```text
+35 peaks observed from 10 to 80 degrees
+0 COD entries made of exactly Sr, Ba, La, Nb, Ti, O
+```
+
+The command then stops, with one line on the error stream.
+
+```text
+xrdkit phases: the COD holds no entry of exactly those elements; widen --elements or drop --space-group
+```
+
+This is worth dwelling on rather than working around, because it is the normal
+result for a doped sample. The search asks for entries made of exactly those
+six elements, and nobody has deposited a structure of this particular
+substitution. What you are trying to identify is not the doped composition but
+the structure type it is built on, and the elements of the parent are what to
+search on. Lanthanum and titanium are the dopants, so they come out, and the
+search is run on the four elements of the parent tungsten bronze.
+
+The other thing the pattern needs is its zero offset. A simulated pattern is
+calculated at true angles and a measured one is not, and `pellet_a` was shown
+in Section 5 to carry an offset of 0.170 degrees, which is more than the
+matching tolerance and so would push good candidates out of reach. The offset
+is given with `--zero` and is subtracted from every observed position before
+anything is compared.
+
+```console
+xrdkit phases pellet_a --elements Sr Ba Nb O --zero 0.170
+```
+
+The run prints the peaks it found, the entries the search returned, where the
+index went, the ranking, and every file it wrote. It took about fifteen
+seconds, most of it fetching eleven CIFs.
+
+```text
+35 peaks observed from 10 to 80 degrees
+11 COD entries made of exactly Sr, Ba, Nb, O
+  1520953  Ba0.247 Nb2 O6 Sr0.744 P 4 b m
+  1537507  Ba3 Nb2 O9 Sr          P 63/m m c
+  2020161  Ba3 Nb2 O9 Sr          P 63/m
+  2100719  Ba0.67 Nb2 O6 Sr0.33   P 4 b m
+  2100720  Ba0.52 Nb2 O6 Sr0.48   P 4 b m
+  2100721  Ba0.39 Nb2 O6 Sr0.61   P 4 b m
+  2100722  Ba0.14 Nb2 O6 Sr0.86   P 4 b m
+  2103856  Ba0.39 Nb2 O6 Sr0.61   X4bm
+  2238610  Ba0.4 Nb2 O6 Sr0.6     P 4 b m
+  2311739  Ba0.476 Nb2 O6 Sr0.524 P 4 b m (a,b,2*c)
+  2311740  Ba0.47 Nb2 O6 Sr0.53   P 4 b m (a,b,2*c)
+index written to C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\index.csv
+  2100721  explained 34/35  missing  0  score  34
+  2311739  explained 33/35  missing  2  score  31
+  2311740  explained 33/35  missing  2  score  31
+  1520953  explained 27/35  missing  3  score  24
+  2100720  explained 27/35  missing  5  score  22
+  2238610  explained 26/35  missing  7  score  19
+  2100719  explained 26/35  missing  9  score  17
+  2103856  explained 35/35  missing 19  score  16  rejected, strongest line absent
+  1537507  explained 14/35  missing  6  score   8
+  2020161  explained 16/35  missing  8  score   8
+  2100722  explained 16/35  missing 19  score  -3  rejected, strongest line absent
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\1520953.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\1537507.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2020161.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2100719.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2100720.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2100721.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2100722.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2103856.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2238610.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2311739.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2311740.cif
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\index.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\phases\pellet_a\phases_pellet_a.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\phases\pellet_a\phases_pellet_a_unexplained.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\phases\pellet_a\phases_pellet_a_record.csv
+```
+
+That block is the run of 18 September 2026. The database is live and is added
+to continually, so a rerun may return an entry that was not there before, and
+the ranking may shift when it does. This is a feature rather than a nuisance,
+but it means the numbers here are a record of one run rather than a constant,
+and it is why every run writes a record of its own.
+
+The CIFs are kept under `cifs/cod`, one file per entry named by its COD id,
+and are not fetched again on a later run. Beside them `index.csv` is the
+register of reference CIFs, with the source, the identifier, the formula, the
+space group, the cell and the citation of each, and it is updated rather than
+rewritten, so notes you add to a row by hand survive a fresh download. Under
+`results/phases/pellet_a` go three files: the candidates with their counts and
+scores, the peaks no candidate explained, and a record of the run carrying the
+scan, the elements, the zero, the window, the tolerance, how many entries were
+searched and fetched, the main phase, the method, the date and the version of
+xrdkit.
+
+### 6.3 Reading the ranking
+
+Read the table in this order.
+
+Take the rejections first, because they are the only column that is a verdict
+rather than a measure. A candidate whose strongest reflection falls where
+nothing at all was observed is not present in the sample, whatever it scores:
+the strongest line of a phase is the last one to disappear, so if it is not
+there the phase is not there. That rule rejects 2100722 here, whose cell at
+Ba 0.14 is too far from the sample's for its lines to land anywhere near the
+right places, and 2103856, which is the same tungsten bronze but in the
+nonstandard X4bm centring, which the simulator expands into a structure with
+nineteen strong lines the sample does not have. Note that 2103856 explains all
+thirty-five peaks and is still rejected, which is the rule doing its job: a
+structure that predicts everything, including a great deal that is not there,
+has explained nothing. A rejection is a statement about the CIF as it was
+read, not only about the sample, and an entry rejected for a reason like that
+one is worth looking at rather than deleting.
+
+Then read the missing count. It is the column that discriminates, because a
+strong line predicted where nothing was seen is hard evidence against a phase,
+while an explained peak may be a coincidence in a crowded pattern. The two
+hexagonal perovskites, 1537507 and 2020161, explain fewer than half the peaks
+and miss six and eight strong lines; the tungsten bronzes near the sample's
+composition miss none, two or three. That gap is the identification: the
+sample is the tetragonal tungsten bronze, and it is not the hexagonal
+perovskite.
+
+Read the explained count and the score last, and do not read them as a ranking
+of composition. 2100721 scores 34 and 2100720 scores 22, and both are the same
+phase; what separates them is how close each entry's cell is to the sample's,
+which this command is not measuring and `xrdkit lattice` is. The entry to
+carry forward is the one whose composition is nearest the nominal one, which
+for Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6 is 2100720 at Ba 0.52 to Sr 0.48, and that is
+why the project file of Section 2.2 names 2100720 rather than the entry at the
+top of this table. Its cell is replaced by a refined one in the later
+workflows in any case.
+
+Where two candidates score the same, as 2311739 and 2311740 do here, they are
+ordered by COD id, which is arbitrary and is meant to be: the command does not
+pretend to separate what it cannot.
+
+### 6.4 The peaks nothing explained
+
+The last file is the one to open when the ranking has been read. It lists every
+observed peak that no candidate accounted for, each with its two theta and its
+d spacing, which is the form a spacing is quoted in and searched on, and beside
+it the reflection of the main phase that falls within the tolerance of it, or
+the word unidentified where none does.
+
+For this run the file holds its header and nothing else: every one of the
+thirty-five peaks was explained by at least one candidate, which is what a
+single phase sample should give.
+
+`--main` names the phase those peaks are attributed to, and defaults to the
+top ranked candidate that was not rejected. Give it the COD id you have
+decided on, which here would be `--main 2100720`, so that the attribution is
+made against the structure you intend to carry forward rather than against
+whichever entry happened to score highest. It may also name an entry outside
+the candidate set, which is fetched like any other, for the case where you
+suspect a particular impurity and want the leftover peaks checked against it.
+
+A weak reflection of the phase you already have is the commonest explanation
+of a peak the indexing passed over, and it is worth ruling out before anything
+else. Where a peak does come back as unidentified, the next step is to widen
+the search: add the elements a crucible or an incompletely decomposed
+carbonate could contribute and run again. What is not the next step is
+deciding that one peak does not matter.
+
+### 6.5 Where a licensed database fits
+
+xrdkit identifies phases from the Crystallography Open Database, which is free
+and requires no licence. Where you have access to a licensed search and match
+system with the PDF database behind it, run that search first, because it is
+the authoritative identification. It is a better index than any free database:
+the PDF is larger and covers the inorganic literature far more completely, it
+is curated and quality graded, its cards carry measured rather than calculated
+intensities for many phases, and the matching is tuned for it. A card number
+with its quality mark and citation is also the conventional record of phase
+identification in publications. Nothing in xrdkit replaces that search, and
+nothing in xrdkit reads its output.
+
+The two are complementary. The command here serves routine screening on your
+own computer, and the licensed route, where it is available, serves the
+definitive check and the citable record.
+
+Record what the licensed search found, for the main phase and for every
+secondary phase it named: the card number you chose, its quality mark and
+citation, the formula, the space group, the cell, and the release of the
+database the card came from. That last one matters because cards are revised
+and withdrawn, and a card number alone does not say which version was seen.
+
+A card is a pattern, and the later workflows need a structure. A CIF exported
+from the licensed database seeds a Le Bail extraction or a Rietveld refinement
+in exactly the same way as one fetched from the COD: put it in `cifs` and name
+it in a structure table. Where the database exports no CIF, come back to this
+command for one.
+
+### 6.6 What the data quality means for this answer
+
+Section 4 reported `pellet_a` as not suitable for phase identification, on a
+peak over median of 14 against the 20 the criteria ask for. That verdict
+stands, and it should be read against the result above rather than forgotten
+because the result looks tidy.
+
+What the ranking here can be trusted to say is which structure type the main
+phase is. That conclusion rests on strong reflections and on a gap between the
+tungsten bronzes and the hexagonal perovskites that is far larger than the
+noise. What it cannot be trusted to say is that there is no second phase. A
+phase at one or two weight per cent shows itself in the background, and on this
+scan the background is not counted deeply enough for such a phase to rise
+clearly out of it; the empty unexplained list is therefore weak evidence of
+purity rather than strong evidence. If phase purity is the question being
+asked, the scan to answer it with is a longer one, counted three to five times
+as long, and the verdict in Section 4 is the command telling you so in advance.
+
+### 6.7 The options
+
+`SCAN` is a path to a `.xrdml`, `.xy` or `.xye` file, or a sample key.
+
+`--elements` gives the element symbols the entries are to be made of, at most
+eight, which is what the database's search form takes. For a sample key it
+defaults to the elements of the compositions of the sample's structures, and
+as Section 6.2 shows that default is the right starting point only for an
+undoped composition. For a scan named as a path there is no structure to take
+elements from, so `--elements` is required and the command refuses without it.
+The search is for entries made of exactly those elements and no others.
+
+`--space-group` restricts the search to one space group symbol, and by default
+no restriction is applied. It is worth using when the structure type is already
+known and the list is long, and worth leaving off on a first look, since a
+symbol given in a nonstandard setting will exclude the very entries you want.
+
+`--zero` is the zero offset in degrees, subtracted from every observed peak
+before anything is compared, and defaults to 0. Take it from the plot or
+lattice run on the same scan. On a scan that has never been indexed, leave it
+at 0 and raise `--tolerance` to about 0.3 degrees instead, so that an
+uncorrected shift does not throw the matching out.
+
+`--window` is the two theta range the peaks are taken and the patterns
+simulated over, ten to eighty degrees by default. Compare only over the range
+that was measured: a reflection simulated outside the scan would be counted as
+missing and would tell against a phase that is present.
+
+`--tolerance` is how far an observed peak may lie from a simulated reflection
+and still count as explained, 0.15 degrees by default.
+
+`--max-candidates` weighs only the first N entries the search returned, in
+COD id order, which is a way to keep a first look quick when the search comes
+back with dozens of entries. By default every entry found is fetched and
+weighed.
+
+`--main` names the phase the peaks left over are attributed to, as Section 6.4
+describes.
+
+`--wavelength` overrides the K alpha 1 wavelength, which is otherwise the
+scan's own or the sample's instrument's, and is needed for a `.xy` or `.xye`
+file named as a path.
+
+`--stem` names the output files and defaults to the sample key or the scan's
+file stem. `--out` is the output root, under which the CIFs and the results
+are placed. `--json` prints the candidates, the peaks left over and the files
+written as JSON on standard output, with the progress lines on standard error
+so that the JSON stands alone.
