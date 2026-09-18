@@ -219,7 +219,7 @@ composition = "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
 cell = { a = 12.45, c = 3.94 }
 z = 5
 exchange = [["Sr", "Ba"]]
-atoms = { A1 = { Sr1 = "Sr", La1 = "La" }, A2 = { Sr2 = "Sr", Ba2 = "Ba", La2 = "La" }, B1 = { Nb1 = "Nb", Ti1 = "Ti" }, B2 = { Nb2 = "Nb", Ti2 = "Ti" } }
+atoms = { A1 = { Sr1 = "Sr", La1 = "La" }, A2 = { Ba2 = "Ba", Sr2 = "Sr" }, B1 = { Nb1 = "Nb", Ti1 = "Ti" }, B2 = { Nb2 = "Nb", Ti2 = "Ti" } }
 ```
 
 Three of those keys need a word of explanation.
@@ -279,7 +279,22 @@ background up to cover them and pushes the microstrain negative to narrow
 them, after which the size and the microstrain correlate strongly and neither
 is worth reading. Starting the range above those reflections removes the
 correlation, which is why a sample whose low angle reflections are absent or
-very weak is given a range of its own rather than the scan's.
+very weak is given a range of its own rather than the scan's. The example
+project gives `powder_a` exactly that, an extract from `xrdkit.toml` written by
+hand beneath its sample table, and Section 8.4 shows what happens without it.
+
+```text
+[samples.powder_a.refine]
+two_theta = [17.0, 99.98]
+```
+
+Two keys of the structure table above earn their place only once a refinement
+is run, and are explained where they are used. `cif` beside `library` supplies
+the coordinates that the Rietveld modes put atoms at, which a Le Bail
+extraction does not need and a Rietveld refinement cannot do without. `z`, the
+formula units per cell, is what turns a cell into a density in Section 7 and
+what the nominal composition is spread over when the Rietveld modes set up the
+site occupancies.
 
 ### 2.3 The formats the commands read, and the wavelength rule
 
@@ -1569,3 +1584,295 @@ and `--z` are required unless the optional `SAMPLE` argument is given, in
 which case the formula, Z, cell and Archimedes density not given as options
 come from the sample and its first structure, and the row goes to
 `results/density/KEY` instead.
+
+## 8. Le Bail and Rietveld
+
+The two commands of this section drive GSAS-II. `xrdkit lebail` extracts the
+cell from the whole profile rather than from peak positions alone, and
+`xrdkit rietveld` carries that result on into a refinement of the structure
+itself.
+
+### 8.1 What they are for, and what each needs
+
+A Le Bail extraction gives every reflection a free intensity and fits the
+whole pattern with them. Nothing structural is refined and nothing structural
+is learned, which is the point: the cell, the zero, the size and the
+microstrain are separated from the intensities rather than fought over with
+them. That makes it the better cell than the one Section 7 gives, because it
+uses the whole profile and not the positions of the peaks a peak finder
+happened to resolve, and it is the step that prepares a Rietveld refinement.
+
+A Rietveld refinement calculates the intensities from a structure and refines
+the structure until they match. It answers what the atoms are doing, and it
+costs beam time and judgement in proportion.
+
+Both need GSAS-II, installed as Section 1.2 describes, and both need the
+instrument parameter file of Section 3, named in the instrument table, so that
+the peak shape belonging to the diffractometer is held rather than refined.
+
+Where they differ is the structure. A Le Bail extraction needs no coordinates,
+so a structure given as a `library` entry alone is enough: the entry's space
+group and cell decide where the reflections are, and the command writes a CIF
+of that entry for GSAS-II to read. The Rietveld modes put atoms in, so they
+need a `cif` beside the entry, and stop with a message saying so when there is
+none.
+
+### 8.2 The refine table
+
+Both commands take what they refine with from the `[refine]` table of the
+project file, and a sample's own `[samples.KEY.refine]` table overrides any
+key of it. Every key is optional, and a table given in part keeps the rest of
+its values, so `background = { terms = 8 }` changes the number of terms and
+leaves the function alone.
+
+| Key | Default | What it sets |
+| --- | --- | --- |
+| `two_theta` | the scan's range | the range refined, `[low, high]` in degrees, clipped to the scan |
+| `background` | `{ function = "chebyschev-1", terms = 6 }` | the background function and its number of terms |
+| `max_passes` | `{ lebail = 60, fixed_atoms = 60, coordinates = 100, occupancies = 100 }` | the most passes of a stage, by mode |
+| `unsettled` | `accept` for every mode | whether a stage still moving after those passes is kept or rolled back |
+| `followed` | none | reflections to follow from mode to mode, as `[h, k, l]` triples |
+
+`two_theta` is the key worth setting per sample, and Section 8.4 shows why.
+`background` should be as few terms as will follow the background and no more,
+since a flexible polynomial will absorb intensity that belongs to the peaks.
+`max_passes` and `unsettled` are about how hard the refinement tries and what
+becomes of a stage that is still moving when it stops, both of which Section
+8.5 explains. `followed` names reflections to report in every mode, which is
+how a particular superstructure line is watched across a refinement.
+
+### 8.3 Running a Le Bail extraction
+
+The command takes a sample key and nothing else. The start cell is the
+sample's lattice result from Section 7 where there is one, its structure's
+cell otherwise, or `--cell` where that is given.
+
+```console
+xrdkit lebail powder_a
+```
+
+It reports each stage as it finishes, then the files, then the numbers. The
+run took about seven minutes.
+
+```text
+powder_a: lebail started, 5 stages, at most 60 passes each
+powder_a: lebail: background and scale clean
+powder_a: lebail: zero clean
+powder_a: lebail: cell clean
+powder_a: lebail: size clean
+powder_a: lebail: microstrain clean
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail_result.json
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail.gpx
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\lebail.md
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail_histogram.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail_reflections_ttb_p4bm.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\powder_a_lebail.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a\summary.md
+ttb_p4bm: tetragonal cell a = 12.4740 +/- 0.0003, c = 3.9318 +/- 0.0001 angstrom
+V = 611.789 +/- 0.042 cubic angstrom
+size 0.2051 +/- 0.0088 micron, microstrain 1011 +/- 98
+zero -0.0357 +/- 0.0008 degrees
+Rwp 3.888 per cent, reduced chi squared 1.799
+start cell of ttb_p4bm from lattice results C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\powder_a\lattice_powder_a.csv
+```
+
+Read the last line first: the start cell came from the lattice result of
+Section 7, so the two workflows are joined without either being told about the
+other, and the record says which file was used.
+
+Then compare the cell with the one that file holds. The lattice refinement
+gave a = 12.4728(16) and c = 3.9312(6); the extraction gives a = 12.4740(3)
+and c = 3.9318(1). The two agree within the lattice esds, and the extraction's
+esds are five times smaller, which is what using the whole profile buys. Quote
+this cell rather than the other one.
+
+The zero of minus 0.0357 degrees is the same instrument zero the lattice run
+found, to within its esd. An Rwp of a few per cent on a Le Bail fit and a
+reduced chi squared approaching 2 is a sound result for a scan of this length:
+a Le Bail fit has an intensity free for every reflection, so it should fit
+better than a Rietveld refinement of the same pattern, and a reduced chi
+squared well above 2 usually means the counting statistics are better than the
+model rather than that the model is wrong.
+
+The size and the microstrain are the two numbers to treat carefully. Both
+broaden the peaks, and they are separated only by how that broadening grows
+with angle, so on a laboratory scan they can trade against each other. Here
+the microstrain comes out at 1011 with an esd of 98, which is ten esds from
+zero and therefore a real measurement rather than a parameter absorbing noise.
+The next section shows what the same sample gives when that is not true.
+
+### 8.4 The same sample over the whole scan
+
+The range for `powder_a` is set to 17 to 99.98 degrees by the per sample table
+of Section 2.2, rather than the scan's own 10.01 to 99.98. Comment that table
+out and the extraction runs over everything measured.
+
+```console
+xrdkit lebail powder_a --out results/lebail/powder_a_full
+```
+
+It writes the same nine files, to the folder `--out` names. The stage lines
+and the cell are almost unchanged, and everything else is worse.
+
+```text
+powder_a: lebail started, 5 stages, at most 60 passes each
+powder_a: lebail: background and scale clean
+powder_a: lebail: zero clean
+powder_a: lebail: cell clean
+powder_a: lebail: size clean
+powder_a: lebail: microstrain clean
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail_result.json
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail.gpx
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\lebail.md
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail.png
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail.pdf
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail_histogram.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail_reflections_ttb_p4bm.csv
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\powder_a_lebail.instprm
+C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lebail\powder_a_full\summary.md
+ttb_p4bm: tetragonal cell a = 12.4739 +/- 0.0003, c = 3.9318 +/- 0.0001 angstrom
+V = 611.787 +/- 0.045 cubic angstrom
+size 0.1266 +/- 0.0037 micron, microstrain -378 +/- 104
+zero -0.0358 +/- 0.0009 degrees
+Rwp 4.829 per cent, reduced chi squared 2.666
+start cell of ttb_p4bm from lattice results C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\lattice\powder_a\lattice_powder_a.csv
+```
+
+The microstrain has gone negative, minus 378 with an esd of 104. A microstrain
+below zero is not a physical quantity; it is the refinement narrowing the
+calculated peaks because something else is making them too wide. The size has
+moved with it, from 0.205 to 0.127 microns, which is the correlation between
+the two showing itself: each has taken up what the other left. And the fit is
+worse on both measures, Rwp 4.829 against 3.888 and reduced chi squared 2.666
+against 1.799.
+
+What causes it sits at the bottom of the range. The structure expects two
+reflections at low angle that this pattern does not show, and a Le Bail
+extraction cannot take an intensity to zero, so it has nothing to fit them
+with. It drags the background up to cover them and pushes the microstrain
+negative to narrow them, after which the size and the microstrain correlate
+strongly and neither is worth reading. Starting the range above those
+reflections removes the correlation, which is why a sample whose low angle
+reflections are absent or very weak is given a range of its own rather than
+the scan's.
+
+Notice what did not change. The cell is the same to the fourth decimal place
+and the zero to the fourth, so nothing in the numbers you were after says that
+anything went wrong. The evidence is in the microstrain sign, in the size
+moving, and in the residuals, and a reader who looked only at the cell would
+have taken the second run as readily as the first.
+
+### 8.5 Stages and passes
+
+A refinement is a list of stages, and each stage adds flags to the ones before
+it, so by the last stage everything named along the way is refining together.
+The order is not a matter of taste: each stage frees parameters that only make
+sense once the ones before them are near right. A Le Bail extraction runs five
+of them, and the printed lines name each as it finishes. Background and scale
+come first, then the zero, then the cell, then the size, and last the
+microstrain.
+
+One new kind of parameter at a time is the rule. Freeing the cell before the
+background has settled lets the background take up intensity that belongs to
+the peaks, and freeing the size and the microstrain together, as the last two
+stages deliberately do not, gives two numbers that trade against each other.
+
+Within a stage the refinement is repeated in passes. GSAS-II stops at the
+first least squares cycle that raises chi squared, which is often well short
+of the minimum, so the kit runs the stage again, and again, until nothing but
+the scale moves by more than a tenth of an esd from one pass to the next, or
+until the pass cap for that mode is reached. The cap is sixty passes for a Le
+Bail extraction, and the write up records how many each stage took: eleven,
+seventeen, ten, twenty and twelve for the run above.
+
+Each stage is checked when it finishes, and its status says what became of it.
+A clean stage settled within the cap and raised nothing against itself, as all
+five did here. A stage still moving at the cap is recorded as unsettled and is
+kept or rolled back according to the `unsettled` key. A stage that raises a
+sanity check is rolled back, the refinement returns to the state the last
+stage kept left it in, and what that stage alone refined stays held for the
+rest of the run. The point of rolling back rather than stopping is that a
+sequence can be left to run and still leave a usable record.
+
+### 8.6 The files, and reading the write up
+
+Nine files go to `results/lebail/KEY`, and the logs go under `work` beside
+them.
+
+The result JSON is the machine readable record of the whole run: the inputs,
+every stage with its residuals and parameters and esds, the final model, the
+method and the date. Everything else is derived from it. The `.gpx` is the
+GSAS-II project, which opens in the GSAS-II interface if you want to look at
+the refinement yourself, with a `.bak0.gpx` beside it and a `.lst` listing.
+The histogram CSV holds the observed, calculated, background and difference
+curves point by point, for a figure of your own; the reflections CSV holds
+every reflection with its position, its indices and its extracted intensity.
+The `.instprm` is the instrument file exactly as the run used it, kept so that
+the refinement can be reproduced even if the original is edited later. The png
+and the pdf are the fitted pattern with its difference curve. `summary.md`
+gathers a run of several modes into one table, and matters more in Section 8.8
+than here. Where a mode fails, a `failure.md` is written in place of the write
+up, carrying the error, the stages that did finish and the tail of the GSAS-II
+log.
+
+`lebail.md` is the one to read. It opens with the settings, every one of them:
+the sample and its scan, the instrument and its parameter file, the range, the
+background, the phase and where its cell started, the pass rule, the driver
+and xrdkit versions, and the time of the run. That header is what makes the
+result reproducible a year later.
+
+Then comes a table of stage outcomes, one row per stage with its status, its
+passes, Rwp, Rp and reduced chi squared, and a column saying why where a
+status is not clean. Reading down the residual columns tells you which stage
+earned its place: here Rwp fell from 8.182 to 7.313 when the zero was freed
+and from 7.248 to 3.940 when the size was, and the microstrain stage moved it
+only from 3.940 to 3.888.
+
+Then the cell, refined against start with the change in each parameter, so
+that a cell that has walked a long way from where it started is obvious. Then
+the zero or the displacement, with the value it started from.
+
+Last comes the size and microstrain section, and it ends with a verdict rather
+than a number. For this run it reads that the microstrain test finds a
+microstrain, 10.3 esds from zero, with Rwp falling from 3.940 to 3.888 per
+cent. That is the test the fifth stage exists to perform: the microstrain is
+refined last and on its own so that its effect on the residual can be seen,
+and the verdict says whether the number it produced is worth keeping. A
+microstrain a fraction of an esd from zero, or one that improves the residual
+not at all, should be read as no microstrain rather than as a small one.
+
+Where the `followed` key names reflections, a further section reports each of
+them in every mode, with its observed and calculated structure factors, which
+is how a superstructure line is watched from one refinement to the next.
+
+### 8.7 The options
+
+`SAMPLE` is a sample key of the project file, and is the only argument. There
+is no way to name a scan file here: a refinement needs the instrument, the
+structure and the form, and those live in the project file.
+
+`--cell` and `--system` give the start cell of the first phase, in place of
+the sample's lattice results or its structure's cell, as the free parameters
+of its crystal system. Use it where the lattice result is one you have decided
+against.
+
+`--zero` starts the zero at a value in degrees rather than at the
+instrument's. `--displacement` refines the specimen displacement with the zero
+held, which is what a pellet does in any case, and is the flag for a powder
+you have reason to think sits proud of the holder.
+
+`--out` sends every file to a folder of your choosing rather than to
+`results/lebail/KEY`, which is how Section 8.4 keeps two runs of one sample
+side by side. `--json` prints the files written and the outcome as JSON, with
+the progress lines on the error stream so that the JSON stands alone.
+
+Every phase of the sample is extracted, not only the first; the first is the
+one whose cell `--cell` sets and whose numbers are printed first.
+
+### 8.8 Rietveld
+
+The Rietveld half of this section, covering `xrdkit rietveld`, its modes and
+stages, the write ups it produces and the undetermined parameters it reports,
+follows here.
