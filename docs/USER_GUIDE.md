@@ -109,7 +109,7 @@ and phase identification share a column, because they ask the same of a scan.
 | Purpose | Show what the sample is, identify the phases, label the reflections | Refine a and c, and the cell volume, well enough for a theoretical density | Refine the structure: coordinates, occupancies, displacement parameters |
 | Angular range | 10 to 80 degrees two theta, extended to 90 for a figure meant for publication | 10 to 120 degrees. The reflections above 90 degrees are what pin the cell down, because a given error in d shifts them furthest in two theta | 5 to 130 degrees, or wider where the instrument allows |
 | Step size | 0.01 to 0.03 degrees | 0.013 to 0.026 degrees | 0.01 to 0.02 degrees |
-| Counting statistics | Strongest peak at least 20 times the background and above about 2000 counts. For a secondary phase at 1 to 2 weight per cent to be visible on a square root or logarithmic scale, the background itself needs at least 100 counts per step, which means three to five times the count time of a quick scan | Strongest peak above 10000 counts, and the high angle peaks at least 10 times the background, since those are the ones the cell is refined on | Strongest peak above 20000 counts, and background above 200 counts per step at high angle. On a laboratory instrument this normally means several hours per scan |
+| Counting statistics | Strongest peak above about 2000 counts, which is all plotting asks of a scan. The phase check adds a background of at least 100 counts per step and a strongest peak at least 20 times it. For a secondary phase at 1 to 2 weight per cent to be visible on a square root or logarithmic scale, the background itself needs at least 100 counts per step, which means three to five times the count time of a quick scan | Strongest peak above 10000 counts, and the high angle peaks at least 10 times the background, since those are the ones the cell is refined on | Strongest peak above 20000 counts, and background above 200 counts per step at high angle. On a laboratory instrument this normally means several hours per scan |
 | Sample preparation | Flat sample, flush with the surface of the holder | Crushed pellet powder preferred. A pellet surface is acceptable if a displacement term is refined | Powder crushed and sieved below about 45 micrometres, then back loaded, side loaded or mounted in a capillary, to limit preferred orientation |
 | Standards needed | None | Either an internal standard, silicon SRM 640 at 10 to 20 weight per cent mixed into the powder, or a refined displacement term. Also an instrument parameter file from a LaB6 (SRM 660) scan on the same instrument and the same optics | An instrument parameter file from a LaB6 scan on the same configuration, a CIF of the expected structure, and a known composition |
 | Radiation | K alpha 2 present is acceptable | K alpha 2 present is acceptable, since the fit follows the K alpha 1 positions | Monochromatic Cu K alpha 1 strongly preferred |
@@ -182,11 +182,11 @@ against the table above.
 
 ### 2.2 Reading what it printed
 
-Read against the table, that scan is comfortable for plotting and for phase
-identification, and it reaches nearly to 100 degrees, but its strongest peak is
-below the 10000 counts a Le Bail cell refinement wants and its peak to
-background ratio of 14 is short of 20, so weak secondary phases may not be
-visible in it.
+Read against the table, that scan is comfortable for plotting, and it reaches
+nearly to 100 degrees, but its peak to background ratio of 14 is short of the
+20 the phase check asks for, so weak secondary phases may not be visible in it,
+and its strongest peak is below the 10000 counts a Le Bail cell refinement
+wants.
 
 `SCAN_FILE` is the only setting the script has, because it writes nothing: no
 figure and no results file, so there is no stem to name them from. Change that
@@ -235,7 +235,9 @@ Both return an `XRDScan`, whose fields are `two_theta`, `intensity`,
 `sample_id`, `source_path` and `esd`. A text pattern carries neither a
 wavelength nor a counting time, so after `read_xy` `time_per_step` is None,
 `wavelength` is None unless one was given, and `esd` is None unless the file
-had a third column.
+had a third column. Because the counting time is one of the things such a file
+does not carry, `xrdkit check` reports the time per step of a `.xy` or `.xye`
+scan as unknown rather than as a number.
 
 A `.xy` file therefore has to be told what radiation measured it. A sample key
 takes its wavelength from the instrument table of the project file and needs
@@ -269,8 +271,9 @@ results/           peak lists, indexing tables, refinement projects and exports
 figures/           the png and pdf files the plotting routines write
 ```
 
-Code lives in its own repository and data in another, so that the analysis can
-be versioned without the scans going with it.
+The package ships no data. Your scans, your CIFs and your project file live in
+a folder of your own, laid out as above, and the commands write their results
+and figures beside them.
 
 ## 4. Workflow 1: plotting a pattern with hkl indices
 
@@ -1844,6 +1847,15 @@ the offset itself is forty times its own esd, so it is nowhere near zero. Where
 a zero point comes out at one or two times its esd and the residual barely
 moves, it is not measuring anything and is better held.
 
+A good residual is not on its own a right answer. In a pseudo-cubic pattern,
+whose sub cell reflections very nearly coincide, overlapping reflections can be
+taken for single peaks and offered to the indexing as false lone candidates,
+and a cell refined on those can converge to something plausible and wrong. The
+fraction of the peaks that were indexed and the rms of the fit are the evidence
+to check before the cell is trusted: a fit that leaves peaks of its own pattern
+unindexed, or whose rms hardly falls as the model is improved, has not earned
+the cell it reports, whatever its esds say.
+
 Notice also how far the cell moves: holding the zero at zero puts a at 12.4400
 angstrom, and refining it puts a at 12.4777, a shift of 0.038 angstrom, which
 is thirty times the esd of the better fit. This is why the data quality table
@@ -1856,6 +1868,16 @@ every lattice parameter.
 displacement and a zero point together on one scan unless the peaks span a wide
 range of two theta: a zero point is a constant and a displacement follows
 cos(theta), and over a short range the two cannot be told apart.
+
+A pellet is where the choice between the two decides the answer. Fitted with a
+zero point rather than a displacement, a pellet can absorb its displacement
+into a false zero and still look like a good fit: one measured pellet fitted
+that way gave a zero of plus 0.170 degrees, and a cell 0.0068 angstrom above
+its own crushed powder in a and 0.84 cubic angstrom above it in V. The same
+pattern fitted with a displacement, which came to minus 0.203 mm, landed within
+0.0009 angstrom and minus 0.17 cubic angstrom of the powder. This is why
+`xrdkit lattice` frees the displacement and holds the zero for a pellet by
+default.
 
 Route A ends here. Everything below needs GSAS-II, so a run that stops at this
 point is a complete piece of work on its own.
@@ -3556,6 +3578,15 @@ that the example runs quickly, and two reflections to follow, and the sample
 narrows the range to 12 to 70 degrees. The first lines the script printed are
 the settings as the commands resolve them for the sample, the package's
 defaults under the project's under the sample's.
+
+The range is a per sample choice because of what sits at the bottom of it.
+Reflections the structure expects at low angle but the pattern does not show
+give a Le Bail extraction nothing to fit, so it drags the background up to
+cover them and pushes the microstrain negative to narrow them, after which the
+size and the microstrain correlate strongly and neither is worth reading.
+Starting the range above those reflections removes the correlation, which is
+why a sample whose low angle reflections are absent or very weak is given a
+range of its own rather than the scan's.
 
 A structure gives `library`, an entry of the structure library, or `cif`, a
 CIF file, or both. The entry gives what a refinement needs to know about the

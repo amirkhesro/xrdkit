@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `docs/USER_GUIDE.md`: the peak over background criterion of 20 is the phase
+  check's and not plotting's, and the guide now says why a pellet's displacement
+  is freed and its zero held, what a plausible wrong cell from a pseudo-cubic
+  pattern looks like, why the refined range is a per sample choice, and that a
+  text pattern's counting time reports as unknown.
 - `docs/GETTING_STARTED.md` matches the package as it is: the formats the
   reader accepts and where a text pattern's wavelength comes from, Section 8
   as the known limitations rather than a script, the `xrdkit` commands beside
