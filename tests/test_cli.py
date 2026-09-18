@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 from pathlib import Path
+from urllib.error import URLError
 
 import matplotlib
 
@@ -18,7 +19,9 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import xrdkit
 from xrdkit import (
     Cell,
+    CodRecord,
     Gsas2Install,
+    SimulatedReflection,
     TetragonalCell,
     cli,
     find_gsas2,
@@ -31,6 +34,7 @@ from xrdkit import (
 from xrdkit.cli import HKL_HEADROOM, main
 from xrdkit.indexing import DEFAULT_TOLERANCE
 from xrdkit.instrument import REFINED_KEYS
+from xrdkit.phases import MissingPhasesExtra
 from xrdkit.project import PROJECT_FILE, Sample, load_project
 from xrdkit.quality import WORKFLOWS
 
@@ -438,7 +442,7 @@ COMPOSITION = "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
 
 # Appended to the file xrdkit init writes.
 PROJECT_TABLES = f"""
-[instruments.aeris]
+[instruments.lab_diffractometer]
 wavelength = [1.540598, 1.544426]
 ka2 = true
 
@@ -503,7 +507,7 @@ def test_add_sample_appends_the_table(project, capsys) -> None:
     table = [
         "[samples.10c]",
         'file = "data/raw/10c.xrdml"',
-        'instrument = "aeris"',
+        'instrument = "lab_diffractometer"',
         'structures = ["ttb_x010", "bto"]',
         'stage = "calcined"',
         'form = "powder"',
@@ -519,7 +523,7 @@ def test_add_sample_appends_the_table(project, capsys) -> None:
     assert load_project(project).samples["10c"] == Sample(
         key="10c",
         file=project / "data" / "raw" / "10c.xrdml",
-        instrument="aeris",
+        instrument="lab_diffractometer",
         structures=("ttb_x010", "bto"),
         form="powder",
         stage="calcined",
@@ -2251,12 +2255,12 @@ def test_instrument_json_puts_progress_on_stderr(tmp_path, standard, capsys) -> 
 
 
 def test_instrument_stem_and_phase(tmp_path, standard) -> None:
-    argv = _instrument_argv(out=str(tmp_path / "out"), stem="aeris", phase="LaB6")
+    argv = _instrument_argv(out=str(tmp_path / "out"), stem="lab", phase="LaB6")
 
     assert main(argv) == 0
 
-    assert (tmp_path / "out" / "aeris.instprm").is_file()
-    (row,) = _rows(tmp_path / "out" / "aeris_instrument.csv")
+    assert (tmp_path / "out" / "lab.instprm").is_file()
+    (row,) = _rows(tmp_path / "out" / "lab_instrument.csv")
     assert row["phase"] == "LaB6"
     (job,) = [j for j in standard.jobs if j.get("phases")]
     assert job["phases"][0]["name"] == "LaB6"
@@ -2294,24 +2298,24 @@ def test_instrument_appends_the_instrument_table(
     path = root / PROJECT_FILE
     before = path.read_bytes()
 
-    assert main(_instrument_argv(name="aeris", radius=145.0)) == 0
+    assert main(_instrument_argv(name="lab_diffractometer", radius=145.0)) == 0
 
     table = [
-        "[instruments.aeris]",
+        "[instruments.lab_diffractometer]",
         "wavelength = [1.540598, 1.544426]",
         "ka2 = true",
         "radius = 145",
         'instprm = "data/standards/lab6.instprm"',
     ]
     out = capsys.readouterr().out.splitlines()
-    start = out.index("[instruments.aeris]")
+    start = out.index("[instruments.lab_diffractometer]")
     assert out[start : start + len(table)] == table
     after = path.read_bytes()
     assert after[: len(before)] == before
     # Appended in the file's own line endings, as add-sample does.
     newline = "\r\n" if b"\r\n" in before else "\n"
     assert newline.join(table) in after.decode("utf-8")
-    instrument = load_project(root).instruments["aeris"]
+    instrument = load_project(root).instruments["lab_diffractometer"]
     assert instrument.wavelength == (1.540598, 1.544426)
     assert instrument.ka2 is True
     assert instrument.radius == 145.0
@@ -2325,15 +2329,17 @@ def test_instrument_refuses_an_instrument_key_that_exists(
 ) -> None:
     root = _instrument_project(tmp_path, monkeypatch)
     with (root / PROJECT_FILE).open("a", encoding="utf-8") as handle:
-        handle.write("\n[instruments.aeris]\nwavelength = [1.540598]\nka2 = false\n")
+        handle.write(
+            "\n[instruments.lab_diffractometer]\nwavelength = [1.540598]\nka2 = false\n"
+        )
     before = (root / PROJECT_FILE).read_bytes()
 
-    assert main(_instrument_argv(name="aeris")) == 1
+    assert main(_instrument_argv(name="lab_diffractometer")) == 1
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.strip() == (
-        f"xrdkit instrument: instrument 'aeris' is in {root / PROJECT_FILE} "
+        f"xrdkit instrument: instrument 'lab_diffractometer' is in {root / PROJECT_FILE} "
         "already; give another --name"
     )
     assert (root / PROJECT_FILE).read_bytes() == before
@@ -2343,13 +2349,13 @@ def test_instrument_refuses_an_instrument_key_that_exists(
 def test_instrument_refuses_name_with_no_project_file(
     tmp_path, standard, capsys
 ) -> None:
-    assert main(_instrument_argv(name="aeris")) == 1
+    assert main(_instrument_argv(name="lab_diffractometer")) == 1
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.strip() == (
         f"xrdkit instrument: no {PROJECT_FILE} in the current folder or above it "
-        "to add [instruments.aeris] to; run xrdkit init"
+        "to add [instruments.lab_diffractometer] to; run xrdkit init"
     )
     assert not (tmp_path / "data" / "standards" / "lab6.instprm").exists()
 
@@ -2453,3 +2459,382 @@ def test_instrument_with_gsas2(tmp_path, monkeypatch) -> None:
     assert float(row["refined_w"]) != 0.0
     values = dict(line.split(":", 1) for line in instprm.read_text().splitlines()[1:])
     assert float(values["Lam1"]) == pytest.approx(1.540598, abs=1e-4)
+
+
+# xrdkit phases
+
+COD_CIF = """data_candidate
+_cell_length_a  5.640
+_symmetry_space_group_name_H-M  "F m -3 m"
+"""
+
+
+def _cod_record(cod_id: str, formula: str = "Na Cl") -> CodRecord:
+    return CodRecord(
+        cod_id=cod_id,
+        formula=formula,
+        space_group="F m -3 m",
+        space_group_number=225,
+        a=5.64,
+        b=5.64,
+        c=5.64,
+        alpha=90.0,
+        beta=90.0,
+        gamma=90.0,
+        volume=179.4,
+        authors="A Person",
+        journal="Acta",
+        year=2006,
+    )
+
+
+# One line per candidate, keyed by COD id, standing in for pymatgen.
+COD_PATTERNS = {
+    "2100720": [(20.0, 100.0, (1, 1, 1)), (30.0, 60.0, (2, 0, 0))],
+    "2100721": [(55.0, 100.0, (2, 2, 0)), (20.0, 40.0, (1, 1, 1))],
+    "2100722": [
+        (20.0, 100.0, (1, 1, 1)),
+        (26.8, 8.0, (2, 0, 1)),
+        (30.0, 60.0, (2, 0, 0)),
+    ],
+}
+
+
+@pytest.fixture
+def cod(tmp_path, monkeypatch):
+    """The COD faked: a fixed search result, CIFs written on fetch, and
+    simulate_pattern answering from COD_PATTERNS, so no network and no
+    pymatgen are needed."""
+    from xrdkit import phases as phases_module
+
+    fetched: list[str] = []
+
+    def fake_search(elements, exact=True, space_group=None, extra=None):
+        fake_search.asked = (list(elements), exact, space_group)
+        return [_cod_record(key) for key in sorted(COD_PATTERNS)]
+
+    def fake_fetch(cod_id, folder):
+        fetched.append(str(cod_id))
+        path = Path(folder) / f"{cod_id}.cif"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(COD_CIF, encoding="utf-8")
+        return path
+
+    def fake_simulate(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        lines = COD_PATTERNS[Path(cif_path).stem]
+        return [SimulatedReflection(*line) for line in lines]
+
+    monkeypatch.setattr(cli, "cod_search", fake_search)
+    monkeypatch.setattr(cli, "cod_fetch", fake_fetch)
+    monkeypatch.setattr(phases_module, "cod_fetch", fake_fetch)
+    monkeypatch.setattr(phases_module, "simulate_pattern", fake_simulate)
+    monkeypatch.setattr(cli, "require_phases_extra", lambda: None)
+    fake_search.asked = None
+    fake_search.fetched = fetched
+    return fake_search
+
+
+def _phases_scan(path: Path) -> Path:
+    """A scan whose peaks sit where COD_PATTERNS puts its lines, plus one more."""
+    two_theta = np.arange(10.0, 80.0, 0.02)
+    counts = np.full(two_theta.size, 100.0)
+    for centre in (20.0, 30.0, 26.8):
+        counts += 5000.0 * np.exp(-0.5 * ((two_theta - centre) / 0.05) ** 2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        XRDML.format(
+            start=two_theta[0],
+            end=two_theta[-1],
+            counts=" ".join(str(round(v)) for v in counts),
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture
+def phases_scan(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    return _phases_scan(tmp_path / "data" / "raw" / "sample.xrdml")
+
+
+def _phases_argv(scan: Path, *extra: str) -> list[str]:
+    return ["phases", str(scan), "--elements", "Na", "Cl", *extra]
+
+
+def test_phases_writes_its_files(tmp_path, cod, phases_scan, capsys) -> None:
+    assert main(_phases_argv(phases_scan)) == 0
+
+    # Without a project file the paths are relative to the working folder.
+    cifs, folder = Path("cifs") / "cod", Path("results") / "phases" / "sample"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-5:] == [
+        str(cifs / "2100722.cif"),
+        str(cifs / "index.csv"),
+        str(folder / "phases_sample.csv"),
+        str(folder / "phases_sample_unexplained.csv"),
+        str(folder / "phases_sample_record.csv"),
+    ]
+    cifs = tmp_path / "cifs" / "cod"
+    assert sorted(p.name for p in cifs.glob("*.cif")) == [
+        "2100720.cif",
+        "2100721.cif",
+        "2100722.cif",
+    ]
+
+
+def test_phases_candidate_columns_and_ranking(tmp_path, cod, phases_scan) -> None:
+    assert main(_phases_argv(phases_scan)) == 0
+
+    folder = tmp_path / "results" / "phases" / "sample"
+    rows = _rows(folder / "phases_sample.csv")
+    assert list(rows[0]) == [
+        "rank",
+        "cod_id",
+        "formula",
+        "space_group",
+        "n_explained",
+        "n_missing",
+        "score",
+        "rejected",
+        "cif",
+    ]
+    # 2100722 explains all three peaks, 2100720 two of them, and 2100721's
+    # strongest line is nowhere in the scan.
+    assert [row["cod_id"] for row in rows] == ["2100722", "2100720", "2100721"]
+    assert [row["rank"] for row in rows] == ["1", "2", "3"]
+    assert rows[0]["n_explained"] == "3" and rows[0]["rejected"] == ""
+    assert rows[2]["rejected"] == "strongest line absent"
+    assert rows[0]["cif"].endswith("2100722.cif")
+
+
+def test_phases_record_and_unexplained_columns(tmp_path, cod, phases_scan) -> None:
+    assert main(_phases_argv(phases_scan, "--zero", "0.0", "--tolerance", "0.2")) == 0
+
+    folder = tmp_path / "results" / "phases" / "sample"
+    (record,) = _rows(folder / "phases_sample_record.csv")
+    assert list(record) == [
+        "scan",
+        "sample",
+        "wavelength_angstrom",
+        "elements",
+        "space_group",
+        "zero_deg",
+        "window_min_deg",
+        "window_max_deg",
+        "tolerance_deg",
+        "n_peaks_observed",
+        "n_candidates_searched",
+        "n_candidates_fetched",
+        "n_unexplained",
+        "main",
+        "index",
+        "method",
+        "date",
+        "xrdkit_version",
+    ]
+    assert record["elements"] == "Na Cl"
+    assert float(record["window_min_deg"]) == 10.0
+    assert float(record["window_max_deg"]) == 80.0
+    assert float(record["tolerance_deg"]) == 0.2
+    assert int(record["n_peaks_observed"]) == 3
+    assert int(record["n_candidates_searched"]) == 3
+    assert record["main"] == "2100722"
+    assert record["method"].startswith("COD search by element set")
+    assert record["xrdkit_version"] == xrdkit.__version__
+    unexplained = _rows(folder / "phases_sample_unexplained.csv")
+    assert list(unexplained[0] if unexplained else {}) == [] or list(
+        unexplained[0]
+    ) == [
+        "two_theta_deg",
+        "d_angstrom",
+        "phase",
+        "hkl",
+        "reflection_two_theta_deg",
+        "intensity_percent",
+    ]
+
+
+def test_phases_defaults_come_from_the_guide(tmp_path, cod, phases_scan) -> None:
+    assert main(_phases_argv(phases_scan)) == 0
+
+    (record,) = _rows(
+        tmp_path / "results" / "phases" / "sample" / "phases_sample_record.csv"
+    )
+    assert (float(record["window_min_deg"]), float(record["window_max_deg"])) == (
+        10.0,
+        80.0,
+    )
+    assert float(record["tolerance_deg"]) == 0.15
+    assert float(record["zero_deg"]) == 0.0
+
+
+def test_phases_elements_from_a_sample_key(tmp_path, cod, project, capsys) -> None:
+    _phases_scan(project / "data" / "raw" / "phase_sample.xrdml")
+    assert (
+        main(["add-sample", "data/raw/phase_sample.xrdml", "--structure", "bto"]) == 0
+    )
+    capsys.readouterr()
+
+    assert main(["phases", "phase_sample"]) == 0
+
+    elements, exact, space_group = cod.asked
+    # BaTiO3 of the bto structure, in the order the formula gives.
+    assert elements == ["Ba", "Ti", "O"]
+    assert exact is True and space_group is None
+    folder = project / "results" / "phases" / "phase_sample"
+    assert (folder / "phases_phase_sample.csv").is_file()
+    (record,) = _rows(folder / "phases_phase_sample_record.csv")
+    assert record["sample"] == "phase_sample"
+    assert record["elements"] == "Ba Ti O"
+
+
+def test_phases_refuses_a_bare_file_without_elements(
+    tmp_path, cod, phases_scan, capsys
+) -> None:
+    assert main(["phases", str(phases_scan)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        "xrdkit phases: --elements is required for a scan named directly; a "
+        "sample key takes them from the compositions of its structures"
+    )
+    assert not (tmp_path / "cifs").exists()
+
+
+def test_phases_refuses_without_the_extra(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    def absent():
+        raise MissingPhasesExtra("simulate_pattern needs pymatgen")
+
+    monkeypatch.setattr(cli, "require_phases_extra", absent)
+
+    assert main(_phases_argv(phases_scan)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        "xrdkit phases: phase identification needs the phases extra; install "
+        "with pip install xrdkit[phases]"
+    )
+    # Refused before the COD was asked anything.
+    assert cod.asked is None
+    assert not (tmp_path / "cifs").exists()
+
+
+def test_phases_reports_a_search_that_could_not_reach_the_cod(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    def unreachable(elements, exact=True, space_group=None, extra=None):
+        raise URLError("getaddrinfo failed")
+
+    monkeypatch.setattr(cli, "cod_search", unreachable)
+
+    assert main(_phases_argv(phases_scan)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err.strip().startswith("xrdkit phases: the COD search failed: ")
+    assert "getaddrinfo failed" in captured.err
+    assert not (tmp_path / "cifs").exists()
+
+
+def test_phases_reports_a_fetch_that_could_not_reach_the_cod(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    def unreachable(cod_id, folder):
+        raise URLError("connection reset")
+
+    monkeypatch.setattr(cli, "cod_fetch", unreachable)
+    from xrdkit import phases as phases_module
+
+    monkeypatch.setattr(phases_module, "cod_fetch", unreachable)
+
+    assert main(_phases_argv(phases_scan)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err.strip().startswith(
+        "xrdkit phases: fetching a CIF from the COD failed: "
+    )
+    assert "connection reset" in captured.err
+
+
+def test_phases_does_not_fetch_a_cif_already_there(tmp_path, cod, phases_scan) -> None:
+    cifs = tmp_path / "cifs" / "cod"
+    cifs.mkdir(parents=True)
+    (cifs / "2100720.cif").write_text(COD_CIF, encoding="utf-8")
+
+    assert main(_phases_argv(phases_scan)) == 0
+
+    assert cod.fetched == ["2100721", "2100722"]
+
+
+def test_phases_max_candidates(tmp_path, cod, phases_scan) -> None:
+    assert main(_phases_argv(phases_scan, "--max-candidates", "2")) == 0
+
+    rows = _rows(tmp_path / "results" / "phases" / "sample" / "phases_sample.csv")
+    assert {row["cod_id"] for row in rows} == {"2100720", "2100721"}
+    assert cod.fetched == ["2100720", "2100721"]
+
+
+def test_phases_main_names_the_phase_of_the_unexplained(
+    tmp_path, cod, phases_scan, capsys
+) -> None:
+    # 2100720 explains 20 and 30 but not 26.8, which 2100722 accounts for.
+    assert (
+        main(_phases_argv(phases_scan, "--max-candidates", "1", "--main", "2100720"))
+        == 0
+    )
+
+    folder = tmp_path / "results" / "phases" / "sample"
+    (record,) = _rows(folder / "phases_sample_record.csv")
+    assert record["main"] == "2100720"
+    rows = _rows(folder / "phases_sample_unexplained.csv")
+    assert [float(row["two_theta_deg"]) for row in rows] == [
+        pytest.approx(26.8, abs=0.05)
+    ]
+    assert rows[0]["phase"] == "" and rows[0]["hkl"] == ""
+    assert "unidentified" in capsys.readouterr().out
+
+
+def test_phases_json_puts_progress_on_stderr(
+    tmp_path, cod, phases_scan, capsys
+) -> None:
+    assert main(_phases_argv(phases_scan, "--json")) == 0
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["n_peaks_observed"] == 3
+    assert result["elements"] == ["Na", "Cl"]
+    assert result["main"] == "2100722"
+    assert [c["cod_id"] for c in result["candidates"]] == [
+        "2100722",
+        "2100720",
+        "2100721",
+    ]
+    assert result["files"][-1].endswith("phases_sample_record.csv")
+    assert "peaks observed from 10 to 80 degrees" in captured.err
+
+
+def test_phases_refuses_an_xy_with_no_wavelength(
+    tmp_path, cod, phases_scan, capsys
+) -> None:
+    scan = tmp_path / "data" / "raw" / "sample.xy"
+    source = read_xrdml(phases_scan)
+    scan.write_text(
+        "\n".join(
+            f"{t:.5f} {i:.3f}" for t, i in zip(source.two_theta, source.intensity)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(_phases_argv(scan)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == (
+        f"xrdkit phases: {scan} carries no wavelength; give --wavelength "
+        "ANGSTROM or a sample key"
+    )

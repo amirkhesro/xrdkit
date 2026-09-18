@@ -30,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `xrdkit phases SCAN`, which identifies the phases of a scan against the
+  Crystallography Open Database: it takes the peaks, searches the COD for
+  entries made of exactly the elements given, fetches their CIFs, simulates
+  and weighs each pattern, and attributes every peak left over to the main
+  phase or reports it unidentified. With a sample key the elements come from
+  the compositions of its structures. `--space-group`, `--zero`, `--window`,
+  `--tolerance`, `--max-candidates`, `--main`, `--wavelength`, `--stem`,
+  `--out` and `--json` tune it. Needs the `phases` extra, which is checked
+  before any request is made.
+- `xrdkit.phases` gains the steps as functions: `observed_peaks`,
+  `fetch_candidates` (which takes the pause between downloads as a callable),
+  `rank_candidates` and `attribute_unexplained`, returning frozen `Candidate`
+  and `UnexplainedPeak` results, with `require_phases_extra` and
+  `MissingPhasesExtra` for the optional dependency.
 - `xrdkit instrument SCAN --cif CIF --cell ...`, which makes the instrument
   parameter file from a standard's scan: it fits the widths of the standard's
   reflections to the Caglioti relation, refines the zero and the profile terms

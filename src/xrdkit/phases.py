@@ -16,26 +16,39 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from xrdkit.peaks import KALPHA1_WAVELENGTH
+from xrdkit.peaks import KALPHA1_WAVELENGTH, exclude_kalpha2, find_peaks
 
 __all__ = [
     "CIF_INDEX_COLUMNS",
     "COD_URL",
+    "PHASES_PAUSE_S",
+    "PHASES_TOLERANCE",
+    "PHASES_WINDOW",
+    "Candidate",
     "CandidateMatch",
     "CodRecord",
     "ExplainedPeak",
+    "MissingPhasesExtra",
     "SimulatedReflection",
+    "UnexplainedPeak",
+    "attribute_unexplained",
     "cod_fetch",
     "cod_search",
+    "fetch_candidates",
     "match_candidate",
+    "observed_peaks",
+    "rank_candidates",
+    "require_phases_extra",
     "simulate_pattern",
     "write_cif_index",
 ]
@@ -492,3 +505,243 @@ def _number(value: object) -> float | None:
 def _integer(value: object) -> int | None:
     text = _text(value)
     return None if text is None else int(text)
+
+
+# The phase identification of the user guide, step by step: the peaks, the
+# search, the fetch, the ranking and the attribution of what is left over.
+# Each step is a function of its own so that a caller can stop after any of
+# them, and so that the ones that need pymatgen can be tested with a stub.
+
+# Two theta range the peaks are taken and the patterns simulated over.
+PHASES_WINDOW = (10.0, 80.0)
+
+# How far an observed peak may lie from a simulated reflection, in degrees.
+PHASES_TOLERANCE = 0.15
+
+# Seconds between fetches, so that the COD is not hammered.
+PHASES_PAUSE_S = 0.5
+
+
+class MissingPhasesExtra(ImportError):
+    """pymatgen is not installed, so no pattern can be simulated.
+
+    Raised in place of the plain :class:`ImportError` so that a caller can
+    tell a missing optional dependency from any other import failure.
+    """
+
+
+def require_phases_extra() -> None:
+    """Check that pymatgen is importable, before anything slow is started.
+
+    Raises
+    ------
+    MissingPhasesExtra
+        If it is not.
+    """
+    try:
+        import pymatgen.analysis.diffraction.xrd
+        import pymatgen.io.cif  # noqa: F401
+    except ImportError as error:
+        raise MissingPhasesExtra(
+            "phase identification needs pymatgen: install xrdkit[phases]"
+        ) from error
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One COD entry weighed against the observed peaks.
+
+    ``explained`` and ``missing`` are counts, ``score`` is explained less
+    missing, and ``rejected`` says why a candidate is out of the running, or
+    is empty. ``cif`` is the file the pattern was simulated from.
+    """
+
+    rank: int
+    cod_id: str
+    formula: str
+    space_group: str | None
+    explained: int
+    missing: int
+    score: int
+    rejected: str
+    cif: Path
+    explained_positions: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnexplainedPeak:
+    """An observed peak no candidate accounts for, and what may cause it.
+
+    ``phase`` and ``hkl`` name the reflection of the main phase within
+    tolerance of it, ``None`` where there is none, in which case the peak is
+    unidentified.
+    """
+
+    two_theta: float
+    d_spacing: float
+    phase: str | None
+    hkl: tuple[int, ...] | None
+    reflection_two_theta: float | None
+    intensity: float | None
+
+    @property
+    def identified(self) -> bool:
+        """Whether the main phase explains this peak."""
+        return self.hkl is not None
+
+
+def observed_peaks(
+    scan,
+    window: tuple[float, float] = PHASES_WINDOW,
+    zero: float = 0.0,
+) -> tuple[float, ...]:
+    """The peak positions of ``scan`` in ``window``, corrected by ``zero``.
+
+    The K alpha 2 satellites are excluded, since a simulated pattern has none,
+    and the zero offset is taken off so that the positions can be compared
+    with a calculated pattern.
+
+    Raises
+    ------
+    ValueError
+        If the scan carries no wavelength.
+    """
+    if scan.wavelength is None:
+        raise ValueError("the scan carries no wavelength")
+    peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=window))
+    return tuple(peak.two_theta - zero for peak in peaks)
+
+
+def fetch_candidates(
+    records: Sequence[CodRecord],
+    folder: str | Path,
+    pause: Callable[[float], None] = time.sleep,
+    pause_s: float = PHASES_PAUSE_S,
+) -> list[Path]:
+    """Download the CIF of every record not already in ``folder``.
+
+    Returns the files fetched, in order; one already there is left as it is
+    and is not in the list. ``pause`` is called with ``pause_s`` after each
+    download, so that a test can pass a callable that does nothing.
+
+    Raises
+    ------
+    urllib.error.URLError
+        If the COD cannot be reached.
+    """
+    folder = Path(folder)
+    fetched = []
+    for record in records:
+        if (folder / record.filename).is_file():
+            continue
+        fetched.append(cod_fetch(record.cod_id, folder))
+        pause(pause_s)
+    return fetched
+
+
+def rank_candidates(
+    records: Sequence[CodRecord],
+    folder: str | Path,
+    observed: Sequence[float],
+    wavelength: float,
+    window: tuple[float, float] = PHASES_WINDOW,
+    tolerance: float = PHASES_TOLERANCE,
+    simulate: Callable[..., list[SimulatedReflection]] | None = None,
+) -> list[Candidate]:
+    """Weigh every record's simulated pattern against ``observed``.
+
+    A candidate whose strongest simulated line is not observed is rejected,
+    whatever it scores: the strongest line of a phase that is present is
+    always there. The list comes back best first, ties broken by COD id, and
+    ``rank`` numbers it from 1.
+
+    ``simulate`` replaces :func:`simulate_pattern`, for a caller that has
+    patterns of its own or no pymatgen.
+
+    Raises
+    ------
+    MissingPhasesExtra
+        If pymatgen is needed and not installed.
+    """
+    simulate = simulate or simulate_pattern
+    folder = Path(folder)
+    weighed = []
+    for record in records:
+        cif = folder / record.filename
+        try:
+            simulated = simulate(cif, wavelength=wavelength, two_theta_range=window)
+        except ImportError as error:
+            raise MissingPhasesExtra(str(error)) from error
+        match = match_candidate(observed, simulated, tolerance=tolerance)
+        rejected = ""
+        if simulated:
+            strongest = max(simulated, key=lambda reflection: reflection.intensity)
+            if strongest in match.missing:
+                rejected = "strongest line absent"
+        weighed.append((record, cif, match, rejected))
+    weighed.sort(key=lambda item: (-item[2].score, item[0].cod_id))
+    return [
+        Candidate(
+            rank=position,
+            cod_id=record.cod_id,
+            formula=record.formula,
+            space_group=record.space_group,
+            explained=len(match.explained),
+            missing=len(match.missing),
+            score=match.score,
+            rejected=rejected,
+            cif=cif,
+            explained_positions=tuple(peak.observed for peak in match.explained),
+        )
+        for position, (record, cif, match, rejected) in enumerate(weighed, start=1)
+    ]
+
+
+def attribute_unexplained(
+    observed: Sequence[float],
+    explained: Iterable[float],
+    cif: str | Path,
+    wavelength: float,
+    phase: str,
+    window: tuple[float, float] = PHASES_WINDOW,
+    tolerance: float = PHASES_TOLERANCE,
+    simulate: Callable[..., list[SimulatedReflection]] | None = None,
+) -> list[UnexplainedPeak]:
+    """The observed peaks not in ``explained``, each against ``cif``'s pattern.
+
+    Every peak left over is given its d spacing and, where the main phase has
+    a reflection within ``tolerance`` of it, the strongest such reflection;
+    where it has none the peak is unidentified and is worth chasing.
+
+    Raises
+    ------
+    MissingPhasesExtra
+        If pymatgen is needed and not installed.
+    """
+    simulate = simulate or simulate_pattern
+    known = [float(position) for position in explained]
+    try:
+        main = simulate(Path(cif), wavelength=wavelength, two_theta_range=window)
+    except ImportError as error:
+        raise MissingPhasesExtra(str(error)) from error
+    left = [
+        position
+        for position in observed
+        if not any(abs(position - other) <= tolerance for other in known)
+    ]
+    peaks = []
+    for position in left:
+        d = wavelength / (2.0 * math.sin(math.radians(position / 2.0)))
+        near = [r for r in main if abs(r.two_theta - position) <= tolerance]
+        cause = max(near, key=lambda r: r.intensity) if near else None
+        peaks.append(
+            UnexplainedPeak(
+                two_theta=float(position),
+                d_spacing=float(d),
+                phase=phase if cause else None,
+                hkl=cause.hkl if cause else None,
+                reflection_two_theta=cause.two_theta if cause else None,
+                intensity=cause.intensity if cause else None,
+            )
+        )
+    return peaks

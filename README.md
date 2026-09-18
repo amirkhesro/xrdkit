@@ -45,6 +45,7 @@ point `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME` at it, or leave it at
 | `xrdkit stack SCAN ...` | plot several scans stacked one above the other |
 | `xrdkit density` | theoretical density from a formula and a cell, and relative density |
 | `xrdkit instrument SCAN --cif CIF --cell ...` | instrument parameter file from a standard scan, refined in GSAS-II, with `--name` to record it in `xrdkit.toml` |
+| `xrdkit phases SCAN` | identify the phases against the COD: search by element set, fetch the CIFs, rank the candidates and say what is left over (needs the `phases` extra) |
 | `xrdkit lattice SCAN` | refine the cell of a scan, with its volume and density |
 | `xrdkit lebail SAMPLE` | Le Bail extraction of a sample in GSAS-II, for its cell, to `results/lebail/KEY` |
 | `xrdkit rietveld SAMPLE` | Rietveld refinement of a sample in GSAS-II from its Le Bail result, `--from` and `--through` the modes fixed_atoms, coordinates and occupancies, to `results/rietveld/KEY` |

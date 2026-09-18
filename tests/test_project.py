@@ -31,11 +31,11 @@ VALID = """
 name = "SBLNT"
 version = 1
 
-[instruments.aeris]
+[instruments.lab_diffractometer]
 wavelength = [1.540598, 1.544426]
 ka2 = true
 radius = 240.0
-instprm = "data/standards/aeris.instprm"
+instprm = "data/standards/lab_diffractometer.instprm"
 
 [instruments.mono]
 wavelength = [1.540598]
@@ -56,7 +56,7 @@ cell = { a = 12.4844, c = 3.9572 }
 
 [samples.x010_calcined]
 file = "data/raw/10c.xrdml"
-instrument = "aeris"
+instrument = "lab_diffractometer"
 structures = ["ttb_x010", "cod-2100720"]
 stage = "calcined"
 form = "powder"
@@ -75,7 +75,7 @@ PLACEHOLDERS = (
     "data/raw/10c.xrdml",
     "data/raw/10s.xrdml",
     "cifs/2100720.cif",
-    "data/standards/aeris.instprm",
+    "data/standards/lab_diffractometer.instprm",
 )
 
 
@@ -109,12 +109,12 @@ def test_valid_project_loads_as_written(project_dir: Path) -> None:
     assert project.version == 1
 
     assert project.instruments == {
-        "aeris": Instrument(
-            key="aeris",
+        "lab_diffractometer": Instrument(
+            key="lab_diffractometer",
             wavelength=(1.540598, 1.544426),
             ka2=True,
             radius=240.0,
-            instprm=project_dir / "data/standards/aeris.instprm",
+            instprm=project_dir / "data/standards/lab_diffractometer.instprm",
         ),
         "mono": Instrument(key="mono", wavelength=(1.540598,), ka2=False),
     }
@@ -139,7 +139,7 @@ def test_valid_project_loads_as_written(project_dir: Path) -> None:
         "x010_calcined": Sample(
             key="x010_calcined",
             file=project_dir / "data/raw/10c.xrdml",
-            instrument="aeris",
+            instrument="lab_diffractometer",
             structures=("ttb_x010", "cod-2100720"),
             form="powder",
             stage="calcined",
@@ -417,7 +417,7 @@ BROKEN = [
         "ka2 with one wavelength",
         "[1.540598, 1.544426]",
         "[1.540598]",
-        r"instruments\.aeris: ka2 = true needs two wavelengths",
+        r"instruments\.lab_diffractometer: ka2 = true needs two wavelengths",
     ),
     (
         "no ka2 with two wavelengths",
@@ -428,9 +428,9 @@ BROKEN = [
     # instprm exists when given.
     (
         "missing instprm",
-        "data/standards/aeris.instprm",
+        "data/standards/lab_diffractometer.instprm",
         "data/standards/missing.instprm",
-        r"instruments\.aeris\.instprm: no such file",
+        r"instruments\.lab_diffractometer\.instprm: no such file",
     ),
     # Sample and structure keys name folders.
     (

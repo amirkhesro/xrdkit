@@ -36,6 +36,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from urllib.error import URLError
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -47,6 +48,7 @@ from xrdkit.cell import Cell
 from xrdkit.density import (
     cell_volume,
     formula_mass,
+    parse_formula,
     relative_density,
     theoretical_density,
 )
@@ -79,6 +81,19 @@ from xrdkit.peaks import (
     find_peaks,
     flag_kalpha2,
     peaks_to_csv,
+)
+from xrdkit.phases import (
+    PHASES_TOLERANCE,
+    PHASES_WINDOW,
+    MissingPhasesExtra,
+    attribute_unexplained,
+    cod_fetch,
+    cod_search,
+    fetch_candidates,
+    observed_peaks,
+    rank_candidates,
+    require_phases_extra,
+    write_cif_index,
 )
 from xrdkit.pipeline import MODES, Options, mode_paths, run_sequence
 from xrdkit.plotting import (
@@ -2121,6 +2136,368 @@ def _add_instrument(subparsers) -> None:
     parser.set_defaults(handler=_run_instrument)
 
 
+# What the phases command records as its method, for its record row.
+PHASES_METHOD = (
+    "COD search by element set, each candidate's pattern simulated with "
+    "pymatgen and weighed against the observed peaks"
+)
+
+
+def _phases_elements(args: argparse.Namespace, item: _Input) -> list[str]:
+    """The elements to search on: ``--elements``, or a sample's structures.
+
+    A sample's are the union of the compositions of the structures it lists,
+    in the order they first appear, which is the order the formulae give.
+    """
+    if args.elements:
+        return list(dict.fromkeys(args.elements))
+    if item.sample is None:
+        raise CommandError(
+            "--elements is required for a scan named directly; a sample key takes "
+            "them from the compositions of its structures"
+        )
+    elements: dict[str, None] = {}
+    for key in item.sample.structures:
+        composition = item.project.structures[key].composition
+        try:
+            elements.update(dict.fromkeys(parse_formula(composition)))
+        except ValueError as error:
+            raise CommandError(f"structures.{key}: {error}") from None
+    if not elements:
+        raise CommandError(
+            f"the structures of sample {item.name} give no elements; give --elements"
+        )
+    return list(elements)
+
+
+def _run_phases(args: argparse.Namespace) -> int:
+    # Every option, the scan, the extra and the folders are settled before any
+    # request is made: a search takes a while and the COD is someone else's.
+    low, high = args.window
+    if not low < high:
+        raise CommandError(
+            f"--window takes MIN MAX with MIN below MAX, not {low:g} {high:g}"
+        )
+    if args.tolerance <= 0:
+        raise CommandError(
+            f"--tolerance must be greater than 0, not {args.tolerance:g}"
+        )
+    if args.max_candidates is not None and args.max_candidates < 1:
+        raise CommandError(
+            f"--max-candidates must be 1 or more, not {args.max_candidates}"
+        )
+    item = _resolve(args.scan, {})
+    (scan,) = _read_inputs([item], args.wavelength)
+    wavelength = _require_wavelength(scan, item)
+    elements = _phases_elements(args, item)
+    try:
+        require_phases_extra()
+    except MissingPhasesExtra:
+        raise CommandError(
+            "phase identification needs the phases extra; install with "
+            "pip install xrdkit[phases]"
+        ) from None
+
+    project = item.project
+    if project is None:
+        try:
+            project = load_project(find_project())
+        except (FileNotFoundError, ValueError):
+            project = None
+    root = project.root if (project is not None and args.out is None) else Path(".")
+    cifs = (Path(args.out) if args.out is not None else root) / "cifs" / "cod"
+    stem = args.stem or item.name
+    if args.out is not None:
+        folder = Path(args.out) / "results" / "phases" / item.name
+    elif project is not None:
+        folder = results_dir(project, "phases", item.name)
+    else:
+        folder = Path("results") / "phases" / item.name
+
+    report = _printer(args)
+    try:
+        observed = observed_peaks(scan, (low, high), args.zero)
+    except ValueError as error:
+        raise CommandError(str(error)) from None
+    if not observed:
+        raise CommandError(
+            f"no peaks found in {item.path} between {low:g} and {high:g} degrees"
+        )
+    report(f"{len(observed)} peaks observed from {low:g} to {high:g} degrees")
+
+    try:
+        records = sorted(
+            cod_search(elements, exact=True, space_group=args.space_group),
+            key=lambda record: record.cod_id,
+        )
+    except (URLError, ValueError) as error:
+        raise CommandError(f"the COD search failed: {error}") from None
+    report(f"{len(records)} COD entries made of exactly {', '.join(elements)}")
+    if not records:
+        raise CommandError(
+            "the COD holds no entry of exactly those elements; widen --elements "
+            "or drop --space-group"
+        )
+    if args.max_candidates is not None:
+        records = records[: args.max_candidates]
+    for record in records:
+        report(f"  {record.cod_id}  {record.formula:22s} {record.space_group}")
+
+    try:
+        fetched = fetch_candidates(records, cifs)
+    except (URLError, ValueError) as error:
+        raise CommandError(f"fetching a CIF from the COD failed: {error}") from None
+    index = write_cif_index(records, cifs / "index.csv", notes=stem)
+    report(f"index written to {index}")
+
+    try:
+        candidates = rank_candidates(
+            records, cifs, observed, wavelength, (low, high), args.tolerance
+        )
+    except MissingPhasesExtra as error:
+        raise CommandError(str(error)) from None
+    except ValueError as error:
+        raise CommandError(
+            f"a candidate's pattern could not be simulated: {error}"
+        ) from None
+    for candidate in candidates:
+        report(
+            f"  {candidate.cod_id}  explained {candidate.explained:2d}/"
+            f"{len(observed)}  missing {candidate.missing:2d}  "
+            f"score {candidate.score:3d}  "
+            f"{'rejected, ' + candidate.rejected if candidate.rejected else ''}".rstrip()
+        )
+
+    kept = [c for c in candidates if not c.rejected] or list(candidates)
+    by_id = {candidate.cod_id: candidate for candidate in candidates}
+    main = args.main or kept[0].cod_id
+    # A peak no candidate accounts for is worth naming, so --main may point at
+    # a phase outside the set searched: it is fetched like any other.
+    if main in by_id:
+        main_cif = by_id[main].cif
+    else:
+        if not re.fullmatch(r"\d{7}", main):
+            raise CommandError(f"--main takes a seven digit COD id, not {main!r}")
+        main_cif = cifs / f"{main}.cif"
+        if not main_cif.is_file():
+            try:
+                main_cif = cod_fetch(main, cifs)
+            except (URLError, ValueError) as error:
+                raise CommandError(
+                    f"fetching the main phase {main} from the COD failed: {error}"
+                ) from None
+            fetched.append(main_cif)
+    explained_positions = sorted(
+        {
+            position
+            for candidate in candidates
+            for position in candidate.explained_positions
+        }
+    )
+    try:
+        unexplained = attribute_unexplained(
+            observed,
+            explained_positions,
+            main_cif,
+            wavelength,
+            main,
+            (low, high),
+            args.tolerance,
+        )
+    except MissingPhasesExtra as error:
+        raise CommandError(str(error)) from None
+    for peak in unexplained:
+        if peak.identified:
+            report(
+                f"{peak.two_theta:.3f} degrees, d = {peak.d_spacing:.4f} angstrom: "
+                f"{peak.phase} {peak.hkl} at {peak.reflection_two_theta:.3f}, "
+                f"{peak.intensity:.1f} per cent"
+            )
+        else:
+            report(
+                f"{peak.two_theta:.3f} degrees, d = {peak.d_spacing:.4f} angstrom: "
+                "unidentified"
+            )
+
+    folder.mkdir(parents=True, exist_ok=True)
+    candidates_path = folder / f"phases_{stem}.csv"
+    _write_rows(
+        candidates_path,
+        [
+            {
+                "rank": candidate.rank,
+                "cod_id": candidate.cod_id,
+                "formula": candidate.formula,
+                "space_group": candidate.space_group,
+                "n_explained": candidate.explained,
+                "n_missing": candidate.missing,
+                "score": candidate.score,
+                "rejected": candidate.rejected,
+                "cif": str(candidate.cif),
+            }
+            for candidate in candidates
+        ],
+    )
+    unexplained_path = folder / f"phases_{stem}_unexplained.csv"
+    _write_rows(
+        unexplained_path,
+        [
+            {
+                "two_theta_deg": peak.two_theta,
+                "d_angstrom": peak.d_spacing,
+                "phase": peak.phase,
+                "hkl": "" if peak.hkl is None else " ".join(map(str, peak.hkl)),
+                "reflection_two_theta_deg": peak.reflection_two_theta,
+                "intensity_percent": peak.intensity,
+            }
+            for peak in unexplained
+        ],
+        columns=[
+            "two_theta_deg",
+            "d_angstrom",
+            "phase",
+            "hkl",
+            "reflection_two_theta_deg",
+            "intensity_percent",
+        ],
+    )
+    record_path = _append_row(
+        folder / f"phases_{stem}_record.csv",
+        {
+            "scan": str(item.path),
+            "sample": item.sample.key if item.sample else None,
+            "wavelength_angstrom": wavelength,
+            "elements": " ".join(elements),
+            "space_group": args.space_group,
+            "zero_deg": args.zero,
+            "window_min_deg": low,
+            "window_max_deg": high,
+            "tolerance_deg": args.tolerance,
+            "n_peaks_observed": len(observed),
+            "n_candidates_searched": len(records),
+            "n_candidates_fetched": len(fetched),
+            "n_unexplained": len(unexplained),
+            "main": main,
+            "index": str(index),
+            "method": PHASES_METHOD,
+            "date": datetime.datetime.now(datetime.UTC).astimezone().date().isoformat(),
+            "xrdkit_version": __version__,
+        },
+    )
+    written = [*fetched, index, candidates_path, unexplained_path, record_path]
+    return _finish(
+        args,
+        written,
+        n_peaks_observed=len(observed),
+        elements=elements,
+        candidates=[
+            asdict(candidate) | {"cif": str(candidate.cif)} for candidate in candidates
+        ],
+        main=main,
+        unexplained=[asdict(peak) for peak in unexplained],
+    )
+
+
+def _write_rows(path: Path, rows: list[dict], columns: list[str] | None = None) -> Path:
+    """Write ``rows`` to ``path`` as a CSV, header first, replacing the file."""
+    columns = columns or (list(rows[0]) if rows else [])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {key: "" if value is None else value for key, value in row.items()}
+            )
+    return path
+
+
+def _add_phases(subparsers) -> None:
+    parser = subparsers.add_parser(
+        "phases",
+        help="identify the phases of a scan against the COD",
+        description=(
+            "Search the Crystallography Open Database for entries made of "
+            "exactly the elements given, fetch their CIFs, simulate each "
+            "pattern and weigh it against the peaks of the scan, then say what "
+            "explains every peak left over. Needs the phases extra, "
+            "pip install xrdkit[phases], and an internet connection. The CIFs "
+            "and their index are kept under cifs/cod, and the ranking, the "
+            "peaks left over and a record of the run go to "
+            "results/phases/KEY."
+        ),
+    )
+    parser.add_argument(
+        "scan",
+        metavar="SCAN",
+        help="path to a .xrdml, .xy or .xye file, or a sample key",
+    )
+    parser.add_argument(
+        "--elements",
+        nargs="+",
+        metavar="EL",
+        help=(
+            "element symbols the entries are made of, at most eight (default: "
+            "the elements of a sample's structures' compositions)"
+        ),
+    )
+    parser.add_argument(
+        "--space-group",
+        metavar="SYMBOL",
+        help="only entries of this space group symbol (default: any)",
+    )
+    parser.add_argument(
+        "--zero",
+        type=float,
+        default=0.0,
+        metavar="DEG",
+        help="zero offset taken off every observed peak (default: 0)",
+    )
+    parser.add_argument(
+        "--window",
+        nargs=2,
+        type=float,
+        default=list(PHASES_WINDOW),
+        metavar=("MIN", "MAX"),
+        help=(
+            "two theta range the peaks are taken and the patterns simulated "
+            f"over (default: {PHASES_WINDOW[0]:g} {PHASES_WINDOW[1]:g})"
+        ),
+    )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=PHASES_TOLERANCE,
+        metavar="DEG",
+        help=(
+            "how far an observed peak may lie from a simulated reflection "
+            f"(default: {PHASES_TOLERANCE:g})"
+        ),
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        metavar="N",
+        help="fetch and weigh only the first N entries found (default: all)",
+    )
+    parser.add_argument(
+        "--main",
+        metavar="COD_ID",
+        help=(
+            "the phase the peaks left over are attributed to (default: the top "
+            "ranked candidate that was not rejected)"
+        ),
+    )
+    parser.add_argument(
+        "--wavelength",
+        type=float,
+        metavar="ANGSTROM",
+        help="K alpha 1 wavelength (default: the scan's own, or the instrument's)",
+    )
+    _add_output_options(parser, "the scan's file stem, or the sample key")
+    parser.set_defaults(handler=_run_phases)
+
+
 def _run_lebail(args: argparse.Namespace) -> int:
     # Every option and input is checked before anything is written.
     cell = _cell_option(args)
@@ -2484,6 +2861,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_density(subparsers)
     _add_lattice(subparsers)
     _add_instrument(subparsers)
+    _add_phases(subparsers)
     _add_lebail(subparsers)
     _add_rietveld(subparsers)
     return parser

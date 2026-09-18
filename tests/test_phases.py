@@ -3,6 +3,8 @@
 import csv
 import io
 import json
+import math
+from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -20,6 +22,7 @@ from xrdkit import (
     simulate_pattern,
     write_cif_index,
 )
+from xrdkit.io import XRDScan
 from xrdkit.peaks import KALPHA1_WAVELENGTH
 from xrdkit.phases import CIF_INDEX_COLUMNS
 
@@ -463,3 +466,225 @@ def test_index_notes_apply_to_cod_records_and_replace_old_ones(tmp_path: Path) -
         "candidate",
         "mine",
     ]
+
+
+# The identification steps: observed peaks, the fetch, the ranking and the
+# attribution. pymatgen is not needed: a stub stands in for simulate_pattern
+# wherever a pattern is wanted, so the ranking and attribution logic is
+# tested on its own.
+
+
+def _record(cod_id: str, formula: str = "Na Cl", group: str = "F m -3 m") -> CodRecord:
+    return CodRecord(
+        cod_id=cod_id,
+        formula=formula,
+        space_group=group,
+        space_group_number=225,
+        a=5.64,
+        b=5.64,
+        c=5.64,
+        alpha=90.0,
+        beta=90.0,
+        gamma=90.0,
+        volume=179.4,
+        authors="A Person",
+        journal="Acta",
+        year=2006,
+    )
+
+
+def _pattern(*lines: tuple[float, float, tuple[int, ...]]):
+    return [SimulatedReflection(*line) for line in lines]
+
+
+def _stub(patterns: dict[str, list[SimulatedReflection]]):
+    """A simulate_pattern that answers from ``patterns``, keyed by file stem."""
+
+    def simulate(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        return patterns[Path(cif_path).stem]
+
+    return simulate
+
+
+def _scan(two_theta, intensity, wavelength=KALPHA1_WAVELENGTH) -> XRDScan:
+    """A scan of the axis and counts given, for observed_peaks."""
+    two_theta = np.asarray(two_theta, dtype=float)
+    return XRDScan(
+        two_theta=two_theta,
+        intensity=np.asarray(intensity, dtype=float),
+        wavelength=wavelength,
+        start_angle=float(two_theta[0]),
+        end_angle=float(two_theta[-1]),
+        step_size=float(two_theta[1] - two_theta[0]),
+        time_per_step=1.0,
+        sample_id="synthetic",
+        source_path="synthetic.xrdml",
+    )
+
+
+def _peaked_scan(centres: list[float], wavelength=KALPHA1_WAVELENGTH) -> XRDScan:
+    two_theta = np.arange(10.0, 80.0, 0.02)
+    intensity = np.full(two_theta.size, 100.0)
+    for centre in centres:
+        intensity += 5000.0 * np.exp(-0.5 * ((two_theta - centre) / 0.05) ** 2)
+    return _scan(two_theta, intensity, wavelength)
+
+
+def test_observed_peaks_corrects_by_the_zero_offset() -> None:
+    scan = _peaked_scan([20.0, 35.0, 50.0])
+
+    positions = phases.observed_peaks(scan, window=(10.0, 80.0), zero=0.17)
+
+    assert len(positions) == 3
+    for position, centre in zip(positions, [20.0, 35.0, 50.0]):
+        assert position == pytest.approx(centre - 0.17, abs=0.03)
+
+
+def test_observed_peaks_refuses_a_scan_with_no_wavelength() -> None:
+    scan = replace(_peaked_scan([20.0]), wavelength=None)
+
+    with pytest.raises(ValueError, match="carries no wavelength"):
+        phases.observed_peaks(scan)
+
+
+def test_fetch_candidates_skips_a_cif_already_present(
+    requests: list[str], tmp_path: Path
+) -> None:
+    answer(f"{phases.COD_URL}/2100720.cif", b"data_one\n")
+    answer(f"{phases.COD_URL}/2100721.cif", b"data_two\n")
+    (tmp_path / "2100720.cif").write_text("data_kept\n", encoding="utf-8")
+    waits: list[float] = []
+
+    fetched = phases.fetch_candidates(
+        [_record("2100720"), _record("2100721")], tmp_path, pause=waits.append
+    )
+
+    assert [path.name for path in fetched] == ["2100721.cif"]
+    assert (tmp_path / "2100720.cif").read_text(encoding="utf-8") == "data_kept\n"
+    assert waits == [phases.PHASES_PAUSE_S]
+    assert requests == [f"{phases.COD_URL}/2100721.cif"]
+
+
+def test_rank_candidates_orders_by_score_and_rejects_an_absent_strong_line(
+    tmp_path: Path,
+) -> None:
+    observed = [20.0, 30.0, 40.0]
+    patterns = {
+        # Explains every peak and predicts nothing unseen.
+        "2100720": _pattern((20.0, 100.0, (1, 1, 1)), (30.0, 60.0, (2, 0, 0))),
+        # Explains two, and its strongest line is nowhere near a peak.
+        "2100721": _pattern((55.0, 100.0, (2, 2, 0)), (20.0, 40.0, (1, 1, 1))),
+        # Explains one.
+        "2100722": _pattern(
+            (40.0, 100.0, (3, 1, 1)),
+        ),
+    }
+    records = [_record(key) for key in patterns]
+
+    ranked = phases.rank_candidates(
+        records, tmp_path, observed, 1.54, (10.0, 80.0), 0.15, simulate=_stub(patterns)
+    )
+
+    assert [candidate.cod_id for candidate in ranked] == [
+        "2100720",
+        "2100722",
+        "2100721",
+    ]
+    assert [candidate.rank for candidate in ranked] == [1, 2, 3]
+    assert ranked[0].explained == 2 and ranked[0].missing == 0
+    assert ranked[0].rejected == ""
+    assert ranked[0].cif == tmp_path / "2100720.cif"
+    assert ranked[2].rejected == "strongest line absent"
+    assert ranked[0].score > ranked[1].score > ranked[2].score
+    assert ranked[0].explained_positions == (20.0, 30.0)
+
+
+def test_rank_candidates_without_pymatgen_is_one_error(tmp_path: Path) -> None:
+    def absent(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        raise ImportError("simulate_pattern needs pymatgen: install xrdkit[phases]")
+
+    with pytest.raises(phases.MissingPhasesExtra, match="pymatgen"):
+        phases.rank_candidates(
+            [_record("2100720")], tmp_path, [20.0], 1.54, simulate=absent
+        )
+
+
+def test_attribute_unexplained_names_the_main_phase_reflection(tmp_path: Path) -> None:
+    observed = [20.0, 30.0, 26.75]
+    main = _pattern((26.70, 6.6, (2, 0, 1)), (20.0, 100.0, (1, 1, 1)))
+
+    left = phases.attribute_unexplained(
+        observed,
+        [20.0, 30.0],
+        tmp_path / "2100720.cif",
+        1.5406,
+        "2100720",
+        (10.0, 80.0),
+        0.15,
+        simulate=_stub({"2100720": main}),
+    )
+
+    (peak,) = left
+    assert peak.two_theta == 26.75
+    assert peak.identified
+    assert peak.phase == "2100720"
+    assert peak.hkl == (2, 0, 1)
+    assert peak.reflection_two_theta == 26.70
+    assert peak.intensity == pytest.approx(6.6)
+    # d = lambda / (2 sin theta), theta being half the corrected angle.
+    assert peak.d_spacing == pytest.approx(
+        1.5406 / (2.0 * math.sin(math.radians(26.75 / 2.0))), rel=1e-9
+    )
+
+
+def test_attribute_unexplained_says_unidentified_with_nothing_near(
+    tmp_path: Path,
+) -> None:
+    left = phases.attribute_unexplained(
+        [20.0, 44.0],
+        [20.0],
+        tmp_path / "2100720.cif",
+        1.5406,
+        "2100720",
+        simulate=_stub({"2100720": _pattern((26.70, 100.0, (2, 0, 1)))}),
+    )
+
+    (peak,) = left
+    assert peak.two_theta == 44.0
+    assert not peak.identified
+    assert peak.phase is None and peak.hkl is None
+    assert peak.reflection_two_theta is None and peak.intensity is None
+
+
+def test_require_phases_extra_when_it_is_there() -> None:
+    pytest.importorskip("pymatgen")
+
+    assert phases.require_phases_extra() is None
+
+
+def test_rank_and_attribute_with_pymatgen(nacl_cif: Path) -> None:
+    pytest.importorskip("pymatgen")
+
+    simulated = simulate_pattern(nacl_cif, two_theta_range=(20, 80))
+    observed = [reflection.two_theta for reflection in simulated[:3]]
+    record = _record("2100720")
+    (nacl_cif.parent / record.filename).write_text(
+        nacl_cif.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    ranked = phases.rank_candidates(
+        [record], nacl_cif.parent, observed, KALPHA1_WAVELENGTH, (20.0, 80.0), 0.15
+    )
+    left = phases.attribute_unexplained(
+        [*observed, 21.0],
+        observed,
+        nacl_cif.parent / record.filename,
+        KALPHA1_WAVELENGTH,
+        record.cod_id,
+        (20.0, 80.0),
+        0.15,
+    )
+
+    assert ranked[0].explained == 3
+    assert ranked[0].rejected == ""
+    assert [peak.two_theta for peak in left] == [21.0]
