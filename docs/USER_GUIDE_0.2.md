@@ -2560,3 +2560,859 @@ Part II is the library reference: one section per module, with the functions a
 command calls and the ones it does not, for anyone who wants to do something
 the commands do not cover, to process a series in a loop, or to build a figure
 of their own. It follows below.
+
+## 11. Using the library
+
+Part I is the whole of xrdkit as a set of commands, and for most work that is
+all that is needed. Part II is the library underneath them: the modules the
+commands call, the public functions and classes of each, and what every
+argument does. Nothing here replaces a command. It is for the work that falls
+outside one.
+
+### 11.1 Why a script is worth writing
+
+Four kinds of work ask for a script rather than a command.
+
+A figure of your own. `xrdkit plot` writes one pattern and one hkl labelled
+pattern in a fixed layout, and that is all it writes. The plotting functions
+hand back the matplotlib figure and axes, so a script can set a title, choose
+the window, write the refined cell into a corner, draw two patterns on one
+axes, or anything else matplotlib can do, and then save. Section 15 does
+exactly that.
+
+A series in a loop. Twelve compositions checked, indexed and tabulated is
+twelve commands and twelve results folders, or one script over a list of
+sample keys that writes a single table at the end. The project file is
+readable from the library as well, so the loop can take its samples from
+`xrdkit.toml` rather than from a list typed out by hand, which Section 27
+covers.
+
+A stage sequence the commands do not offer. `xrdkit rietveld` runs three
+modes in a fixed order, each with a fixed set of stages. A refinement that
+needs a stage the modes do not have, or the same mode run twice from
+different starting values, is built from a refinement job directly, which
+Sections 28 and 29 cover.
+
+Size and strain. A Scherrer size, a Williamson-Hall plot and the separation of
+size broadening from strain broadening are in the library and behind no
+command at all, because they rest on a judgement about which reflections to
+use that a command cannot make for you. Section 23 is the whole of that.
+
+### 11.2 Importing
+
+Every name in Part II is imported from the module that defines it, as in
+`from xrdkit.io import read_scan` or
+`from xrdkit.peaks import exclude_kalpha2, find_peaks`. The module is named in
+the heading of each section, so the import line follows from the section you
+are reading.
+
+The package re-exports most of these names at the top level as well, so
+`from xrdkit import read_scan` reaches the same function and is what the older
+guide used. Importing from the module is used throughout Part II because it
+says where a function lives, which is what you want when you go looking for
+the rest of its module. Two names are worth knowing at the top level:
+`xrdkit.TTB_CELL`, the tetragonal tungsten bronze start cell of 12.45 and 3.94
+angstrom that the examples use, and `xrdkit.list_entries`, which lists the
+structure library entries of Section 25.
+
+### 11.3 How the code blocks work
+
+Every block of Python in Part II is part of a script. Save it in a file whose
+name ends in `.py`, in the project folder or in a `scripts` folder inside it,
+and run it from the project folder, the one holding `xrdkit.toml`, with
+`py scripts/name.py` on Windows or `python3 scripts/name.py` on macOS. Nothing
+here is meant to be typed at a Python prompt.
+
+One line of prose above each block says which file it belongs to and what to
+do with it: the whole of a file of that name, a new file to start, or lines to
+add to the end of a file already started. A block that continues a script is
+run with everything before it in the same file, never on its own. Each script
+begins with its settings, marked by the comment line `Edit these lines for
+each new sample. Nothing below needs changing.`, and those lines are the only
+ones that change from one sample to the next: the scan file, the labels, and
+the stem the output files are named from. A block introduced as what the
+script printed is its output, which is what your own run should print in its
+place.
+
+The settings are this guide's examples and are meant to be replaced. Change
+those lines and nothing else. In particular, do not use Replace All on a
+number: `10.0` is the start of a two theta window in one line of a script and
+part of something else further down, and replacing every one of them silently
+changes the analysis.
+
+### 11.4 Where the numbers come from
+
+Every printed block in Part II came from running the script shown, in the same
+project folder as Part I and on the same example files, the ones Section 1.4
+lists. The two parts can therefore be read across. The cell `plot_pattern.py`
+refines in Section 15 is the cell `xrdkit plot pellet_a` printed in Section
+5.1, to the last figure, because the command and the script do the same
+arithmetic on the same scan. The report `scan_quality.py` prints in Section 13
+is the report `xrdkit check pellet_a` printed in Section 4.1. Where a number
+differs from Part I, the text says which argument made it differ.
+
+The scripts of Part II name their output files apart from Part I's, so that
+running them leaves everything Part I wrote where it was.
+
+### 11.5 What is in Part II
+
+One section per module, in the order a workflow meets them. Section 12 is
+`io`, the readers and the scan they return, and Section 13 is `quality`, the
+assessment behind `xrdkit check`. Section 14 is `peaks`, the peak finder and
+the K alpha 2 rule, and Section 15 is `plotting`, every figure the kit draws.
+Sections 16 to 18 are the cell and what is done with it: `indexing` assigns
+reflections to peaks and refines a cell as it goes, `cell` is the `Cell` class
+and its geometry, and `lattice` is the least squares refinement behind
+`xrdkit lattice`. Section 19 is `density`, formula masses and theoretical
+densities, and Section 20 is `symmetry`, the space group operations,
+reflection conditions and multiplicities that Section 10.1 says are known for
+eight groups. Sections 21 to 23 are the widths: `broadening` fits peak shapes
+and the Caglioti function, `instrument` turns a standard scan into
+instrumental widths, and `sizestrain` takes those to a crystallite size and a
+microstrain. Section 24 is `phases`, the search, the simulation and the
+matching behind `xrdkit phases`, and Section 25 is `library`, the structure
+library entries. Section 26 is `structure`, cell contents, bond lengths and
+the site set up a refinement needs, and Section 27 is `project`, reading and
+writing `xrdkit.toml`. Sections 28 and 29 are the refinement itself: `gsas2`
+builds and runs a job under the GSAS-II Python, and `pipeline` is the mode
+sequence behind `xrdkit lebail` and `xrdkit rietveld`. Section 30 lists the
+modules you are not expected to call directly and says what calls them
+instead, and Section 31 indexes every public name in the package with the
+section that documents it.
+
+## 12. io
+
+`xrdkit.io` reads a scan file into an `XRDScan`, which is what every other
+module in the kit takes. It has four public names: the dataclass, one reader
+for each format, and one reader that chooses between them by the suffix.
+Nothing in this module writes to a scan file.
+
+### 12.1 XRDScan
+
+`XRDScan` is a plain dataclass. The two arrays are the pattern and everything
+else is what the file said about it.
+
+| Field | What it holds |
+| --- | --- |
+| `two_theta` | positions in degrees, as a numpy array, rising |
+| `intensity` | counts at each position, as a numpy array of the same length |
+| `wavelength` | the K alpha 1 wavelength in angstroms, or `None` when the file carries none |
+| `start_angle`, `end_angle` | the first and last two theta of the scan, in degrees |
+| `step_size` | the step in degrees, from the range and the number of points, or `0.0` for a scan of one point |
+| `time_per_step` | the counting time in seconds, or `None` when the file carries none |
+| `sample_id` | whatever identifier the file carries, which for a text pattern is the file stem |
+| `source_path` | the path it was read from, as a string, as it was given |
+| `esd` | esds of the intensities when every row gave one, as an `.xye` does, and `None` otherwise |
+
+Two of those are `None` more often than a reader expects. A two or three
+column text pattern carries no wavelength and no counting time, so both come
+back as `None` and have to be supplied from the project file or the command
+line. Section 10.11 says what the missing time means for `xrdkit check`.
+
+`sample_id` is what the diffractometer wrote into the file, not the sample key
+of your project. The example scans keep the identifiers they were measured
+under, so `pellet_a.xrdml` reports a `sample_id` of `10s`. Use the key for
+naming results, and the identifier only for telling you what the instrument
+thought it was measuring.
+
+### 12.2 The readers
+
+`read_xrdml(path)` reads a PANalytical `.xrdml` file. The two theta axis is
+rebuilt from the start position, the end position and the number of
+intensities rather than read point by point, so the step is constant by
+construction. Intensities come from the `counts` element or from the
+`intensities` element, whichever the writer used. The counting time comes from
+the common counting time where the file gives one and from the first per point
+time otherwise. It raises `ValueError` when the file holds no scan, no data
+points, no intensities or no two theta axis.
+
+`read_xy(path, wavelength=None)` reads a two or three column text pattern: two
+theta, intensity, and in an `.xye` the esd of the intensity. Any number of
+header or comment lines may come first, and the data begin at the first line
+whose first character could begin a number. Fields are separated by spaces, by
+tabs or by a comma, blank lines are ignored wherever they fall, either line
+ending is read, and a byte order mark is stripped. `wavelength` in angstroms
+is recorded on the scan, since the file carries none; `None` is allowed here,
+and it is the command line that insists on one where the wavelength is needed.
+It raises `ValueError` when the file holds no data, or a data line has fewer
+than two numbers, a field that is not a number, or a two theta that does not
+increase on the line before it, and the message names the file and the line.
+
+`read_scan(path, wavelength=None)` chooses the reader by the suffix: `.xrdml`
+goes to `read_xrdml`, and `.xy` and `.xye` go to `read_xy`. A `wavelength`
+given here replaces the one an `.xrdml` carries and supplies the one a text
+pattern lacks. Any other suffix raises `ValueError` naming the formats the kit
+reads. This is the reader to call in a script that should accept whatever the
+user has, and it is the one the commands call.
+
+### 12.3 Reading a scan and looking at it
+
+The whole of `scan_fields.py`:
+
+```python
+from xrdkit.io import read_xrdml
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+
+scan = read_xrdml(SCAN_FILE)
+print(f"sample id   {scan.sample_id}")
+print(f"source      {scan.source_path}")
+print(f"wavelength  {scan.wavelength} angstrom")
+print(f"points      {scan.two_theta.size}")
+print(f"range       {scan.start_angle:.2f} to {scan.end_angle:.2f} degrees")
+print(f"step        {scan.step_size:.4f} degrees")
+print(f"time        {scan.time_per_step:.1f} s per step")
+print(f"esds        {scan.esd is not None}")
+print(f"first point {scan.two_theta[0]:.4f} degrees, {scan.intensity[0]:.0f} counts")
+print(f"last point  {scan.two_theta[-1]:.4f} degrees, {scan.intensity[-1]:.0f} counts")
+```
+
+It prints the fields a later step needs.
+
+```text
+sample id   10s
+source      data\raw\pellet_a.xrdml
+wavelength  1.540598 angstrom
+points      4141
+range       10.01 to 99.98 degrees
+step        0.0217 degrees
+time        34.2 s per step
+esds        False
+first point 10.0099 degrees, 652 counts
+last point  99.9840 degrees, 913 counts
+```
+
+The range, the step, the point count and the counting time are the numbers
+`xrdkit check pellet_a` reported in Section 4.1, because the command reads
+them off this same object. The wavelength of 1.540598 angstrom is the one the
+diffractometer recorded, and it is what every d spacing in Part II is
+calculated from unless a script overrides it.
+
+## 13. quality
+
+`xrdkit.quality` is the whole of `xrdkit check`. It measures a scan against
+the criteria of Section 4.2 and says which workflows the scan is within reach
+of. Only the criteria that can be read off the scan itself are applied:
+angular range, step size and counting statistics. Sample preparation,
+standards and radiation are left to you.
+
+### 13.1 The functions and the dataclasses
+
+`assess_scan(scan)` takes an `XRDScan` and returns a `ScanQuality`. It raises
+`ValueError` when the scan holds no intensities.
+
+`format_report(quality)` takes that `ScanQuality` and returns the plain text
+report as one string, with no trailing newline.
+
+`ScanQuality` carries the measured numbers and one verdict per workflow.
+
+| Field | What it holds |
+| --- | --- |
+| `start_angle`, `end_angle`, `step_size`, `points` | the scanned range in degrees, the step, and how many points |
+| `time_per_step` | the counting time in seconds, or `None` |
+| `maximum`, `median` | the strongest intensity and the median, in counts |
+| `peak_over_median` | the first divided by the second, and infinite when the median is zero and the maximum is not |
+| `high_angle_start` | where the high angle third begins, at the start plus two thirds of the range |
+| `high_angle_maximum`, `high_angle_median` | the same two intensities over that third |
+| `verdicts` | a dict of workflow name to `Verdict` |
+
+`Verdict` has two fields: `suitable`, a boolean, and `reasons`, a list of
+strings, one per criterion failed, each naming the value measured and the
+threshold it fell short of. A suitable verdict has an empty list.
+
+The median stands in for the background, because most of the points in a
+powder pattern are background. A scan counts as covering an angular range when
+it starts and ends within one step of the limits, and a step size passes when
+it lies inside the range the table gives, limits included, with a tolerance of
+a millionth of a degree so that a step computed as 0.020000000001 still counts
+as 0.02.
+
+Two module level names are worth knowing. `CRITERIA` is the thresholds
+themselves, a dict of workflow name to a dict of criterion name to threshold,
+and `WORKFLOWS` is the workflow names in the order the report prints them:
+`plotting`, `phase_identification`, `le_bail`, `rietveld`. Reading `CRITERIA`
+is how to put the numbers of Section 4.2 into a table of your own rather than
+copying them out.
+
+### 13.2 Assessing a scan
+
+The whole of `scan_quality.py`:
+
+```python
+from xrdkit.io import read_scan
+from xrdkit.quality import assess_scan, format_report
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+
+quality = assess_scan(read_scan(SCAN_FILE))
+print(format_report(quality))
+```
+
+It prints this.
+
+```text
+range   10.01 to 99.98 degrees
+step    0.0217 degrees
+points  4141
+time    34.2 s per step
+maximum 13964 counts
+median  998 counts
+peak over median 14
+high angle maximum 1833 counts, from 69.99 degrees
+high angle median  1012 counts
+
+plotting: suitable
+phase_identification: not suitable (peak over median 14.0, below 20, weak phases may not be visible)
+le_bail: not suitable (range 10.01 to 99.98 degrees, short of 10 to 120; high angle peak over median 1.8, below 10)
+rietveld: not suitable (range 10.01 to 99.98 degrees, short of 5 to 130; step 0.0217 degrees, outside 0.01 to 0.02; strongest peak 13964 counts, below 20000)
+```
+
+That is the report `xrdkit check pellet_a` printed in Section 4.1, line for
+line, less the sample line the command adds from the project file and the path
+of the file it wrote. Section 4.3 reads it. The command is `assess_scan` and
+`format_report` with the project file around them, so a script that wants the
+numbers rather than the report takes them off the `ScanQuality` instead of
+parsing the text: `quality.peak_over_median` is the 14.0 of the second
+verdict, and `quality.verdicts["le_bail"].reasons` is the two reasons of the
+third, already separated.
+
+## 14. peaks
+
+`xrdkit.peaks` finds the reflections in a pattern and decides which of them
+are K alpha 2 satellites. It has five public names: the `Peak` dataclass, the
+finder, the flagging rule, the filter that applies it, and a CSV writer.
+
+### 14.1 Peak
+
+| Field | What it holds |
+| --- | --- |
+| `two_theta` | the position in degrees, refined off the grid by a parabola through the peak and its two neighbours |
+| `intensity` | the height in counts at that point, background included |
+| `prominence` | the height above the higher of the two saddles either side, in counts |
+| `fwhm` | the full width at half the prominence, in degrees |
+| `d_spacing` | from Bragg's law at the scan's wavelength, in angstroms |
+| `relative_intensity` | the height as a percentage of the strongest peak in the list, so the strongest is always 100 |
+| `kalpha2_of` | the index in the list of the K alpha 1 parent this peak is a satellite of, or `None` |
+| `background` | the counts under the peak, the lowest intensity within one degree of it, or `0.0` when it was not estimated |
+
+The position is refined rather than taken from the grid because the step is
+0.0217 degrees on the example scans and the positions that matter are wanted
+to about a tenth of that. The refinement falls back to the grid position when
+the peak sits on the first or the last point, when the three points are
+collinear, or when the vertex lands outside the neighbouring points.
+
+### 14.2 find_peaks
+
+`find_peaks(scan, min_prominence=0.02, min_distance=0.15,
+two_theta_range=None, flag_satellites=True)` returns a list of `Peak` ordered
+by two theta.
+
+| Argument | What it does |
+| --- | --- |
+| `scan` | the `XRDScan` to search |
+| `min_prominence` | the least prominence a peak must have, as a fraction of the strongest intensity inside the searched range. 0.02 by default, so a peak must stand 2 per cent of the tallest peak clear of its surroundings. Lower it to catch weak reflections along with more noise, raise it for a list of the major peaks alone |
+| `min_distance` | the least separation between peaks, in degrees. 0.15 by default, which is wide enough to keep one reflection from being reported twice and narrow enough to keep a resolved K alpha 2 satellite as a peak of its own |
+| `two_theta_range` | a `(low, high)` window in degrees to search inside. `None`, the default, searches the whole scan. Both the relative intensities and the prominence threshold are taken from the strongest intensity inside the window, so narrowing the window changes both |
+| `flag_satellites` | whether to run `flag_kalpha2` over the result before returning it. `True` by default. `False` leaves every `kalpha2_of` as `None`, which is what to pass for radiation with no K alpha 2 |
+
+It raises `ValueError` when `two_theta_range` selects no points, or when the
+step cannot be determined because the scan has one point and no step. It
+returns an empty list, rather than raising, when the window holds points but
+no peak clears the threshold.
+
+Satellites are returned rather than dropped. Flagging and filtering are
+separate steps so that a peak list meant to be read can keep them with their
+parents named, while a peak list meant to be indexed has them removed.
+
+### 14.3 flag_kalpha2
+
+`flag_kalpha2(peaks, position_tolerance=0.5, intensity_ratio=(0.2, 0.8),
+wavelength_ratio=1.002486)` sets `kalpha2_of` on the peaks that look like
+satellites, in place, and returns the same list for chaining.
+
+A satellite sits where the parent's d spacing puts it at the longer K alpha 2
+wavelength, always to high angle, and carries roughly half the parent's
+intensity. A peak is flagged only when both hold. Its parent is the nearest
+peak below it in two theta whose predicted satellite position falls within
+`position_tolerance` times that peak's own full width at half maximum, and the
+peak is then flagged only if the ratio of the two intensities lies inside
+`intensity_ratio`. A peak whose nearest candidate parent fails the intensity
+test is not handed on to a farther one.
+
+| Argument | What it does |
+| --- | --- |
+| `peaks` | the list to flag, modified in place |
+| `position_tolerance` | the largest gap allowed between a peak and its parent's predicted satellite position, as a fraction of the parent's full width at half maximum. 0.5 by default |
+| `intensity_ratio` | the allowed `(low, high)` range of the peak's height above background over its parent's. `(0.2, 0.8)` by default, around the theoretical 0.5. Raising the ceiling towards 1 starts flagging genuine reflections that happen to sit at the K alpha 2 spacing above a neighbour of comparable height |
+| `wavelength_ratio` | K alpha 2 over K alpha 1, 1.002486 for copper. `None` flags nothing, which is the setting for monochromated radiation |
+
+It raises `ValueError` when `intensity_ratio` is not a rising pair of positive
+numbers.
+
+Both intensities are heights above the background, `intensity` less
+`background`, and not the raw heights: raw heights on a high background give a
+ratio pulled towards one. Prominences are no substitute either, because a
+satellite on its parent's tail has its prominence measured down to the saddle
+between the two, which pulls the ratio the other way.
+
+Only resolved satellites can be caught this way. Below about 50 degrees the
+pair is not separated enough for the finder to report two peaks, so there is
+nothing to flag, which is what Section 5.3 means when it says the doublet is
+not resolved there.
+
+### 14.4 exclude_kalpha2 and peaks_to_csv
+
+`exclude_kalpha2(peaks)` returns a new list holding the peaks whose
+`kalpha2_of` is `None`. The survivors are copies rather than the same objects,
+so the original list is untouched, and their `relative_intensity` is
+recomputed against the strongest of them, so it again reaches 100. An empty
+list comes back when nothing survives.
+
+`peaks_to_csv(peaks, path)` writes the list as CSV with a header and returns
+the path, creating the parent folder if it does not exist. The columns are
+`two_theta`, `intensity`, `prominence`, `fwhm`, `d_spacing`,
+`relative_intensity` and `kalpha2_of`. Positions and widths keep three decimal
+places, d spacings four, counts one and relative intensities two, and
+`kalpha2_of` is the parent's index or blank. `background` is not written: it is
+an intermediate of the flagging rather than a measurement to report.
+
+### 14.5 Finding the peaks of a scan
+
+The whole of `peak_list.py`:
+
+```python
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks, peaks_to_csv
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+STEM = "pellet_a"
+
+HEADING = "  i  two_theta  intensity   fwhm  d_spacing  relative  kalpha2_of"
+
+
+def show(peaks, indices):
+    """Print the given peaks of ``peaks`` one to a line."""
+    for i in indices:
+        peak = peaks[i]
+        print(
+            f"{i:3d}  {peak.two_theta:9.3f}  {peak.intensity:9.1f}"
+            f"  {peak.fwhm:5.3f}  {peak.d_spacing:9.4f}"
+            f"  {peak.relative_intensity:8.2f}"
+            f"  {'' if peak.kalpha2_of is None else peak.kalpha2_of:>10}"
+        )
+
+
+scan = read_scan(SCAN_FILE)
+peaks = find_peaks(scan, min_prominence=0.02, two_theta_range=(10.0, 80.0))
+print(f"{len(peaks)} peaks found")
+print(HEADING)
+show(peaks, range(4))
+
+flagged = [i for i, peak in enumerate(peaks) if peak.kalpha2_of is not None]
+print(f"{len(flagged)} flagged as K alpha 2 satellites")
+print(HEADING)
+show(peaks, [peaks[flagged[0]].kalpha2_of, flagged[0]])
+
+clean = exclude_kalpha2(peaks)
+print(f"{len(clean)} peaks after exclude_kalpha2")
+print(HEADING)
+show(clean, range(4))
+print(peaks_to_csv(clean, f"results/library/peaks_{STEM}.csv"))
+```
+
+It prints the first four peaks, then the first flagged satellite with the
+parent it was matched to, then the first four of what is left, then the file
+it wrote.
+
+```text
+41 peaks found
+  i  two_theta  intensity   fwhm  d_spacing  relative  kalpha2_of
+  0     22.748     2383.0  0.196     3.9059     17.07            
+  1     25.882     6968.0  0.119     3.4397     49.90            
+  2     26.921     1397.0  0.188     3.3092     10.00            
+  3     27.895     7179.0  0.140     3.1958     51.41            
+6 flagged as K alpha 2 satellites
+  i  two_theta  intensity   fwhm  d_spacing  relative  kalpha2_of
+ 17     51.920     2904.0  0.153     1.7597     20.80            
+ 18     52.061     2157.0  0.033     1.7553     15.45          17
+35 peaks after exclude_kalpha2
+  i  two_theta  intensity   fwhm  d_spacing  relative  kalpha2_of
+  0     22.748     2383.0  0.196     3.9059     17.07            
+  1     25.882     6968.0  0.119     3.4397     49.90            
+  2     26.921     1397.0  0.188     3.3092     10.00            
+  3     27.895     7179.0  0.140     3.1958     51.41            
+results\library\peaks_pellet_a.csv
+```
+
+Peak 18 is the satellite of peak 17. It sits 0.141 degrees above it, which is
+where the longer wavelength puts the same d spacing, and its height is about
+three quarters of its parent's over a background the two share. All six
+flagged peaks lie above 50 degrees, as Section 14.3 says they must.
+
+The first four peaks read the same before and after the filter, relative
+intensities included, and that is the expected result rather than a sign that
+nothing happened. `exclude_kalpha2` recomputes the relative intensities
+against the strongest survivor, and the strongest peak of this scan is not a
+satellite, so the divisor does not change. Had the tallest peak in the list
+been one, every relative intensity would have risen.
+
+The window of 10 to 80 degrees is why 41 peaks are found here where Section
+5.1 reports 49: the command searches the whole scan, which runs to 99.98
+degrees, and the six satellites are still in its count.
+
+## 15. plotting
+
+`xrdkit.plotting` draws every figure the kit produces. There are eight public
+names: one that sets the style, four that draw something, two that write text
+onto axes already drawn, and one that saves. All of them work on matplotlib
+figures and axes and hand them back, so anything matplotlib can do to a figure
+can be done to one of these before it is saved. Nothing in this module calls
+`pyplot`, and nor should a script that uses it: take the figure and the axes
+that come back and work on those.
+
+### 15.1 apply_style
+
+`apply_style()` sets the global matplotlib rcParams to a clean single column
+journal style: serif text, thin lines, ticks on all four sides pointing in, no
+grid, and a figure size of 3.5 by 2.6 inches. Call it once, before anything is
+drawn. It changes the rcParams of the process, so a script that draws figures
+of its own alongside the kit's should call it first and then override what it
+wants.
+
+### 15.2 plot_pattern
+
+`plot_pattern(scan, ax=None, scale="linear", normalise=False, label=None,
+colour="black", linewidth=0.7)` draws one pattern and returns the figure and
+the axes as a tuple.
+
+| Argument | What it does |
+| --- | --- |
+| `scan` | the `XRDScan` to draw |
+| `ax` | axes to draw on. `None`, the default, makes a new single column figure |
+| `scale` | `"linear"`, `"sqrt"` or `"log"`. Linear shows the strong reflections in proportion; square root brings up the weak ones, which is what a phase check wants. Anything else raises `ValueError` |
+| `normalise` | scale the trace to a maximum of 1, after the transform, so a normalised square root trace runs from 0 to 1 on the square root scale. Off by default for a single pattern |
+| `label` | the legend label for the line. No legend is drawn unless you ask for one |
+| `colour`, `linewidth` | the appearance of the line |
+
+The axes come back with the two theta label, the intensity label and the tick
+locators already set, and the limits as matplotlib chose them. Set the limits
+yourself before annotating, because the annotation reads them as they stand.
+
+### 15.3 plot_stacked
+
+`plot_stacked(scans, labels=None, offset=None, scale="linear",
+normalise=True, colour="black", linewidth=0.7, figsize=(3.5, 5.0))` draws
+several patterns one above another and returns four things: the figure, the
+axes, the vertical base of each slot, and the line drawn for each scan, the
+last two in the order the scans were given.
+
+| Argument | What it does |
+| --- | --- |
+| `scans` | the scans to stack, drawn bottom to top in the order given |
+| `labels` | one label per scan, written at the upper right of each trace. Each scan's `sample_id` by default, which for the example files is the instrument's identifier rather than the project key, so give the labels |
+| `offset` | the vertical spacing between traces. `None`, the default, gives 1.2 times the tallest scaled trace, which keeps the tallest peak of one pattern clear of the pattern above it. Raise it where labels crowd the trace above, lower it to fit more traces in |
+| `scale`, `normalise`, `colour`, `linewidth` | as for `plot_pattern`, except that `normalise` is on by default, so that scans counted for different times can be compared |
+| `figsize` | the figure size in inches, 3.5 by 5.0 by default, against the 3.5 by 2.6 of a single pattern |
+
+It raises `ValueError` when `scans` is empty, when `scale` is unknown, or when
+`labels` is a different length from `scans`.
+
+The bases and the lines are what the annotation needs. A label placed against
+`lines[-1]` rides on the top trace; a label placed at `bases[0]` plus enough
+room to clear the tallest peak of the bottom trace sits in a row above it.
+
+### 15.4 annotate_hkl
+
+`annotate_hkl(ax, indexed, y=0.0, min_relative_intensity=5.0, fontsize=7,
+rotation=90, min_separation=None, label_height=None, ambiguous="first",
+max_levels=1, line=None)` writes an hkl label above the indexed peaks of one
+trace and returns the labels written, in two theta order, as a list of
+matplotlib `Text`.
+
+| Argument | What it does |
+| --- | --- |
+| `ax` | the axes to write on |
+| `indexed` | the list of `IndexedPeak` for that trace, from the indexing of Section 16. Peaks with no assignment are skipped; `mark_peaks` is for those |
+| `y` | the base of the level 0 labels, in data coordinates. Ignored when `line` is given |
+| `min_relative_intensity` | skip peaks below this percentage of the strongest peak of the scan. 5 by default; raise it to thin out a crowded figure |
+| `fontsize` | the label size in points, 7 by default |
+| `rotation` | the label angle in degrees anticlockwise, 90 by default, because upright labels take the least horizontal room |
+| `min_separation` | how far apart in degrees two labels on the same level must be. `None`, the default, measures the rendered labels instead and keeps whichever do not overlap, which packs them as tightly as the text really allows |
+| `label_height` | the height of one level in data coordinates, by default 0.04 of the y range of the axes |
+| `ambiguous` | what to do with a peak that matched more than one reflection: `"first"` labels the assigned one, `"all"` joins every candidate with a solidus, `"skip"` leaves the peak unlabelled. Anything else raises `ValueError` |
+| `max_levels` | how many rows of labels to try. 1 by default, which keeps them in a single row. Ignored when `line` is given, and below 1 raises `ValueError` |
+| `line` | the trace the peaks belong to, one of the lines `plot_stacked` returned or `ax.lines[0]` after `plot_pattern`. Each label then rides on top of its own peak rather than sitting in a row. Giving one always measures, so `min_separation` has no effect |
+
+Room is allotted by priority and not by position. The peaks are taken
+strongest first, and a peak that finds no free level keeps no label at all, so
+in a crowded stretch it is the weak reflections that lose theirs and the
+strong ones a reader is looking for stay labelled. Labels are never stacked
+into a column or shifted sideways onto a neighbour, which is what keeps every
+label that is drawn pointing at the peak it belongs to.
+
+The figure size and the x limits are read as they stand. Set both before
+calling this: annotating and then resizing the figure or changing the limits
+leaves the labels where the old geometry put them.
+
+### 15.5 mark_peaks
+
+`mark_peaks(ax, positions, y, marker="*", fontsize=9)` writes `marker` above
+each two theta in `positions`, with its base at `y` in data coordinates, and
+returns one `Text` per position in the order given. It is for the peaks a cell
+does not account for, whether unindexed or from a second phase, which are
+worth pointing at even though they carry no hkl. It places nothing and checks
+nothing: every position given gets a marker, wherever it falls.
+
+### 15.6 plot_caglioti and plot_rietveld
+
+These two draw the figures of the later workflows, and the sections that own
+those workflows show them in use. They are listed here because they live in
+this module.
+
+`plot_caglioti(fit, two_theta, fwhm, esd=None, included=None, ax=None,
+two_theta_range=None, labels=("Caglioti fit", "Used in fit", "Excluded"))`
+plots measured peak widths against two theta with a fitted Caglioti curve
+through them. Widths the fit used are filled circles and the rest are open
+ones, so the two are told apart without colour; `esd` draws error bars,
+`included` says which widths the fit used, and `two_theta_range` sets the x
+limits, which otherwise span the data widened out to whole major ticks. With
+other `labels` the same figure serves for sample widths against an
+instrumental curve. Section 22 uses it.
+
+`plot_rietveld(pattern, reflections=None, title=None, phase_labels=None,
+ax=None, sqrt_scale=False, difference_offset=None, result=None)` plots a
+Rietveld fit and returns the figure and the axes. The observed points are
+small open grey circles, the calculated pattern a black line through them and
+the background a thin grey line; below the pattern each phase has a row of
+tick marks at its reflections, first phase at the top, and below those the
+difference is drawn about a zero of its own. `pattern` is the table the
+GSAS-II driver exports, as the path of its CSV file or as anything indexed by
+column name, and `reflections` is the reflection lists in the same form, a
+mapping of phase name to list or a bare sequence. `sqrt_scale` takes the
+square root of the counts, and the difference is then that of the square roots
+so that it stays on the scale of the curves above it. `difference_offset` sets
+the height of the difference zero, which by default goes below the lowest tick
+row. `result` is the driver's refine result, as a dict or the path of its JSON
+file, and writes Rwp, the goodness of fit and each phase's refined cell in a
+small block below the legend. It raises `ValueError` when a table lacks a
+column or when `phase_labels` does not have one name per reflection list.
+Section 29 uses it.
+
+The caption `plot_rietveld` writes takes its Rwp and goodness of fit from the
+last stage that has no error entry, and a stage that was rejected has none: it
+was rolled back, not failed. The cell in the same caption comes from the final
+model. So when a run has rejected a stage, the two halves of that caption come
+from different stages, and the residuals should be read from the stage table
+instead, as Section 8.16 says.
+
+### 15.7 save_figure
+
+`save_figure(fig, path, formats=("png", "pdf"), dpi=300)` saves the figure
+once per format beside `path` and returns the paths written, as a list. The
+path is treated as a stem: an extension that already names one of the formats
+is replaced, so `"pattern.png"` and `"pattern"` behave the same, while other
+dots are kept, which matters for a name like `"x0.10_calcined"`. The parent
+folder is created if it does not exist. The default pair is a png to look at
+and a pdf to put in a document, at 300 dots per inch; raise `dpi` for a
+journal that asks for 600, and pass a single format where only one is wanted.
+
+### 15.8 A pattern with a figure of your own
+
+`xrdkit plot` writes the pattern and the hkl labelled pattern in a fixed
+layout. Everything up to that layout is the same work, so the script below
+does what the command does and then keeps the axes instead of saving at once.
+The customisation is modest and is the point of the exercise: a title of your
+own, and the refined cell written into the corner of the axes, so that the
+figure carries the numbers its labels were placed from. Both are ordinary
+matplotlib on the `Axes` object that came back.
+
+It also marks the peaks that a tighter tolerance leaves unexplained. The
+indexing is run twice: once as the command runs it, which refines the cell,
+and once more at a tolerance of 0.02 degrees against that refined cell, which
+is a question about the fit rather than a way of getting a better one.
+Section 16 is where `index_peaks` and `index_and_refine` are documented.
+
+The whole of `plot_pattern.py`:
+
+```python
+from xrdkit.cell import Cell
+from xrdkit.indexing import index_and_refine, index_peaks, indexing_summary
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+from xrdkit.plotting import (
+    annotate_hkl,
+    apply_style,
+    mark_peaks,
+    plot_pattern,
+    save_figure,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+TITLE = "pellet_a, Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
+STEM = "library_pellet_a"
+START_CELL = Cell.tetragonal(12.45, 3.94)
+SPACE_GROUP = "P4bm"
+WINDOW = (10.0, 100.0)
+
+apply_style()
+scan = read_scan(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=WINDOW))
+indexed, fit = index_and_refine(
+    peaks,
+    start_cell=START_CELL,
+    wavelength=scan.wavelength,
+    space_group=SPACE_GROUP,
+)
+summary = indexing_summary(indexed)
+print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom")
+print(f"zero offset {fit.zero_offset:.3f} degrees")
+print(f"{summary['n_indexed']} of {summary['n_peaks']} peaks indexed")
+print(f"rms {summary['rms_difference']:.4f} degrees")
+
+tight = index_peaks(
+    peaks,
+    fit.cell,
+    scan.wavelength,
+    tolerance=0.02,
+    zero_offset=fit.zero_offset,
+    space_group=SPACE_GROUP,
+)
+unexplained = [entry.peak.two_theta for entry in tight if not entry.is_indexed]
+positions = [round(value, 3) for value in unexplained]
+print(f"{len(unexplained)} peaks outside 0.02 degrees: {positions}")
+
+fig, ax = plot_pattern(scan, scale="sqrt")
+ax.set_xlim(*WINDOW)
+bottom, top = ax.get_ylim()
+highest = float(max(ax.lines[0].get_ydata()))
+ax.set_ylim(bottom, highest + 0.30 * (top - bottom))
+
+labels = annotate_hkl(ax, indexed, min_relative_intensity=5.0, line=ax.lines[0])
+markers = mark_peaks(ax, unexplained, y=highest)
+print(f"{len(labels)} labels, {len(markers)} markers")
+
+# The customisation the plot command does not offer: a title of your own, and
+# the refined cell written into the corner of the axes, so that the figure
+# carries the numbers its labels were placed from.
+ax.set_title(TITLE)
+ax.text(
+    0.99,
+    0.03,
+    f"a = {fit.cell.a:.4f} angstrom\nc = {fit.cell.c:.4f} angstrom\n"
+    f"rms {fit.rms_two_theta:.4f} degrees",
+    transform=ax.transAxes,
+    horizontalalignment="right",
+    verticalalignment="bottom",
+    fontsize=5,
+)
+print(save_figure(fig, f"figures/pattern_{STEM}"))
+```
+
+It prints the refinement, then the peaks the tighter tolerance left, then what
+went onto the figure and where the figure went.
+
+```text
+a = 12.4803, c = 3.9324 angstrom
+zero offset 0.170 degrees
+43 of 43 peaks indexed
+rms 0.0099 degrees
+2 peaks outside 0.02 degrees: [26.921, 94.318]
+21 labels, 2 markers
+[WindowsPath('figures/pattern_library_pellet_a.png'), WindowsPath('figures/pattern_library_pellet_a.pdf')]
+```
+
+The cell of 12.4803 and 3.9324 angstrom, the zero offset of 0.170 degrees and
+the rms of 0.0099 degrees are what `xrdkit plot pellet_a` printed in Section
+5.1, figure for figure, because this is the same arithmetic on the same scan
+with the same start cell. What differs is the count: the command reported 45
+of 49 peaks indexed and the script reports 43 of 43, because the script hands
+the indexing the list `exclude_kalpha2` returned and the command counts the
+full list, satellites included.
+
+Twenty one of the forty three peaks carry a label. The rest were either below
+5 per cent of the strongest peak or lost their label to a stronger neighbour,
+which is the rule Section 5.4 describes. Raising `min_relative_intensity`
+thins the figure further; there is no setting that labels everything, because
+there is no room.
+
+The two markers sit over 26.921 and 94.318 degrees, the peaks whose nearest
+reflection is more than 0.02 degrees away once the cell is fixed. They are
+indexed at the default tolerance and so are not a second phase on this
+evidence. The one at 26.921 degrees is the weak peak of Section 14.5, at 10
+per cent of the strongest, where a small error in position is easy to come by;
+the one at 94.318 degrees is at the far end of the scan, where the same error
+in d spacing shows up as a larger error in two theta.
+
+### 15.9 Labelling the top trace of a stack
+
+`xrdkit stack` draws the stack but writes no hkl labels on it, so a stack with
+its top trace labelled is a script. In a stack the labels normally go on the
+top trace only, which is enough to tell a reader what every trace below shows.
+Pass the line of that trace as `line`, and index the peaks of that same scan
+and not of another one: a label stands over an observed position, so it
+belongs to the pattern it was found in.
+
+The whole of `stack_patterns.py`:
+
+```python
+from xrdkit.cell import Cell
+from xrdkit.indexing import index_and_refine
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+from xrdkit.plotting import annotate_hkl, apply_style, plot_stacked, save_figure
+
+# Edit these lines for each new comparison. Nothing below needs changing.
+SCAN_FILES = ["data/raw/pellet_a.xrdml", "data/raw/pellet_b.xrdml"]
+LABELS = ["x = 0.10", "x = 0.12"]
+STEM = "library_pellet_a_pellet_b"
+START_CELL = Cell.tetragonal(12.45, 3.94)
+SPACE_GROUP = "P4bm"
+WINDOW = (10.0, 100.0)
+
+apply_style()
+scans = [read_scan(path) for path in SCAN_FILES]
+fig, ax, bases, lines = plot_stacked(scans, labels=LABELS, scale="sqrt")
+ax.set_xlim(*WINDOW)
+print(f"{len(lines)} traces, bases {[round(base, 3) for base in bases]}")
+
+top_scan = scans[-1]
+top_peaks = exclude_kalpha2(find_peaks(top_scan, two_theta_range=WINDOW))
+top_indexed, top_fit = index_and_refine(
+    top_peaks,
+    start_cell=START_CELL,
+    wavelength=top_scan.wavelength,
+    space_group=SPACE_GROUP,
+)
+print(f"top trace: a = {top_fit.cell.a:.4f}, c = {top_fit.cell.c:.4f} angstrom")
+
+top_labels = annotate_hkl(ax, top_indexed, line=lines[-1], min_relative_intensity=10.0)
+print(f"{len(top_labels)} labels on the top trace")
+print(save_figure(fig, f"figures/stack_{STEM}"))
+```
+
+It prints the stack, the cell of the top trace and the labels it carried.
+
+```text
+2 traces, bases [0.0, 1.2]
+top trace: a = 12.4709, c = 3.9267 angstrom
+20 labels on the top trace
+[WindowsPath('figures/stack_library_pellet_a_pellet_b.png'), WindowsPath('figures/stack_library_pellet_a_pellet_b.pdf')]
+```
+
+The bases of 0.0 and 1.2 are the default spacing at work: every trace is
+normalised to a maximum of 1, so 1.2 times the tallest scaled trace is 1.2,
+and the second slot starts there. Passing `offset` replaces that number.
+
+The cell of the top trace, `pellet_b`, comes out at 12.4709 and 3.9267
+angstrom against `pellet_a`'s 12.4803 and 3.9324, which is the composition
+difference the stack was drawn to show. Twenty labels are written rather than
+the twenty one of Section 15.8, because `min_relative_intensity` is 10 here
+rather than 5: a stack has less vertical room per trace, so fewer labels fit.
+
+To put the labels in a row above a chosen trace instead of on it, pass that
+trace's base from `bases` as `y`, raised by enough to clear its tallest peak,
+and leave `line` out.
