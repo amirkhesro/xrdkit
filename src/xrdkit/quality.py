@@ -82,7 +82,7 @@ class Verdict:
 class ScanQuality:
     """The data quality numbers of a scan, and a verdict per workflow.
 
-    The first seven numbers are the ones ``check_scan.py`` in the user guide
+    The first seven numbers are the ones ``scan_quality.py`` in the user guide
     prints. The high angle numbers are taken over the last third of the
     scanned range.
     """
@@ -220,7 +220,7 @@ def assess_scan(scan: XRDScan) -> ScanQuality:
 def format_report(quality: ScanQuality) -> str:
     """Return a plain text report of ``quality``.
 
-    The numbers come first, in the order and wording of ``check_scan.py`` in
+    The numbers come first, in the order and wording of ``scan_quality.py`` in
     the user guide, followed by the high angle numbers, then one line per
     workflow: ``plotting: suitable`` or ``le_bail: not suitable (reason;
     reason)``.
