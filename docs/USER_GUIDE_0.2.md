@@ -6080,3 +6080,1142 @@ extrapolation to zero is visible rather than implied. Read it as the picture
 of the last two paragraphs: six points with honest error bars, a line with a
 real slope, and a band at x equal to zero that reaches from the bound down to
 very nearly the axis.
+
+## 24. phases
+
+`xrdkit.phases` is what `xrdkit phases` is built from: the Crystallography
+Open Database search, the CIF downloads, the index of what was gathered, the
+simulation of a candidate's powder pattern and the scoring of that pattern
+against the peaks that were measured. Section 6 is the command, what it found
+on the example sample and how to read the ranking, and this section points
+there rather than repeating any of it.
+
+The module splits in two along a dependency. Everything that talks to the COD
+and everything that keeps a record uses the standard library alone, so it
+works in any installation. Everything that simulates a pattern needs pymatgen,
+which is the optional `phases` extra, `xrdkit[phases]`, and is imported only
+at the moment a pattern is simulated.
+
+### 24.1 The COD: cod_search and CodRecord
+
+`cod_search(elements, exact=True, space_group=None, extra=None)` searches the
+COD through its REST interface and returns a list of `CodRecord`.
+
+| Argument | What it does |
+| --- | --- |
+| `elements` | one to eight element symbols, as `["Sr", "Ba", "Nb", "O"]`. The COD's search form takes at most eight |
+| `exact` | `True` returns only entries made of exactly these elements; `False` returns entries holding these and any others |
+| `space_group` | keep only entries in this group. An integer is the International Tables number and goes to the COD's own search; a string is a Hermann-Mauguin symbol, matched here after spaces and any trailing setting are stripped |
+| `extra` | further COD parameters, such as `{"year": 2006}`, added to the query as given and overriding the rest |
+
+It raises `ValueError` when no element or more than eight are given, or one is
+repeated, and `urllib.error.URLError` when the COD cannot be reached.
+
+The symbol form of `space_group` needs care, and the docstring says why: the
+COD ignores a symbol in the query itself, so the matching is done here and the
+symbol has to be written as the COD writes it, `"P121/c1"` rather than
+`"P21/c"`. An entry whose symbol the COD gives in a nonstandard centring, such
+as the `X4bm` of Section 6.3, is matched by neither form.
+
+`CodRecord` is one entry as the search returns it: `cod_id`, `formula`,
+`space_group` and `space_group_number`, the six cell parameters and the
+`volume`, `authors`, `journal`, `year` and `doi`, and `temperature` and
+`pressure` of the cell measurement. Anything the COD leaves blank is `None`,
+and old entries often carry no temperature at all. Its `filename` property is
+the name `cod_fetch` gives its CIF, `<id>.cif`, and `reference()` is a one
+line citation built from the authors, year, journal and doi.
+
+### 24.2 cod_fetch, fetch_candidates and write_cif_index
+
+`cod_fetch(cod_id, folder)` downloads one entry's CIF into `folder` as
+`<id>.cif`, creating the folder if needed, and returns the path. The file is
+written exactly as the COD serves it, and an existing file of the same name is
+replaced. It raises `ValueError` when `cod_id` is not a seven digit COD id or
+what comes back is not a CIF.
+
+`fetch_candidates(records, folder, pause=time.sleep, pause_s=PHASES_PAUSE_S)`
+is the loop around it: every record whose CIF is not already in `folder` is
+downloaded, with a pause of `PHASES_PAUSE_S`, half a second, after each one so
+that the database is not hammered. It returns only the files it fetched, so a
+second run over the same records returns an empty list. That is the behaviour
+Section 6.2 describes as the CIFs not being fetched again: a project accrues a
+local set of reference CIFs and the network is used only for what is new.
+`pause` is there so that a test can pass a callable that does nothing.
+
+`write_cif_index(records, path, notes="")` writes or updates the CSV index of
+reference CIFs and returns the path. Its columns are `CIF_INDEX_COLUMNS`: the
+file, the source, the identifier, the formula, the space group, the six cell
+parameters, the reference and any notes. A `CodRecord` is entered with a
+source of `COD` and its COD id as the identifier; a CIF from anywhere else is
+given as a mapping keyed by those same columns and brings its own notes.
+
+The updating is the part worth knowing. A row is identified by its source and
+identifier, so a record matching a row already in the file replaces it in
+place, one matching none is added at the end, and rows no record names are
+left alone. The notes of a replaced row survive when the new record brings
+none, which is what lets a note written by hand outlive a fresh download. It
+raises `ValueError` when a mapping has a column that is not an index column,
+or no source or identifier.
+
+None of these three is run in this guide. They reach the network, and the
+record of what they returned on the example sample is Section 6.2: the eleven
+entries the search found, the index they were written to, and the eleven CIFs
+under `cifs/cod`. That block is a record of one run rather than a constant,
+because the database is added to continually.
+
+### 24.3 simulate_pattern and SimulatedReflection
+
+`simulate_pattern(cif_path, wavelength=KALPHA1_WAVELENGTH,
+two_theta_range=(10, 100))` simulates the powder pattern of the structure in a
+CIF and returns a list of `SimulatedReflection`.
+
+The pattern is pymatgen's `XRDCalculator` on the first structure in the file,
+in its conventional cell, at a single wavelength, so it carries no K alpha 2
+lines at all. Partial occupancies are kept, so a disordered site scatters as
+its average, which is what a tungsten bronze needs. It raises `ImportError`
+when pymatgen is not installed, and `ValueError` when no structure can be read
+from the file.
+
+`SimulatedReflection` is a `NamedTuple` of `two_theta`, `intensity` and `hkl`.
+The intensity is relative to the strongest line inside the range simulated,
+taken as 100, so it depends on the window: narrowing the range can change
+every intensity in it. The `hkl` is one representative of the family, with
+four indices for a hexagonal cell, and where several families fall at one
+angle the first of them is given.
+
+That single wavelength is the reason a measured pattern has to be prepared
+before it is compared. A simulated pattern has no satellites, so the observed
+peaks must have theirs excluded; and a simulated pattern is at true angles, so
+a measured zero offset must be taken off the observed positions. Section 24.6
+does both.
+
+### 24.4 match_candidate, CandidateMatch and ExplainedPeak
+
+`match_candidate(observed_two_theta, simulated, tolerance=0.05,
+min_intensity=10, exclude_two_theta=None)` weighs one simulated pattern
+against a list of observed positions and returns a `CandidateMatch`.
+
+An observed position is explained when a simulated reflection of any intensity
+lies within `tolerance` degrees of it; where several do, the strongest is
+taken as its cause, and a tie on intensity goes to the nearer. A simulated
+reflection counts as missing when it is stronger than `min_intensity` and lies
+more than `tolerance` from every observed position and from every position in
+`exclude_two_theta`. That last argument is for the reflections of phases
+already known to be present: a line hidden under one of those is not evidence
+against the candidate.
+
+Compare only over the range that was measured. A reflection simulated outside
+the observed scan has nothing to be near and would be counted as missing,
+which is why both the simulation and the peak search use one window.
+
+`CandidateMatch` holds `explained`, a list of `ExplainedPeak`, and `missing`,
+a list of `SimulatedReflection`, and its `score` is the count explained less
+the count missing. `ExplainedPeak` is a `NamedTuple` of the `observed`
+position and the `reflection` that accounts for it, with an `offset` property,
+observed less simulated. It raises `ValueError` when `tolerance` is negative.
+
+Section 6.3 reads that score properly and this section will not repeat it. The
+short form: the missing count is the column that discriminates, a strong line
+predicted where nothing was seen being hard evidence against a phase, while an
+explained peak in a crowded pattern may be a coincidence.
+
+### 24.5 The whole identification: rank_candidates and attribute_unexplained
+
+Four more functions are the command's steps, each separate so that a caller
+can stop after any of them.
+
+`observed_peaks(scan, window=PHASES_WINDOW, zero=0.0)` is the peak positions
+of a scan inside `window`, satellites excluded and `zero` subtracted, which is
+the preparation Section 24.3 asks for in one call. It raises `ValueError` when
+the scan carries no wavelength.
+
+`rank_candidates(records, folder, observed, wavelength, window=PHASES_WINDOW,
+tolerance=PHASES_TOLERANCE, simulate=None)` simulates every record's CIF from
+`folder`, matches it, and returns a list of `Candidate` best first with ties
+broken by COD id and `rank` numbering it from 1. A candidate whose strongest
+simulated line is not observed is marked `rejected`, whatever it scores,
+because the strongest line of a phase that is present is always there; that is
+the rule Section 6.3 watches do its job on two of the eleven entries.
+`Candidate` carries the `rank`, `cod_id`, `formula` and `space_group`, the
+`explained`, `missing` and `score` counts, the `rejected` reason or an empty
+string, the `cif` the pattern came from, and `explained_positions`.
+
+`attribute_unexplained(observed, explained, cif, wavelength, phase,
+window=PHASES_WINDOW, tolerance=PHASES_TOLERANCE, simulate=None)` takes the
+peaks no candidate accounted for and tries the main phase's own pattern on
+each. It returns a list of `UnexplainedPeak`, each with its `two_theta` and
+`d_spacing` and, where the main phase has a reflection within tolerance, that
+reflection's `phase`, `hkl`, `reflection_two_theta` and `intensity`; its
+`identified` property says whether there was one. A peak with none is
+unidentified and is the one worth chasing, which Section 6.4 discusses.
+
+Both take a `simulate` callable that replaces `simulate_pattern`. That is the
+seam for a caller who has patterns from elsewhere, or a test with no pymatgen,
+and it is why the two functions can be exercised without the extra installed.
+
+`require_phases_extra()` checks that pymatgen is importable and raises
+`MissingPhasesExtra` if not. `MissingPhasesExtra` subclasses `ImportError`, so
+a caller can tell a missing optional dependency from any other import failure,
+and `rank_candidates` and `attribute_unexplained` convert the plain
+`ImportError` that `simulate_pattern` raises into it. Call
+`require_phases_extra` at the top of a script that will later simulate, so
+that a missing extra costs the message and not a minute of downloads first.
+
+Three constants set the defaults: `PHASES_WINDOW`, 10 to 80 degrees, the range
+peaks are taken and patterns simulated over; `PHASES_TOLERANCE`, 0.15 degrees;
+and `PHASES_PAUSE_S`, half a second. `COD_URL` is the database's address.
+
+### 24.6 Matching one candidate against a measured pattern
+
+The script below is the middle of `xrdkit phases` and nothing else: one CIF
+already on disk, simulated and matched against the peaks of `pellet_a`. The
+search, the downloads, the ranking of eleven candidates and the file of
+unexplained peaks are all Section 6, and none of them is here, so the script
+needs no network at all.
+
+The CIF is `cifs/2100720.cif`, the tungsten bronze the project file of Section
+2.2 names, which Section 6.3 explains is chosen for having the composition
+nearest the sample's rather than for topping the ranking. The zero of 0.170
+degrees is the offset Section 5.1 measured on this scan and Section 6.2 passed
+to the command with `--zero`.
+
+One thing about what you will see on screen. pymatgen writes its CIF parser
+warnings to standard error, and several of the entries Section 6.2 fetched
+raise them: 2311739 and 2311740 warn about stoichiometry, and 2103856 warns
+that it found no symmetry operators and is defaulting to P1, which is the same
+nonstandard centring Section 6.3 rejects. This particular CIF raises none, but
+the printed block below is standard output only either way, so a warning would
+never appear in it.
+
+The whole of `phase_match.py`:
+
+```python
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+from xrdkit.phases import (
+    PHASES_TOLERANCE,
+    PHASES_WINDOW,
+    match_candidate,
+    simulate_pattern,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+CIF_FILE = "cifs/2100720.cif"
+ZERO = 0.170
+SHOWN = 6
+
+scan = read_scan(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=PHASES_WINDOW))
+observed = [peak.two_theta - ZERO for peak in peaks]
+print(
+    f"{len(observed)} peaks from {PHASES_WINDOW[0]:.0f} to {PHASES_WINDOW[1]:.0f}"
+    f" degrees, zero {ZERO} degrees taken off"
+)
+
+simulated = simulate_pattern(
+    CIF_FILE, wavelength=scan.wavelength, two_theta_range=PHASES_WINDOW
+)
+strongest = max(simulated, key=lambda reflection: reflection.intensity)
+print(f"{len(simulated)} reflections simulated from {CIF_FILE}")
+print("  two_theta  intensity  hkl")
+for reflection in simulated[:SHOWN]:
+    print(
+        f"  {reflection.two_theta:9.3f}  {reflection.intensity:9.2f}  {reflection.hkl}"
+    )
+print(f"strongest {strongest.hkl} at {strongest.two_theta:.3f} degrees")
+
+match = match_candidate(observed, simulated, tolerance=PHASES_TOLERANCE)
+print(
+    f"explained {len(match.explained)}/{len(observed)},"
+    f" missing {len(match.missing)}, score {match.score}"
+)
+print(f"strongest line observed: {strongest not in match.missing}")
+print("  observed  simulated  offset  hkl")
+for peak in match.explained[:SHOWN]:
+    print(
+        f"  {peak.observed:8.3f}  {peak.reflection.two_theta:9.3f}"
+        f"  {peak.offset:+6.3f}  {peak.reflection.hkl}"
+    )
+print("the strong reflections nothing was observed near")
+for reflection in match.missing:
+    print(
+        f"  {reflection.two_theta:9.3f}  {reflection.intensity:9.2f}  {reflection.hkl}"
+    )
+```
+
+It prints the peaks it prepared, the head of the simulated pattern, the match,
+the first explained peaks and every strong reflection that was missed.
+
+```text
+35 peaks from 10 to 80 degrees, zero 0.17 degrees taken off
+119 reflections simulated from cifs/2100720.cif
+  two_theta  intensity  hkl
+     10.012       0.02  (1, 1, 0)
+     15.860       1.18  (2, 1, 0)
+     20.101       0.00  (2, 2, 0)
+     22.449      24.70  (0, 0, 1)
+     22.503       8.17  (3, 1, 0)
+     24.634       0.72  (1, 1, 1)
+strongest (3, 1, 1) at 31.997 degrees
+explained 27/35, missing 5, score 22
+strongest line observed: True
+  observed  simulated  offset  hkl
+    22.578     22.449  +0.129  (0, 0, 1)
+    25.712     25.708  +0.004  (3, 2, 0)
+    26.751     26.650  +0.101  (2, 0, 1)
+    27.725     27.607  +0.118  (2, 1, 1)
+    28.593     28.577  +0.016  (4, 0, 0)
+    29.489     29.476  +0.013  (4, 1, 0)
+the strong reflections nothing was observed near
+     45.824      38.77  (0, 0, 2)
+     45.938      12.09  (6, 2, 0)
+     55.429      32.40  (4, 1, 2)
+     57.004      14.21  (4, 2, 2)
+     71.569      17.11  (5, 5, 2)
+```
+
+The match is `explained 27/35, missing 5, score 22`, which is the 2100720 line
+of the ranking in Section 6.3, figure for figure. It has to be: the command
+calls these two functions with these arguments on this file.
+
+The head of the simulated pattern is worth reading against Section 16.8, which
+calculated the reflections of the same structure type from a cell alone. The
+positions are the same reflections in the same order, and what is new is the
+intensity column, which is what a CIF adds to a cell: (110) at 10.012 degrees
+is allowed by the space group and has an intensity of 0.02, so it is a
+reflection that exists and will never be seen. (220) at 20.101 is 0.00. A
+simulated pattern is mostly lines like these, which is why `min_intensity`
+exists: only the lines above 10 per cent count as missing when they are
+absent.
+
+The five missing reflections are the evidence against this particular entry,
+and they are worth naming: (002) at 45.824 degrees carries 38.8 per cent of
+the strongest line, (412) at 55.429 carries 32.4, and three more between 12
+and 18 per cent. A phase whose second strongest line is unobserved is not
+quite the phase in front of you. Section 6.3 makes the same point from the
+other side, that 2100721 misses none: both entries are the same structure
+type, and the missing count is measuring how far each one's cell sits from the
+sample's, which is `xrdkit lattice`'s question and not this one's.
+
+The offsets in the explained table say the same thing again. The first few
+peaks sit 0.004 to 0.129 degrees above where this entry puts them, every one
+in the same direction, which is a cell that is out rather than a scatter about
+the right answer. The direction is the one to expect: the entry's cell is
+12.4844 and 3.9572 angstrom and Section 7.1 refined this sample to 12.4740 and
+3.9295, so the sample's spacings are the smaller and its reflections are the
+higher in angle. The tolerance of 0.15 degrees is wide enough to absorb that,
+which is exactly what it is for: this step identifies a structure type, and
+the cell is refined afterwards.
+
+## 25. library
+
+`xrdkit.library` is the structure library shipped with the package: one TOML
+file per entry, each describing a structure type apart from any one sample.
+An entry is what a refinement needs to know before it has any coordinates at
+all, and Section 2.2 is where a project file names one, as the `library` key
+of a structure table.
+
+There are eight public names: two dataclasses, two functions over the library,
+one over an entry, and three constants.
+
+### 25.1 What an entry is, and what it is not
+
+An entry carries the site plan of a structure type. It names the space group
+and crystal system, which cell parameters the system leaves free, the formula
+units per cell, and one table per site giving that site's label, its kind, its
+Wyckoff position, the coordinates that position leaves free, the Uiso group it
+shares and the elements the prototype puts on it. It also names the anions
+bonds are measured to and the range a bond from each kind of site may have.
+
+It carries no coordinates. Not one number saying where an atom actually sits
+is in the file, because those belong to a particular structure and the entry
+describes a type. That is the whole reason the Rietveld modes need a CIF
+beside a library entry, which is the limitation Section 10.3 records: the
+entry says there is a site on 8d with x, y and z free, and only the CIF says
+what x, y and z are.
+
+It carries no reflection conditions either. Nothing in an entry lists what the
+space group forbids; the symbol alone is stored, and `xrdkit.symmetry` derives
+the operations, the absences and the multiplicities from it when they are
+wanted, which Section 20 is the whole of. An entry and the symmetry module
+therefore never disagree, because only one of them holds the fact.
+
+### 25.2 list_entries, load_entry and the file layout
+
+`list_entries(root=None)` returns the names of the entries in the library,
+sorted. A name is `"<family>/<name>"`, from the file at
+`xrdkit/structures/<family>/<name>.toml`, so `ttb/P4bm` is `P4bm.toml` in the
+`ttb` folder. `root` is a folder to look in instead of the library shipped
+with xrdkit, laid out the same way, which is how a project keeps entries of
+its own.
+
+`load_entry(name, root=None)` reads one entry with `tomllib`, checks it and
+returns a `StructureEntry`. It raises `ValueError` when there is no entry of
+that name, naming the ones there are, and when the file is not valid TOML or
+does not check out, naming the entry and the field.
+
+A file holds an `[entry]` table and one `[[sites]]` table per site. `[entry]`
+requires `name`, which must match the file's path, `family`,
+`crystal_system`, `space_group`, `cell_parameters`, `z` and `reference`, and
+allows `setting`, `polar_axis`, `origin_site`, `anions` and `bond_limits`.
+Each `[[sites]]` requires `label`, unique within the entry, `kind`, and
+`wyckoff`, and allows `free`, `uiso_group` and `elements`.
+
+### 25.3 StructureEntry, Site and the constants
+
+`StructureEntry` is frozen and holds exactly those fields.
+
+| Field | What it holds |
+| --- | --- |
+| `name`, `family`, `reference` | the entry's name, the structure family as text, and the structure it was taken from |
+| `crystal_system`, `space_group`, `setting` | one of `CRYSTAL_SYSTEMS`, the Hermann-Mauguin symbol, and the setting or origin choice, empty for the standard one |
+| `cell_parameters` | the parameters the crystal system leaves free, exactly as `CELL_PARAMETERS` lists them |
+| `z` | formula units per cell |
+| `sites` | the `Site` tables in file order |
+| `polar_axis`, `origin_site` | the axis along which symmetry leaves the origin free, and the label of the site whose coordinate along it is held |
+| `anions` | the elements bonds are measured to, `DEFAULT_ANIONS` when the file names none |
+| `bond_limits` | by kind of site, `(min, max)` in angstroms, only for the kinds the file lists |
+
+Its `kinds` property is the kinds of site the entry declares, in the order of
+its sites, each once.
+
+`Site` is frozen too: `label`, `kind`, `wyckoff`, `free`, the coordinates the
+Wyckoff position leaves free drawn from x, y and z, `uiso_group`, the name of
+the group whose one Uiso the site shares or `None`, and `elements`, the
+elements the prototype puts on it.
+
+`CELL_PARAMETERS` is the dict Section 17.2 documents, crystal system to the
+names of its free parameters, and `CRYSTAL_SYSTEMS` is its keys. They live
+here rather than in `xrdkit.cell` because an entry has to be checked against
+them before any cell exists.
+
+`bond_limits(entry, kind)` returns the range in angstroms of a bond from a
+site of that kind to an anion: the entry's own where it gives one, else
+`DEFAULT_BOND_LIMITS`, 1.6 to 3.0 angstrom. It raises `ValueError` when
+`kind` is not a kind of the entry's sites. `DEFAULT_ANIONS` is `("O",)`.
+
+### 25.4 The entry the examples use
+
+The script prints the library, then the entry of the tungsten bronze, then
+what its validator refuses.
+
+Start a new file named `library_entry.py`.
+
+```python
+from xrdkit.library import CELL_PARAMETERS, bond_limits, list_entries, load_entry
+
+# Edit these lines for each new entry. Nothing below needs changing.
+ENTRY = "ttb/P4bm"
+
+print(f"{len(list_entries())} entries in the library")
+for name in list_entries():
+    print(f"  {name}")
+
+entry = load_entry(ENTRY)
+print(f"name           {entry.name}")
+print(f"family         {entry.family}")
+print(f"crystal system {entry.crystal_system}, space group {entry.space_group}")
+print(f"setting        {entry.setting!r}")
+print(
+    f"cell parameters {entry.cell_parameters}, "
+    f"the {entry.crystal_system} pair of CELL_PARAMETERS: "
+    f"{CELL_PARAMETERS[entry.crystal_system]}"
+)
+print(f"z              {entry.z} formula units per cell")
+print(f"reference      {entry.reference}")
+print(f"polar axis     {entry.polar_axis}, origin held on {entry.origin_site}")
+print(f"anions         {entry.anions}")
+print(f"kinds          {entry.kinds}")
+for kind in entry.kinds:
+    low, high = bond_limits(entry, kind)
+    own = "the entry's own" if kind in entry.bond_limits else "the package default"
+    print(f"  {kind} to an anion  {low} to {high} angstrom, {own}")
+
+print(f"{len(entry.sites)} sites")
+print("  label  kind  wyckoff  free   uiso_group  elements")
+for site in entry.sites:
+    free = "".join(site.free) or "-"
+    print(
+        f"  {site.label:5s}  {site.kind:4s}  {site.wyckoff:7s}  {free:5s}"
+        f"  {site.uiso_group or '-':10s}  {', '.join(site.elements)}"
+    )
+```
+
+It prints the entries, the entry, its bond limits and its sites.
+
+```text
+7 entries in the library
+  perovskite/Amm2
+  perovskite/P4mm
+  perovskite/Pbnm
+  perovskite/Pm-3m
+  perovskite/R3c
+  ttb/P4bm
+  ttb/P4mbm
+name           ttb/P4bm
+family         tetragonal tungsten bronze
+crystal system tetragonal, space group P4bm
+setting        ''
+cell parameters ('a', 'c'), the tetragonal pair of CELL_PARAMETERS: ('a', 'c')
+z              5 formula units per cell
+reference      COD 2100720
+polar axis     c, origin held on B1
+anions         ('O',)
+kinds          ('A', 'B', 'O')
+  A to an anion  2.45 to 3.0 angstrom, the entry's own
+  B to an anion  1.8 to 2.2 angstrom, the entry's own
+  O to an anion  1.6 to 3.0 angstrom, the package default
+9 sites
+  label  kind  wyckoff  free   uiso_group  elements
+  A1     A     2a       z      A           Sr
+  A2     A     4c       xz     A           Ba, Sr
+  B1     B     2b       z      B           Nb
+  B2     B     8d       xyz    B           Nb
+  O1     O     4c       xz     O           O
+  O2     O     8d       xyz    O           O
+  O3     O     8d       xyz    O           O
+  O4     O     2b       z      O           O
+  O5     O     8d       xyz    O           O
+```
+
+Seven entries in two families, and `ttb/P4bm` is the one the
+`[structures.ttb_p4bm]` table of Section 2.2 names. Read its nine sites as the
+plan the later sections work to. Two A sites, two B sites and five O sites, on
+Wyckoff positions 2a, 4c, 2b and 8d; a cell holds two A1, four A2, two B1,
+eight B2 and thirty O, which at Z of 5 and a formula of AB2O6 is five A
+cations in six A positions, ten B and thirty O. One A position in six is
+empty, which is what makes this a bronze rather than a perovskite.
+
+The `free` column is the Wyckoff position speaking. A1 on 2a is at (0, 0, z),
+so only z is free; A2 on 4c is at (x, x + 1/2, z), so x and z are free and y
+follows x; B2 on 8d is the general position and has all three. Those are the
+coordinates the Rietveld coordinates mode of Section 8 is allowed to refine,
+and they are read off the entry rather than guessed from the CIF.
+
+The Uiso groups are the other economy. Nine sites share three displacement
+parameters, one for the A sites, one for the B and one for the O, which is
+what makes a refinement of this structure possible on a laboratory pattern at
+all. The elements column is the prototype's, strontium on A1 and barium and
+strontium on A2; the lanthanum and titanium of the sample's composition are
+not there, which is exactly what the `atoms` table of Section 2.2 is for and
+what Section 26.4 does.
+
+The bond limits are the entry's judgement about its own structure type. A to
+an anion runs 2.45 to 3.0 angstrom and B to an anion 1.8 to 2.2, both narrower
+than the package default of 1.6 to 3.0 that the O kind falls back on, since
+the entry lists no limits for a site that is itself an anion.
+
+Continues `library_entry.py`. Add these lines at the end of the file.
+
+```python
+import tempfile
+from pathlib import Path
+
+GOOD = """
+[entry]
+name = "demo/One"
+family = "demonstration"
+crystal_system = "tetragonal"
+space_group = "P4bm"
+cell_parameters = ["a", "c"]
+z = 1
+reference = "written for this section"
+
+[[sites]]
+label = "A1"
+kind = "A"
+wyckoff = "2a"
+"""
+BROKEN = {
+    "a cell parameter the system does not leave free": (
+        'cell_parameters = ["a", "c"]',
+        'cell_parameters = ["a", "b", "c"]',
+    ),
+    "an origin site that is not a site": ("z = 1", 'z = 1\norigin_site = "A9"'),
+}
+
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder) / "demo"
+    root.mkdir()
+    (root / "One.toml").write_text(GOOD, encoding="utf-8")
+    print(f"a library of my own holds {list_entries(root=root.parent)}")
+    print(f"and it loads: {load_entry('demo/One', root=root.parent).name}")
+    for description, (before, after) in BROKEN.items():
+        (root / "One.toml").write_text(GOOD.replace(before, after), encoding="utf-8")
+        try:
+            load_entry("demo/One", root=root.parent)
+        except ValueError as error:
+            print(f"{description}:")
+            print(f"  {error}")
+
+try:
+    load_entry("ttb/P4bmm")
+except ValueError as error:
+    print(f"an entry that is not there:\n  {error}")
+try:
+    bond_limits(entry, "C")
+except ValueError as error:
+    print(f"a kind the entry has no site of:\n  {error}")
+```
+
+It builds a small library of its own in a temporary folder, breaks its one
+entry twice, and then asks the shipped library two questions it cannot answer.
+
+```text
+a library of my own holds ['demo/One']
+and it loads: demo/One
+a cell parameter the system does not leave free:
+  structure entry 'demo/One': entry.cell_parameters: a tetragonal cell has ['a', 'c'], not ['a', 'b', 'c']
+an origin site that is not a site:
+  structure entry 'demo/One': entry.origin_site: no site labelled 'A9'; the sites are A1
+an entry that is not there:
+  no structure entry 'ttb/P4bmm'; the entries are perovskite/Amm2, perovskite/P4mm, perovskite/Pbnm, perovskite/Pm-3m, perovskite/R3c, ttb/P4bm, ttb/P4mbm
+a kind the entry has no site of:
+  'C' is not a kind of site of ttb/P4bm; its kinds are A, B, O
+```
+
+The `root` argument is what makes this possible and is worth knowing about for
+its own sake: an entry for a structure type the shipped library lacks goes in
+a folder of your own laid out the same way, and `list_entries` and
+`load_entry` read it with no change to the package.
+
+Both refusals are cross checks rather than type checks, which is the character
+of this validator. The first catches `cell_parameters` that do not match the
+crystal system in the same table, and says what a tetragonal cell should have.
+The second catches an `origin_site` naming a site the file does not define,
+and lists the sites it does. A file is checked as a whole when it loads, so a
+refinement never gets as far as discovering that its origin site does not
+exist.
+
+The last two are the ordinary errors of the two functions, and both name what
+was available: `load_entry` lists every entry there is, and `bond_limits`
+lists the kinds the entry declares.
+
+## 26. structure
+
+`xrdkit.structure` is the geometry and the bookkeeping a Rietveld refinement
+needs before it starts: which atoms sit on which site, what the distances
+between them are, and what occupancies put a nominal composition on those
+sites. Section 8.11 is how the pipeline uses all of it from a project file,
+and this section is the four functions themselves.
+
+There are seven public names. `metric_tensor`, `interatomic_distances`,
+`Distance` and `bond_lengths` are the geometry; `cell_contents`,
+`composition_edits` and `site_setup` are the bookkeeping.
+
+Every function here takes a structure in the form the GSAS-II driver reports
+one: a `cell` of six numbers or GSAS-II's own keys, `atoms` as mappings with
+`label`, `type`, `xyz` and optionally `xyz_esd`, `multiplicity` and
+`occupancy`, and `operators` as mappings with a 3 by 3 `rotation` and a
+`translation`. Nothing in the package turns a CIF into that form without
+GSAS-II, so a script that wants to work on a CIF alone reads its atom loop
+itself, which is what Section 26.1 does and says.
+
+### 26.1 metric_tensor, interatomic_distances and bond_lengths
+
+`metric_tensor(cell)` is the real space metric tensor G of a cell given as
+`(a, b, c, alpha, beta, gamma)` in angstroms and degrees, so a fractional
+vector v has length the square root of v dotted into G v. It is the same
+quantity `Cell.metric_tensor` of Section 17.3 gives, reached from six numbers
+rather than from a `Cell`, and it is what `Cell` itself calls.
+
+`interatomic_distances(cell, atoms, operators, centres, targets, dmax,
+dmin=0.5)` returns every distance from each atom in `centres` to images of the
+atoms in `targets` between `dmin` and `dmax` angstroms, shortest first for
+each centre. The images are those of every operator, shifted into the
+twenty-seven cells around the centre; the same image reached by two operators,
+as happens on a special position, is counted once.
+
+Each comes back as a `Distance`: the `centre` and `target` labels, the
+`distance`, its `esd`, the index of the `operator` that made the image and the
+whole cell `translation` added to it. The esd is propagated from the esds of
+the fractional coordinates of both atoms alone, treated as uncorrelated, with
+the cell taken as exact, and is `None` when neither atom has any. It raises
+`ValueError` when a centre or target is not an atom's label, or `dmax` is not
+above `dmin`.
+
+`bond_lengths(phase, anions=None, dmax=3.0, dmin=0.5)` is that function
+wrapped for a whole phase. Atoms that share a position count as one site,
+taken as the first of them; a site is an anion site when its first atom is of
+an element in `anions` and a cation site otherwise, and every cation site to
+anion site distance is found. Distances from one cation site to images of one
+anion site that agree to within a ten thousandth of an angstrom are the same
+bond and are counted rather than listed twice.
+
+It returns a list of dicts with `centre` and `centre_site`, `target` and
+`target_site`, the first atom's label and every label on that site joined by a
+solidus, the `distance`, its `esd` and the `count`, ordered by cation site in
+the phase's order and then by distance.
+
+`anions` is required in practice: left out it warns that it is deprecated and
+falls back to `DEFAULT_ANIONS`, for callers written before it was required.
+Pass the anions of the structure's library entry, which `site_setup` reports.
+A phase with no anion site at all gets an empty list and a warning saying so.
+
+### 26.2 Reading a CIF and finding its sites
+
+`site_setup(structure, atoms)` matches the sites a structure table names
+against the atoms a phase actually has, and returns the plan everything
+downstream works from. `structure` is a structure table as
+`xrdkit.config.load_config` returns it: a `name`, a `library` entry name or
+`None`, a list of `sites` each with a `name`, an optional entry `label`, the
+`atoms` on it as label to element, a `wyckoff` and a `kind`, plus
+`free_coordinates`, `uiso_groups`, `origin` and `exchange`.
+
+The returned plan is a dict of `sites`, each with its name, kind, Wyckoff
+position, multiplicity, free coordinates and the atoms on it; `kinds`, the
+sites of each kind; `uiso_groups` and `group_names`; `origin` and
+`origin_axis`; `coordinates`, by kind, the coordinates to refine on every site
+but the origin's; `exchange`; `polar_axis`; `anions`; and `bond_limits` for
+every kind, the structure's own over the entry's over the package default.
+
+It raises `ValueError` when a named atom is not among the atoms, when a site's
+atoms are not all on one position or two sites land on the same one, when an
+atom is not of the element given for it, when a site's multiplicity is not
+that of its Wyckoff position, or when an atom is on no configured site. That
+last one matters: a CIF with an atom nobody accounted for is refused rather
+than silently ignored.
+
+The script below does the whole of Section 26 on the example CIF and the entry
+of Section 25. It begins by reading the CIF, because it has to: the functions
+take atoms in the driver's form and the driver needs GSAS-II, so a script
+working from a CIF alone parses the atom loop itself. The multiplicity of each
+atom is not read from the CIF at all but taken from the Wyckoff position the
+library entry gives for its site, which is the entry and the CIF doing exactly
+the jobs Section 25.1 divides between them.
+
+Start a new file named `site_plan.py`.
+
+```python
+import re
+from pathlib import Path
+
+from xrdkit.config import wyckoff_multiplicity
+from xrdkit.library import load_entry
+
+# Edit these lines for each new structure. Nothing below needs changing.
+CIF_FILE = "cifs/2100720.cif"
+ENTRY = "ttb/P4bm"
+# The atoms table of Section 2.2: which CIF atom sits on which site of the
+# entry, and which element each is.
+ATOMS = {
+    "A1": {"Sr1": "Sr", "La1": "La"},
+    "A2": {"Ba2": "Ba", "Sr2": "Sr"},
+    "B1": {"Nb1": "Nb", "Ti1": "Ti"},
+    "B2": {"Nb2": "Nb", "Ti2": "Ti"},
+}
+
+ESD = re.compile(r"\(\d+\)$")
+
+
+def number(text):
+    """A CIF number without its esd in brackets."""
+    return float(ESD.sub("", text))
+
+
+def read_cell(path):
+    """The six cell parameters a CIF gives, esds stripped."""
+    text = Path(path).read_text(encoding="utf-8")
+    keys = [f"_cell_length_{axis}" for axis in ("a", "b", "c")]
+    keys += [f"_cell_angle_{angle}" for angle in ("alpha", "beta", "gamma")]
+    found = []
+    for key in keys:
+        match = re.search(rf"^{key}\s+(\S+)", text, re.MULTILINE)
+        found.append(number(match.group(1)))
+    return tuple(found)
+
+
+def read_atom_loop(path):
+    """The _atom_site loop of a CIF, one dict of tag to text per atom."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "loop_"
+        and lines[index + 1].strip() == "_atom_site_type_symbol"
+    )
+    tags, row = [], start + 1
+    while lines[row].strip().startswith("_"):
+        tags.append(lines[row].strip())
+        row += 1
+    rows = []
+    while row < len(lines) and lines[row].strip() and lines[row].strip() != "loop_":
+        rows.append(dict(zip(tags, lines[row].split())))
+        row += 1
+    return rows
+
+
+entry = load_entry(ENTRY)
+CELL = read_cell(CIF_FILE)
+wyckoff = {site.label: site.wyckoff for site in entry.sites}
+site_of = {label: name for name, placed in ATOMS.items() for label in placed}
+atoms = []
+for row in read_atom_loop(CIF_FILE):
+    label = row["_atom_site_label"]
+    name = site_of.get(label, label)
+    atoms.append(
+        {
+            "label": label,
+            "type": row["_atom_site_type_symbol"],
+            "xyz": [
+                number(row[f"_atom_site_fract_{axis}"]) for axis in ("x", "y", "z")
+            ],
+            "multiplicity": wyckoff_multiplicity(wyckoff[name]),
+            "occupancy": number(row["_atom_site_occupancy"]),
+        }
+    )
+print(f"{len(atoms)} atoms read from {CIF_FILE}")
+print(f"its cell is {CELL}")
+print("  label  type  site  wyckoff  mult  occupancy")
+for atom in atoms:
+    name = site_of.get(atom["label"], atom["label"])
+    print(
+        f"  {atom['label']:5s}  {atom['type']:4s}  {name:4s}  {wyckoff[name]:7s}"
+        f"  {atom['multiplicity']:4d}  {atom['occupancy']:9.4f}"
+    )
+```
+
+It prints the cell and the atoms, each against the site it belongs to.
+
+```text
+10 atoms read from cifs/2100720.cif
+its cell is (12.4844, 12.4844, 3.9572, 90.0, 90.0, 90.0)
+  label  type  site  wyckoff  mult  occupancy
+  Ba2    Ba    A2    4c          4     0.6500
+  Sr2    Sr    A2    4c          4     0.2462
+  Sr1    Sr    A1    2a          2     0.7080
+  Nb1    Nb    B1    2b          2     1.0000
+  Nb2    Nb    B2    8d          8     1.0000
+  O1     O     O1    4c          4     1.0000
+  O2     O     O2    8d          8     1.0000
+  O3     O     O3    8d          8     1.0000
+  O4     O     O4    2b          2     1.0000
+  O5     O     O5    8d          8     1.0000
+```
+
+Ten atoms on nine sites: `Ba2` and `Sr2` share the 4c A2 position, which is
+the disorder the structure type is built on, and every other site has one atom
+in this CIF. The `ATOMS` table in the settings is the `atoms` table of Section
+2.2 read as a dictionary, and it names `La1`, `Ti1` and `Ti2` as well, which
+this CIF does not have; those are the composition's business and Section 26.4
+puts them in.
+
+Continues `site_plan.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.structure import site_setup
+
+present = {atom["label"] for atom in atoms}
+sites = []
+for site in entry.sites:
+    placed = ATOMS.get(site.label)
+    on_site = (
+        {label: element for label, element in placed.items() if label in present}
+        if placed
+        else {site.label: site.elements[0]}
+    )
+    sites.append(
+        {
+            "name": next(iter(on_site)),
+            "label": site.label,
+            "atoms": on_site,
+            "wyckoff": site.wyckoff,
+            "kind": site.kind,
+        }
+    )
+groups = {}
+for site in entry.sites:
+    groups.setdefault(site.uiso_group or site.label, []).append(
+        next(s["name"] for s in sites if s["label"] == site.label)
+    )
+structure = {
+    "name": "ttb_p4bm",
+    "library": entry.name,
+    "sites": sites,
+    "free_coordinates": {},
+    "uiso_groups": [
+        {"name": name, "sites": members} for name, members in groups.items()
+    ],
+    "origin": {"site": "Nb1", "axis": "z"},
+    "exchange": {"elements": ["Sr", "Ba"], "sites": ["Sr1", "Ba2"]},
+}
+
+plan = site_setup(structure, atoms)
+print(f"{len(plan['sites'])} sites planned")
+print("  name  kind  wyckoff  mult  free  atoms")
+for site in plan["sites"]:
+    labels = ", ".join(atom["label"] for atom in site["atoms"])
+    print(
+        f"  {site['name']:4s}  {site['kind']:4s}  {site['wyckoff']:7s}"
+        f"  {site['multiplicity']:4d}  {site['free'] or '-':4s}  {labels}"
+    )
+print(f"kinds          { {k: len(v) for k, v in plan['kinds'].items()} }")
+print(f"uiso groups    {plan['group_names']} over {plan['uiso_groups']}")
+print(
+    f"origin         {plan['origin']['name']} along {plan['origin_axis']},"
+    f" polar axis {plan['polar_axis']}"
+)
+print(f"anions         {plan['anions']}")
+print(f"bond limits    {plan['bond_limits']}")
+print(f"exchange       {plan['exchange']}")
+print(f"coordinates    {plan['coordinates']}")
+```
+
+It prints the plan.
+
+```text
+9 sites planned
+  name  kind  wyckoff  mult  free  atoms
+  Sr1   A     2a          2  z     Sr1
+  Ba2   A     4c          4  xz    Ba2, Sr2
+  Nb1   B     2b          2  z     Nb1
+  Nb2   B     8d          8  xyz   Nb2
+  O1    O     4c          4  xz    O1
+  O2    O     8d          8  xyz   O2
+  O3    O     8d          8  xyz   O3
+  O4    O     2b          2  z     O4
+  O5    O     8d          8  xyz   O5
+kinds          {'A': 2, 'B': 2, 'O': 5}
+uiso groups    ['A', 'B', 'O'] over [['Sr1', 'Ba2'], ['Nb1', 'Nb2'], ['O1', 'O2', 'O3', 'O4', 'O5']]
+origin         Nb1 along z, polar axis z
+anions         ['O']
+bond limits    {'A': (2.45, 3.0), 'B': (1.8, 2.2), 'O': (1.6, 3.0)}
+exchange       {'elements': ['Sr', 'Ba'], 'sites': ['Sr1', 'Ba2']}
+coordinates    {'A': {'Sr1': 'z', 'Ba2': 'xz'}, 'B': {'Nb2': 'xyz'}, 'O': {'O1': 'xz', 'O2': 'xyz', 'O3': 'xyz', 'O4': 'z', 'O5': 'xyz'}}
+```
+
+Each site is named by the first CIF atom on it rather than by the entry's
+label, which is the convention the pipeline uses: `A2` becomes `Ba2` because
+that is the atom a refinement will address. The free coordinates come from the
+entry, the multiplicities from the Wyckoff positions, the Uiso groups gather
+the nine sites into three, and the bond limits are the entry's for A and B and
+the package default for O, exactly as Section 25.4 printed them.
+
+`coordinates` is the one to look at twice. It lists eight sites, not nine:
+`Nb1` is missing from the B kind because it is the origin site, and its z is
+held to stop the whole structure sliding along the polar axis. That is the
+rule Section 8.11 states, and it is applied here rather than remembered later.
+
+Continues `site_plan.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.structure import bond_lengths, metric_tensor
+from xrdkit.symmetry import space_group_operations
+
+metric = metric_tensor(CELL)
+print("metric tensor G, from the cell alone")
+for row in metric:
+    print("  " + "  ".join(f"{round(value, 6) + 0.0:11.6f}" for value in row))
+
+operators = [
+    {
+        "rotation": [list(row) for row in rotation],
+        "translation": [float(shift) for shift in translation],
+    }
+    for rotation, translation in space_group_operations(entry.space_group)
+]
+phase = {"cell": list(CELL), "atoms": atoms, "operators": operators}
+bonds = bond_lengths(phase, anions=plan["anions"], dmax=3.0)
+print(f"{len(bonds)} distinct cation to anion distances under 3.0 angstrom")
+print("  site     kind  to     distance  count  within the entry's limits")
+by_name = {site["name"]: site for site in plan["sites"]}
+for bond in bonds:
+    site = by_name[bond["centre"]]
+    low, high = plan["bond_limits"][site["kind"]]
+    inside = "yes" if low <= bond["distance"] <= high else "no"
+    print(
+        f"  {bond['centre_site']:8s} {site['kind']:4s}  {bond['target_site']:5s}"
+        f"  {bond['distance']:8.4f}  {bond['count']:5d}  {inside}"
+    )
+```
+
+It prints the metric tensor and every cation to anion distance under three
+angstroms.
+
+```text
+metric tensor G, from the cell alone
+   155.860243     0.000000     0.000000
+     0.000000   155.860243     0.000000
+     0.000000     0.000000    15.659432
+16 distinct cation to anion distances under 3.0 angstrom
+  site     kind  to     distance  count  within the entry's limits
+  Ba2/Sr2  A     O1       2.7157      1  yes
+  Ba2/Sr2  A     O3       2.7754      2  yes
+  Ba2/Sr2  A     O1       2.8575      1  yes
+  Ba2/Sr2  A     O3       2.9665      2  yes
+  Sr1      A     O2       2.6853      4  yes
+  Sr1      A     O5       2.7249      4  yes
+  Sr1      A     O2       2.8587      4  yes
+  Nb1      B     O4       1.8321      1  yes
+  Nb1      B     O3       1.9661      4  yes
+  Nb1      B     O4       2.1251      1  yes
+  Nb2      B     O5       1.8409      1  yes
+  Nb2      B     O3       1.9424      1  yes
+  Nb2      B     O2       1.9573      1  yes
+  Nb2      B     O1       1.9971      1  yes
+  Nb2      B     O2       2.0130      1  yes
+  Nb2      B     O5       2.1199      1  yes
+```
+
+The symmetry operators come from `space_group_operations` of Section 20,
+converted into the mappings this module takes, so no GSAS-II is needed to
+generate the images either. The metric tensor is diagonal because the cell is
+tetragonal, its first two entries a squared and its third c squared, which
+Section 17.3 says is the whole of the tetragonal geometry.
+
+Sixteen distinct distances, and every one of them falls inside the limits its
+kind's entry gives. That is the check this function exists for. The two B
+sites are octahedra of niobium and oxygen, six bonds each, 1.83 to 2.13
+angstrom and comfortably inside the entry's 1.8 to 2.2; the A sites run 2.69
+to 2.97, inside 2.45 to 3.0. A refined structure whose bonds have wandered
+outside those ranges has gone wrong somewhere, and this is how a script finds
+out.
+
+The counts are the multiplicity of each bond about its centre. `Sr1` has four
+of each of its distances because it sits on 2a, where the four fold axis
+repeats every neighbour four times; `Nb2` on the general position has one of
+each, since nothing repeats a bond from a site with no symmetry of its own.
+
+### 26.3 cell_contents
+
+`cell_contents(atoms)` is atoms of each element per cell, multiplicity times
+occupancy summed over the atoms, from atoms carrying `type`, `multiplicity`
+and `occupancy`. It is two lines of arithmetic and it is the thing to print
+whenever a composition is in doubt, because it is what a refinement is
+actually working with.
+
+### 26.4 composition_edits, and how an added element is shared
+
+`composition_edits(atoms, composition, structure)` returns the atom edits that
+give a cell of `atoms` the nominal `composition`, in atoms of each element per
+formula unit, by the rule the `structure` table carries. The cell holds
+`structure["formula_units"]` formula units.
+
+Two rules are at work, and they are different.
+
+Every element the atoms already hold is scaled by one factor on every site it
+occupies. That keeps the CIF's distribution of it over the sites, whatever
+that distribution was, and an atom whose occupancy the scaling leaves
+unchanged gets no edit at all.
+
+Every element in `structure["composition"]["added"]` is placed against a host.
+The rule maps the added element either to a host element, when it goes on
+every atom of that element and is labelled by the added element and the rest
+of the host's label, `La1` on `Sr1`; or to a mapping of host label to added
+label, when it goes beside those atoms only, labelled as given. Either way its
+whole content goes onto its host atoms, each at one fraction of that atom's
+own occupancy, so it is shared among them in proportion to multiplicity times
+the host's occupancy. An added element whose content is zero is not added.
+
+That proportional sharing is the rule Section 8.11 states and Section 10.5
+records as a limitation: the amount on each site follows its host, and there
+is no way to say how much goes on each site. Where that is not what the
+structure does, the answer is a refinement of the occupancies afterwards, not
+a different starting split.
+
+It raises `ValueError` when the structure gives no formula units, when the
+atoms hold an element the composition lacks, when the composition has one the
+atoms lack that the rule does not add, when an added element is on the atoms
+already, when its host is not among them, or when a label for an added atom is
+taken.
+
+The edits come back in the form the GSAS-II driver takes: `{"label",
+"occupancy"}` for a change, and `{"label", "type", "copy", "occupancy"}` for
+an atom to add, `copy` naming the atom whose position it takes.
+
+Continues `site_plan.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.density import parse_formula
+from xrdkit.structure import cell_contents, composition_edits
+
+FORMULA = "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
+# Section 2.2's atoms table read as a placement rule: each added element
+# against the host atoms it goes beside, and the label it takes on each.
+ADDED = {
+    "La": {"Sr1": "La1"},
+    "Ti": {"Nb1": "Ti1", "Nb2": "Ti2"},
+}
+
+composition = parse_formula(FORMULA)
+print(f"nominal {composition}")
+print(f"the CIF cell holds {cell_contents(atoms)}")
+edits = composition_edits(
+    atoms,
+    composition,
+    {"name": "ttb_p4bm", "formula_units": entry.z, "composition": {"added": ADDED}},
+)
+print(f"{len(edits)} edits for Z = {entry.z}")
+print("  label  type  copy  occupancy  was")
+was = {atom["label"]: atom["occupancy"] for atom in atoms}
+for edit in edits:
+    print(
+        f"  {edit['label']:5s}  {edit.get('type', '-'):4s}  {edit.get('copy', '-'):4s}"
+        f"  {edit['occupancy']:9.4f}  {was.get(edit['label'], 0.0):9.4f}"
+    )
+edited = []
+for atom in atoms:
+    change = next((e for e in edits if e["label"] == atom["label"]), None)
+    edited.append(atom if change is None else {**atom, **change})
+for edit in edits:
+    if "type" in edit:
+        host = next(atom for atom in atoms if atom["label"] == edit["copy"])
+        edited.append({**host, **edit})
+print(f"the edited cell holds {cell_contents(edited)}")
+for element in ("La", "Ti"):
+    share = {
+        edit["label"]: next(
+            atom["multiplicity"] for atom in atoms if atom["label"] == edit["copy"]
+        )
+        * edit["occupancy"]
+        for edit in edits
+        if edit.get("type") == element
+    }
+    print(f"{element} per cell by site: {share}, {sum(share.values()):.1f} in all")
+```
+
+It prints the nominal composition, what the CIF holds, the edits, and what the
+cell holds once they are applied.
+
+```text
+nominal {'Sr': 0.4, 'Ba': 0.5, 'La': 0.1, 'Nb': 1.9, 'Ti': 0.1, 'O': 6.0}
+the CIF cell holds {'Ba': 2.6, 'Sr': 2.4008, 'Nb': 10.0, 'O': 30.0}
+8 edits for Z = 5
+  label  type  copy  occupancy  was
+  Ba2    -     -        0.6250     0.6500
+  Sr2    -     -        0.2051     0.2462
+  Sr1    -     -        0.5898     0.7080
+  La1    La    Sr1      0.2500     0.0000
+  Nb1    -     -        0.9500     1.0000
+  Ti1    Ti    Nb1      0.0500     0.0000
+  Nb2    -     -        0.9500     1.0000
+  Ti2    Ti    Nb2      0.0500     0.0000
+the edited cell holds {'Ba': 2.5, 'Sr': 2.0, 'Nb': 9.5, 'O': 30.0, 'La': 0.5, 'Ti': 0.5}
+La per cell by site: {'La1': 0.5}, 0.5 in all
+Ti per cell by site: {'Ti1': 0.1, 'Ti2': 0.4}, 0.5 in all
+```
+
+Read the edits in two groups. The three scalings first. The CIF holds 2.4008
+strontium per cell and the composition wants 2.0, so every strontium atom is
+multiplied by 0.8331: `Sr1` falls from 0.7080 to 0.5898 and `Sr2` from 0.2462
+to 0.2051, and the ratio between the two sites is untouched. Barium goes from
+2.6 to 2.5 the same way, and niobium from 10 to 9.5. Oxygen is already right
+and gets no edit.
+
+Then the additions. Lanthanum is named against `Sr1` alone, so the whole half
+an atom per cell goes there: `La1` copies `Sr1`'s position with an occupancy
+of 0.25, which on a site of multiplicity 2 is 0.5 atoms. Titanium is named
+against both niobium atoms, and the last two lines of the block show what the
+sharing rule does with it. Both `Ti1` and `Ti2` get an occupancy of 0.05,
+which looks like an even split and is not one: `Nb1` has multiplicity 2 and
+`Nb2` has 8, so the titanium lands 0.1 on B1 and 0.4 on B2, four times as much
+on the site with four times the room. Had the `atoms` table named B2 alone,
+all 0.5 would have gone there.
+
+The last line is the check worth making in any script that does this. The
+edited cell holds 2.0 strontium, 2.5 barium, 0.5 lanthanum, 9.5 niobium, 0.5
+titanium and 30 oxygen, which is five times the nominal formula unit exactly,
+as it must be at Z of 5. If that line does not come out right the rule has
+been given something it cannot do, and the place to find out is here rather
+than at the end of a refinement.
