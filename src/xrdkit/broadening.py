@@ -452,8 +452,18 @@ def fit_caglioti(
     fwhm
         Peak widths, in degrees.
     weights
-        Weight of each point in the sum of squared FWHM^2 residuals. For a
-        width with esd s this is 1 / (2 FWHM s)^2. Equal weights by default.
+        Weight of each point in the sum of squared FWHM^2 residuals, used as
+        given: the residual of every point is scaled by the root of its
+        weight, and the reduced chi squared the covariance is scaled by
+        follows from the same weights. Equal weights by default.
+
+        Which weights to pass is the caller's choice. The kit's own caller,
+        :func:`~xrdkit.instrument.fit_instrument_widths`, passes 1 / s^2 with
+        s the esd of the fitted FWHM, which weights each width by its own
+        precision. A caller wanting the esd of a width carried through to the
+        square of that width should pass 1 / (2 FWHM s)^2 instead, since the
+        variance of FWHM^2 is (2 FWHM s)^2. The two are not the same
+        weighting and give slightly different U, V and W.
 
     Raises
     ------
@@ -772,7 +782,12 @@ def correct_broadening(
     fwhm_obs, eta_obs
         The observed FWHM and mixing parameter.
     fwhm_inst, eta_inst
-        The instrumental FWHM and mixing parameter at the same angle.
+        The instrumental FWHM and mixing parameter at the same angle. The
+        caller has to supply ``eta_inst`` itself: the Caglioti relation is
+        about widths only, so neither :class:`Caglioti` nor
+        :class:`~xrdkit.instrument.WidthFit` carries a mixing parameter. It
+        comes from the profile fits of the standard the instrument was
+        measured on, interpolated to the angle wanted.
     esd_fwhm_obs, esd_eta_obs, esd_fwhm_inst, esd_eta_inst
         Their esds; zero by default.
     significance

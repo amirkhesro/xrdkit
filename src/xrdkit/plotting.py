@@ -156,7 +156,14 @@ HKL_WIDE_INDEX = 10
 
 
 def apply_style() -> None:
-    """Set global rcParams to a clean single-column journal style."""
+    """Set global rcParams to a clean single-column journal style.
+
+    The change is to ``matplotlib.rcParams`` itself, so it holds for every
+    figure the process draws afterwards and nothing here puts the old values
+    back. Call it once, before anything is drawn; a script that also draws
+    figures of its own should call this first and then override what it
+    wants, or make its own figures inside ``matplotlib.rc_context``.
+    """
     families = {font.name for font in mpl.font_manager.fontManager.ttflist}
     sans = ["Arial", "DejaVu Sans"] if "Arial" in families else ["DejaVu Sans"]
 
@@ -641,6 +648,12 @@ def mark_peaks(
 
     For the peaks a cell does not account for, whether unindexed or from a
     second phase, which are worth pointing at even though they carry no hkl.
+
+    Nothing is checked and nothing is placed: every position given gets a
+    marker wherever it falls, inside the axes limits or outside them, and
+    markers that land on top of one another stay. Unlike
+    :func:`annotate_hkl`, which measures and drops what will not fit, this
+    writes what it is told.
 
     Returns
     -------

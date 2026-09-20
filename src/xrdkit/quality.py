@@ -1,6 +1,6 @@
 """Data quality of a scan, judged against what each workflow needs.
 
-The thresholds are those of the criteria table in Section 2 of
+The thresholds are those of the criteria table in Section 4.2 of
 ``docs/USER_GUIDE.md``. Only the criteria that can be read off the scan itself
 are applied: angular range, step size and counting statistics. Sample
 preparation, standards and radiation are left to the user.
@@ -24,7 +24,11 @@ __all__ = [
     "format_report",
 ]
 
-# Thresholds per workflow, from the criteria table of USER_GUIDE.md Section 2.
+# Thresholds per workflow, from the criteria table of USER_GUIDE.md Section
+# 4.2. CRITERIA is public, and is the programmatic route to those numbers: a
+# dict of workflow name to a dict of criterion name to threshold, for a caller
+# that would rather read them than copy them out of the guide. The criteria
+# are:
 #   angular_range                (low, high) degrees two theta the scan must cover
 #   step_size                    (low, high) degrees the step must lie within
 #   maximum                      least strongest intensity, counts
@@ -56,6 +60,9 @@ CRITERIA: dict[str, dict[str, float | tuple[float, float]]] = {
     },
 }
 
+# The workflow names, in the order assess_scan judges them and format_report
+# prints them. Public beside CRITERIA, so that a caller can walk the
+# thresholds in the report's own order without hard coding the four names.
 WORKFLOWS: tuple[str, ...] = tuple(CRITERIA)
 
 # Slack on the step size bounds, in degrees, so that a step computed from the

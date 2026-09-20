@@ -86,8 +86,10 @@ class Peak:
     # Index in the peak list of the K alpha 1 parent this peak is a satellite
     # of, or None if it is not judged to be one.
     kalpha2_of: int | None = None
-    # Background counts under the peak, estimated by find_peaks as the lowest
-    # intensity within BACKGROUND_HALF_WIDTH of it; 0 when not estimated.
+    # Background counts under the peak: the lowest intensity within
+    # BACKGROUND_HALF_WIDTH either side of it, over the points find_peaks
+    # searched, which is what _local_background returns. It stays 0.0 on a
+    # Peak built by hand, since only find_peaks estimates it.
     background: float = 0.0
 
 
@@ -163,7 +165,12 @@ def find_peaks(
     min_distance
         Minimum separation between peaks, in degrees.
     two_theta_range
-        Optional ``(low, high)`` window, in degrees, to restrict the search to.
+        Optional ``(low, high)`` window, in degrees, to restrict the search
+        to. The window is applied to the points before anything is measured,
+        so both the prominence threshold and ``relative_intensity`` are taken
+        from the strongest intensity inside it: narrowing the window changes
+        which peaks clear ``min_prominence`` and changes what 100 per cent
+        means.
     flag_satellites
         Whether to run :func:`flag_kalpha2` over the result, which sets
         ``kalpha2_of`` on the peaks that look like K alpha 2 satellites.

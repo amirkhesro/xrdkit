@@ -72,6 +72,13 @@ class WidthFit:
     ``fwhm`` are the reflections the fit used, those whose profile fit
     converged; ``n_peaks`` counts them. ``wavelength`` is the scan's, in
     angstroms.
+
+    Nothing here is an instrumental mixing parameter, and neither is anything
+    in :class:`~xrdkit.broadening.Caglioti`: the relation fitted is about
+    widths only. A script correcting a sample's broadening with
+    :func:`~xrdkit.broadening.correct_broadening`, which wants ``eta_inst``
+    beside ``fwhm_inst``, has to take the eta from the standard's own profile
+    fits.
     """
 
     n_peaks: int
@@ -130,8 +137,14 @@ def fit_instrument_widths(
 
     Every peak found in ``window``, its K alpha 2 satellites excluded, is
     fitted as a split pseudo-Voigt doublet, and the widths of the fits that
-    converged go into a weighted fit of FWHM squared against tan theta, each
-    weighted by one over the square of its own esd.
+    converged go into a weighted fit of FWHM squared against tan theta.
+
+    The weights passed to :func:`~xrdkit.broadening.fit_caglioti` are 1 / s^2
+    with s the esd of the fitted FWHM, so each width counts for its own
+    precision. A caller wanting the esd carried through to the square of the
+    width, whose variance is (2 FWHM s)^2, would call ``fit_caglioti``
+    directly with weights of 1 / (2 FWHM s)^2; the two weightings give
+    slightly different U, V and W.
 
     Raises
     ------

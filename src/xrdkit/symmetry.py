@@ -90,8 +90,9 @@ def parse_xyz(text: str) -> Operation:
     ------
     ValueError
         If ``text`` does not have three components of x, y, z terms and
-        fractions, a component has no x, y or z, or a translation is not a
-        multiple of 1/12.
+        fractions, a component holds something that cannot be read, a term
+        after the first in a component carries no sign, a component has no
+        x, y or z, or a translation is not a multiple of 1/12.
     """
     components = text.replace(" ", "").lower().split(",")
     if len(components) != 3:

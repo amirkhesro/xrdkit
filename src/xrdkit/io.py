@@ -28,6 +28,12 @@ class XRDScan:
     neither, as a two column pattern does not: the wavelength is then
     supplied from the project file or the command line. ``esd`` holds the
     esds of the intensities when the file gives them, as an ``.xye`` does.
+
+    ``sample_id`` is the identifier the instrument wrote into the file, the
+    ``<sample><id>`` of an ``.xrdml``, and the file stem for a text pattern,
+    which carries none. It is whatever was typed at the diffractometer and
+    not the sample key of the project file, so the two often differ; use the
+    key to name a sample and this only to say what the file itself claims.
     """
 
     two_theta: np.ndarray

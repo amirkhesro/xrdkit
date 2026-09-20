@@ -368,7 +368,9 @@ def match_candidate(
 
     An observed position is explained when a simulated reflection of any
     intensity lies within ``tolerance`` degrees of it; of several, the
-    strongest is taken as its cause. A simulated reflection is missing when it
+    strongest is taken as its cause, and where two are equally strong the
+    nearer to the observed position wins. A simulated reflection is missing
+    when it
     is stronger than ``min_intensity`` yet lies more than ``tolerance`` from
     every observed position and from every position in ``exclude_two_theta``,
     which is meant for the reflections of the phases already known to be
