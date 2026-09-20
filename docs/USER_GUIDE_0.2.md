@@ -7219,3 +7219,1085 @@ titanium and 30 oxygen, which is five times the nominal formula unit exactly,
 as it must be at Z of 5. If that line does not come out right the rule has
 been given something it cannot do, and the place to find out is here rather
 than at the end of a refinement.
+
+## 27. project
+
+`xrdkit.project` reads `xrdkit.toml`. Section 2.2 is the file itself, table by
+table, and what every key means; this section is the loader, the five frozen
+dataclasses it returns and the four resolvers that answer the questions a
+command asks of a project.
+
+There are twelve public names: two constants, five dataclasses, three
+functions that read a project and four that resolve something from one.
+
+The reason to use them rather than `tomllib` is that the file is checked as a
+whole. A sample naming an instrument that is not there, a structure whose cell
+is not its entry's, a path that does not exist: all of them are caught when
+the file loads, so a command fails before it starts rather than in the middle
+of a refinement.
+
+### 27.1 find_project, load_project and load_project_text
+
+`PROJECT_FILE` is `"xrdkit.toml"`, and the project root is the folder holding
+it. Every path in the file is relative to that root, and every path the loader
+returns has been made absolute against it.
+
+`find_project(start=None)` returns the `xrdkit.toml` of the first folder, from
+`start` or the current folder upwards, that holds one. It raises
+`FileNotFoundError` naming the folder it began at when neither that folder nor
+any above it has one. That upward walk is why a command works from anywhere
+inside a project.
+
+`load_project(path=None)` reads and checks the file at `path`, an
+`xrdkit.toml` or the folder holding one, and by default the one
+`find_project` finds. It returns a `Project`.
+
+`load_project_text(text, path)` is the same check on text you already have,
+with `path` standing in for where it came from, so relative paths resolve
+against that file's folder and the messages name it. It is what a test uses,
+and what Section 27.4 uses to show a refusal without writing anything.
+
+Both raise `ValueError` naming the file and the exact key at fault.
+
+### 27.2 The five dataclasses
+
+All five are frozen.
+
+`Project` is the whole file: `root`, the folder holding it; `name` and
+`version`; `instruments`, `structures` and `samples`, each a dict by key; and
+`refine`, the project's `[refine]` defaults as a `Refine`.
+
+`Instrument` carries `key`, `wavelength` as a tuple of one or two floats in
+angstroms, `ka2`, and optionally `radius` in millimetres and `instprm`, the
+path of the GSAS-II instrument parameter file.
+
+`StructureSpec` carries `key`, `composition` as the formula text,
+`library` and `cif`, `cell` as the parameters the file gave, `z`, `exchange`
+as a tuple of tuples, and the origin as three fields: `origin`, the site
+label or `None`; `origin_axis`; and `origin_fixed`, false only when the file
+said `origin = false`. `atoms` is `None` when the table gives none, else its
+sites as `xrdkit.config.read_sites` gives them, each carrying its entry
+`label` for a library structure.
+
+`Sample` carries `key`, `file`, `instrument`, `structures` as a tuple of keys,
+`form`, and the optional `stage`, `temperature_c`, `archimedes` and `notes`,
+with `refine`, the keys of `[refine]` this sample overrides, checked but not
+yet merged.
+
+`Refine` carries `two_theta`, `None` for the scan's own range; `background`;
+`max_passes` and `unsettled`, both by mode; and `followed`, the reflections
+carried from mode to mode as (h, k, l) triples.
+
+### 27.3 The four resolvers
+
+Each answers a question the file does not answer literally.
+
+`resolved_z(spec)` is the formula units per cell: the structure's own `z`, or
+its library entry's when it gives none. It raises `ValueError` when the
+structure uses a CIF and gives no `z`, since a CIF carries no Z the loader
+trusts.
+
+`resolved_cell(spec)` is all six cell parameters, with those the entry's
+crystal system leaves out filled in: b equal to a and the three right angles
+of a tetragonal cell, gamma of 120 for a hexagonal one. It raises `ValueError`
+when the structure gives no cell, and when it uses a CIF without a library
+entry and does not give all six, since the crystal system is then unknown
+here.
+
+`refine_settings(project, sample)` is the settings a sample is refined with:
+the package defaults, the project's `[refine]` over them, and the sample's own
+`refine` over that. A table given in part keeps the rest of the table below
+it, so `background = { terms = 8 }` changes the terms and keeps the function.
+It raises `KeyError` naming the samples there are when there is no such
+sample.
+
+`results_dir(project, command, sample)` is
+`<root>/results/<command>/<sample key>`, the folder a command's results go in.
+It is not created, and it is why Section 9 can say where every file lands
+without each command being asked.
+
+`toml_string(value)` quotes and escapes a string as TOML, which is what
+`xrdkit init` and `xrdkit instrument` write names and paths with.
+`project_template(name)` is the text of a new project file, `[project]`
+filled in and every other table commented out, which is what `xrdkit init`
+writes and Section 2.1 shows.
+
+### 27.4 The example project read back
+
+The script reads the project of this guide and prints it. Every path is
+printed relative to the root, since the absolute ones say only which machine
+the guide was built on.
+
+Start a new file named `project_file.py`.
+
+```python
+from xrdkit.project import (
+    PROJECT_FILE,
+    find_project,
+    load_project,
+    refine_settings,
+    resolved_cell,
+    resolved_z,
+    results_dir,
+    toml_string,
+)
+
+# Edit these lines for each new project. Nothing below needs changing.
+STRUCTURE = "ttb_p4bm"
+SAMPLES = ("powder_a", "pellet_a")
+COMMAND = "lattice"
+
+path = find_project()
+project = load_project(path)
+root = project.root
+
+
+def under_root(value):
+    """A path as it reads from the project root, so no machine shows in it."""
+    return value.relative_to(root)
+
+
+print(f"{PROJECT_FILE} found at {under_root(path)}")
+print(f"project {toml_string(project.name)}, version {project.version}")
+print(
+    f"{len(project.instruments)} instruments, {len(project.structures)} structures,"
+    f" {len(project.samples)} samples"
+)
+
+for key, instrument in project.instruments.items():
+    print(f"instrument {key}")
+    print(f"  wavelength {instrument.wavelength}, ka2 {instrument.ka2}")
+    print(f"  radius {instrument.radius} mm, instprm {under_root(instrument.instprm)}")
+
+for key, spec in project.structures.items():
+    print(f"structure {key}")
+    print(f"  library {spec.library}, cif {under_root(spec.cif)}")
+    print(f"  composition {spec.composition}, z {spec.z}")
+    print(
+        f"  exchange {spec.exchange}, origin {spec.origin}, fixed {spec.origin_fixed}"
+    )
+    print(f"  atoms placed on {[site['label'] for site in spec.atoms or ()]}")
+
+for key, sample in project.samples.items():
+    print(f"sample {key}")
+    print(f"  file {under_root(sample.file)}, instrument {sample.instrument}")
+    print(f"  structures {sample.structures}, form {sample.form}")
+    print(
+        f"  stage {sample.stage!r}, archimedes {sample.archimedes},"
+        f" refine {sample.refine}"
+    )
+```
+
+It prints where the file was found and then every table in it.
+
+```text
+xrdkit.toml found at xrdkit.toml
+project "ttb-example", version 1
+1 instruments, 1 structures, 3 samples
+instrument diffractometer
+  wavelength (1.540598, 1.544426), ka2 True
+  radius 145.0 mm, instprm data\standards\lab6.instprm
+structure ttb_p4bm
+  library ttb/P4bm, cif cifs\2100720.cif
+  composition Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6, z 5
+  exchange (('Sr', 'Ba'),), origin None, fixed True
+  atoms placed on ['A1', 'A2', 'B1', 'B2']
+sample pellet_a
+  file data\raw\pellet_a.xrdml, instrument diffractometer
+  structures ('ttb_p4bm',), form pellet
+  stage None, archimedes None, refine {}
+sample pellet_b
+  file data\raw\pellet_b.xrdml, instrument diffractometer
+  structures ('ttb_p4bm',), form pellet
+  stage None, archimedes None, refine {}
+sample powder_a
+  file data\raw\powder_a.xrdml, instrument diffractometer
+  structures ('ttb_p4bm',), form powder
+  stage None, archimedes None, refine {'two_theta': (17.0, 99.98)}
+```
+
+That is the file of Section 2.2 as the loader sees it. Three things are worth
+noticing. The wavelengths are a tuple of two, so the instrument is a K alpha
+doublet; `radius` and `instprm` are both there, which is what a refined
+displacement and a GSAS-II refinement respectively need. The structure's
+`atoms` has become a list of sites carrying their entry labels, `A1`, `A2`,
+`B1` and `B2`, which is the placement rule of Section 26.4 in the form the
+pipeline takes it. And `powder_a` is the only sample with anything in
+`refine`, the per sample range the extraction of Section 8.3 runs over.
+
+Continues `project_file.py`. Add these lines at the end of the file.
+
+```python
+spec = project.structures[STRUCTURE]
+print(f"resolved_z({STRUCTURE}) = {resolved_z(spec)}")
+print(f"resolved_cell({STRUCTURE}) = {resolved_cell(spec)}")
+print(f"the table itself gives cell = {spec.cell}")
+
+for key in SAMPLES:
+    settings = refine_settings(project, key)
+    print(f"refine_settings({key})")
+    print(f"  two_theta  {settings.two_theta}")
+    print(f"  background {settings.background}")
+    print(f"  max_passes {settings.max_passes}")
+    print(f"  unsettled  {settings.unsettled}")
+    print(f"  followed   {settings.followed}")
+print(f"the project's own [refine] two_theta is {project.refine.two_theta}")
+for key in SAMPLES:
+    print(
+        f"results_dir({COMMAND}, {key}) = {under_root(results_dir(project, COMMAND, key))}"
+    )
+```
+
+It prints what each resolver makes of the file.
+
+```text
+resolved_z(ttb_p4bm) = 5
+resolved_cell(ttb_p4bm) = {'a': 12.45, 'b': 12.45, 'c': 3.94, 'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0}
+the table itself gives cell = {'a': 12.45, 'c': 3.94}
+refine_settings(powder_a)
+  two_theta  (17.0, 99.98)
+  background {'function': 'chebyschev-1', 'terms': 6}
+  max_passes {'lebail': 60, 'fixed_atoms': 60, 'coordinates': 100, 'occupancies': 100}
+  unsettled  {'lebail': 'accept', 'fixed_atoms': 'accept', 'coordinates': 'accept', 'occupancies': 'accept'}
+  followed   ()
+refine_settings(pellet_a)
+  two_theta  None
+  background {'function': 'chebyschev-1', 'terms': 6}
+  max_passes {'lebail': 60, 'fixed_atoms': 60, 'coordinates': 100, 'occupancies': 100}
+  unsettled  {'lebail': 'accept', 'fixed_atoms': 'accept', 'coordinates': 'accept', 'occupancies': 'accept'}
+  followed   ()
+the project's own [refine] two_theta is None
+results_dir(lattice, powder_a) = results\lattice\powder_a
+results_dir(lattice, pellet_a) = results\lattice\pellet_a
+```
+
+`resolved_cell` is the clearest of the four. The table gives two numbers,
+because a tetragonal cell has two free parameters; the resolver returns six,
+because that is what GSAS-II and every geometry function want. Nothing in the
+file says b equals a; the library entry's crystal system does, and the
+resolver reads it from there.
+
+`refine_settings` shows the three layers at work. `powder_a` comes back with
+`two_theta` of 17.0 to 99.98 from its own table, while `pellet_a` comes back
+with `None`, meaning the scan's own range, and the project file sets no
+`[refine]` range at all. Everything else, the background, the passes and the
+unsettled rules, is identical between the two because both fall through to the
+package defaults. A sample's table is a patch over those layers, not a
+replacement of them.
+
+Continues `project_file.py`. Add these lines at the end of the file.
+
+```python
+import os
+
+from xrdkit.project import load_project_text
+
+BROKEN = {
+    "a sample naming an instrument that is not there": (
+        'instrument = "diffractometer"',
+        'instrument = "other"',
+    ),
+    "a structure whose cell is not its entry's": (
+        "cell = { a = 12.45, c = 3.94 }",
+        "cell = { a = 12.45, b = 12.45, c = 3.94 }",
+    ),
+}
+
+
+def without_root(message):
+    """A message with the project root taken off, so no machine shows in it."""
+    return str(message).replace(f"{root}{os.sep}", "").replace(f"{root}", ".")
+
+
+text = path.read_text(encoding="utf-8")
+print(f"the text loads as {load_project_text(text, path).name}")
+for description, (before, after) in BROKEN.items():
+    try:
+        load_project_text(text.replace(before, after), path)
+    except ValueError as error:
+        print(f"{description}:")
+        print(f"  {without_root(error)}")
+```
+
+It loads the file's own text, then breaks it twice.
+
+```text
+the text loads as ttb-example
+a sample naming an instrument that is not there:
+  xrdkit.toml: samples.pellet_a.instrument: no instrument 'other' under instruments; there are diffractometer
+a structure whose cell is not its entry's:
+  xrdkit.toml: structures.ttb_p4bm.cell: must give exactly a, c, the cell parameters of ttb/P4bm, not a, b, c
+```
+
+Both refusals are cross checks between tables, which is what the loader is
+for. A sample may name only an instrument the file defines, and the message
+lists the ones it does. A structure's `cell` must give exactly the parameters
+its library entry's crystal system leaves free, and the message names the
+entry. Neither is a TOML error; the file parses perfectly in both cases, and
+it is the checking on top of the parse that catches them.
+
+## 28. gsas2
+
+`xrdkit.gsas2` runs GSAS-II. Section 8 is what the two refinement commands do
+with it, and this section is the layer underneath: how a job is built, how it
+is run, and the handful of things about GSAS-II that a caller has to know
+because the module cannot hide them.
+
+There are eleven public names: two environment variable names, the error, the
+installation, the finder, the instrument parameter writer, the width formula,
+the stage list, the job builder, the runner and the structure edit helper.
+
+### 28.1 Why there is a driver at all
+
+GSAS-II brings its own Python and its own compiled extensions, and cannot be
+imported into yours. So nothing here imports GSAS-II. A job, a dict naming an
+action and its inputs, is written as JSON; `gsas2_driver.py` is run under the
+GSAS-II Python as a subprocess, imports GSASIIscriptable, does the work and
+writes its result as JSON; and `run_job` reads that back. The driver imports
+nothing from xrdkit, so the two installations never have to agree about
+anything but the shape of the JSON.
+
+Four things about that arrangement are worth knowing, because each is a
+GSAS-II quirk the module works around and each shows up in a caller's life
+sooner or later.
+
+The import path. The driver puts the folder holding the `GSASII` package on
+`sys.path` itself, from the `gsas2_home` the job carries, which is why
+`Gsas2Install` has a `home` as well as a `python`.
+
+The conda folders on PATH. The GSAS-II Python is a conda environment, and on
+Windows its numpy finds the BLAS and LAPACK libraries only through the folders
+`conda activate` would put on PATH. Without them the first matrix inversion
+kills the process outright, with no Python traceback at all. `run_job` puts
+those folders at the front of PATH for the subprocess, which is why you do not
+have to activate anything.
+
+The encoding. GSAS-II opens its data files in the locale encoding, and on
+Windows that turns the byte order mark at the head of a `.xrdml` file into
+characters the XML parser rejects. `run_job` sets `PYTHONUTF8` for the
+subprocess unless it is already set. It also writes a two column `.xy` copy of
+an `.xrdml` scan into the working folder and passes it as a fallback, for the
+driver to read should GSAS-II's own importer fail anyway.
+
+Refinement does not raise. GSAS-II's least squares reports trouble by what it
+leaves behind rather than by an exception, so the driver judges each stage
+after it runs and records a status, and a stage that fails does not stop the
+job. Section 8.16 is how those statuses are read.
+
+### 28.2 find_gsas2 and Gsas2Install
+
+`find_gsas2()` locates the installation and returns a frozen `Gsas2Install`
+with `python`, the interpreter, and `home`, the folder containing the `GSASII`
+package. `XRDKIT_GSAS2_PYTHON` and `XRDKIT_GSAS2_HOME`, the two names
+`GSAS2_PYTHON_VARIABLE` and `GSAS2_HOME_VARIABLE` hold, name them; either left
+unset falls back to `~/gsas2main`, whose Python is `python.exe` on Windows and
+`bin/python` elsewhere and whose package folder is `GSAS-II`.
+
+It raises `FileNotFoundError` naming both variables and both problems it
+found. Call it first in a script that will later refine, so that a missing
+installation costs the message rather than the minutes before it.
+
+`Gsas2Error` is a `RuntimeError` carrying the subprocess's `stdout` and
+`stderr`, raised when the driver exits non-zero or writes no result.
+
+### 28.3 write_instprm and gsas2_fwhm
+
+`write_instprm(path, caglioti, zero=0.0, x=0.0, y=0.0, shl=0.002,
+lam1=1.54056, lam2=1.54439, ratio=0.5, polariz=0.7, radius_mm=None)` writes
+the instrument parameter file a powder histogram is read with, and returns the
+path. It is what `xrdkit instrument` writes its starting file with from the
+Caglioti fit of Section 22.
+
+The unit conversion in it is the thing to know. xrdkit's U, V and W give the
+squared FWHM in degrees squared; GSAS-II's give the variance of the Gaussian
+component in centidegrees squared, its FWHM being the square root of eight ln
+two times sigma. Each is therefore multiplied by ten thousand over eight ln
+two, about 1803, which is why the numbers Section 3.2 prints from the width
+fit and from the refinement look nothing like each other. The whole fitted
+width is taken as Gaussian, which is exact while `x` and `y` are zero and a
+starting point otherwise.
+
+`radius_mm` writes the goniometer radius line GSAS-II writes itself. Without
+it a text pattern leaves GSAS-II at its default of two hundred millimetres,
+and a refined specimen displacement comes out wrong by the ratio of the two.
+
+`gsas2_fwhm(two_theta, u, v, w, x, y, shl=0.0, z=0.0)` is the line width
+GSAS-II's own refined parameters imply, in degrees, taking them in GSAS-II's
+units: U, V and W the Gaussian variance in centidegrees squared, held at no
+less than 0.001, and X, Y and Z the Lorentzian FWHM in centidegrees. The two
+are combined by the Thompson, Cox and Hastings quintic exactly as GSAS-II
+does. `shl` is accepted so that a refined set can be passed whole, and is
+ignored: axial divergence makes a line asymmetric without entering its width.
+
+### 28.4 standard_stages, build_refine_job and the stage language
+
+A stage is a dict with a `name` and the refinement flags it switches on. The
+driver carries every flag forward to the stages after it, so a stage names
+only what it adds, and a stage the driver rejects holds what it alone refined
+from then on. The flags are the whole vocabulary of a refinement here:
+`background`, `scale`, `zero`, `displacement`, `instrument` (a list of
+GSAS-II's parameter names), `cell`, `le_bail`, `phase_fractions`, `size`,
+`mustrain`, `overall_uiso`, `atoms`, `atom_flags`, `uiso_groups`,
+`coordinates`, `origin` and `occupancies`. Section 29 builds the four
+sequences the commands use out of them.
+
+`standard_stages(background_type, background_terms)` is the usual sequence for
+a script to edit: background and scale; zero; cell; U, V and W; X and Y;
+SH/L. The list is new on every call, so a stage can be dropped or a flag added
+freely. It is what `xrdkit instrument` runs, less its cell stage.
+
+`build_refine_job(gpx, stages, ...)` assembles the job. With `data_file`,
+`instprm` and `phases` the project is created at `gpx` first; without all
+three, `gpx` must already hold one. The stages are checked here, by the
+driver's own rules, so a mistake is reported before GSAS-II starts. Every
+path is made absolute against the current working directory, because the
+driver runs in a working folder of its own.
+
+Its arguments are many and Section 8 exercises most of them; the ones a hand
+built refinement reaches for first are `limits`, the two theta range;
+`cycles`, the most least squares cycles a stage may take; `broadening`, the
+sample size and microstrain to start from and hold until a stage refines
+them; `export_prefix`, what the exported files are named from; and the pass
+pair below.
+
+`max_passes` and `pass_tolerance` are the pair worth understanding. GSAS-II
+stops a refinement when its own convergence test is met, which for a Le Bail
+extraction is well short of settled. Given `max_passes`, the driver refines a
+stage again and again, up to that many times, until no parameter moves by more
+than `pass_tolerance` esds from one pass to the next. Without it a stage is
+refined once and carries no `passes` in the result. Section 8.5 is what the
+passes mean for a run and Section 29 gives the pipeline's own values.
+
+It raises `Gsas2Error` when an input file does not exist, and `ValueError` or
+`TypeError` when a stage, the broadening, an atom edit or any of the starting
+values is malformed.
+
+### 28.5 run_job and structure_edits
+
+`run_job(job, workdir, install=None)` writes the job to
+`workdir/<action>_job.json`, runs the driver on it as `python -B driver
+job.json` in `workdir`, keeps the output in `workdir/<action>.log` and returns
+the result the driver wrote. The `-B` keeps bytecode out of the GSAS-II
+installation. It raises `Gsas2Error` carrying the driver's stderr when the
+driver exits non-zero or leaves no result.
+
+The result is a dict. `completed` says whether every stage ran, `final_from`
+names the stage the final model was taken from, `stages` is one record per
+stage with its `rwp`, `rp`, `gof`, `n_variables`, `passes` and `status`,
+`final` holds the refined `instrument` and `phases`, `rejected` lists the
+stages rolled back, `undetermined` the parameters the driver could not
+determine, and `exports` the files written.
+
+Two readers go with it. `stage_status(stage)` is one stage's status, and
+`accepted_stages(result)` the stages refined and kept, which is what Section
+29.4 counts. `stage_statuses(result)` gives each stage as a row with its
+`name`, `status`, `reason`, `passes`, `rwp`, `gof` and `undetermined`, the
+`reason` being why a stage was rejected or failed, the new flags of one
+flagged, or the passes and largest remaining move of one unsettled.
+
+`structure_edits(refined, base)` turns a refined structure back into the atom
+edits that set it up again in a new project read from the same CIF, so that
+one refinement can start where another ended. It is how the Rietveld modes of
+Section 29 carry their atoms from mode to mode. It raises `ValueError` when an
+atom the CIF lacks shares no site with one it has.
+
+### 28.6 A refinement of your own, stage by stage
+
+The script below is a hand built refinement: three stages on `powder_a`
+against the CIF of Section 24, starting from the cell the Le Bail extraction
+of Section 8.3 gave. It is the shape to copy when a refinement needs a stage
+sequence the modes do not offer.
+
+Everything the commands do around this is Section 8 and is not here: choosing
+the modes, carrying each one's result into the next, putting the nominal
+composition on the atoms, the write ups, the sanity checks and the rollback.
+In particular this refinement uses the CIF's own composition rather than the
+sample's, so its atoms are the published strontium barium niobate rather than
+the doped formula of Section 2.2, and its R factors are not comparable with
+Section 8.8's. What it demonstrates is the machinery, not a result to quote.
+
+Everything it writes goes under `results/library/gsas2_powder_a`, the GSAS-II
+project, the logs, the job and result JSON and the exports together, so that
+nothing lands in the folders the commands own.
+
+Start a new file named `refine_stages.py`.
+
+```python
+from pathlib import Path
+
+from xrdkit.gsas2 import build_refine_job, find_gsas2, run_job, stage_statuses
+from xrdkit.io import read_scan
+from xrdkit.project import find_project, load_project, refine_settings
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SAMPLE = "powder_a"
+PHASE = "ttb_p4bm"
+CIF_FILE = "cifs/2100720.cif"
+START_CELL = (12.4740, 12.4740, 3.9318, 90.0, 90.0, 90.0)
+OUT = Path("results/library/gsas2_powder_a")
+MAX_PASSES = 20
+STAGES = [
+    {"name": "scale and background", "background": True, "scale": True},
+    {"name": "zero and cell", "zero": True, "cell": True},
+    {"name": "profile", "instrument": ["U", "V", "W"]},
+]
+
+install = find_gsas2()
+print(f"GSAS-II found: {install.python.name} beside {install.home.name}")
+
+project = load_project(find_project())
+root = project.root
+sample = project.samples[SAMPLE]
+instrument = project.instruments[sample.instrument]
+settings = refine_settings(project, sample)
+scan = read_scan(sample.file)
+limits = settings.two_theta or (scan.start_angle, scan.end_angle)
+print(
+    f"{SAMPLE}: {scan.two_theta.size} points from {scan.start_angle:.2f}"
+    f" to {scan.end_angle:.2f} degrees"
+)
+print(f"refining {limits[0]} to {limits[1]} degrees, background {settings.background}")
+print(f"instrument file {instrument.instprm.relative_to(root)}")
+print(f"stages {[stage['name'] for stage in STAGES]}")
+
+job = build_refine_job(
+    OUT / f"{SAMPLE}.gpx",
+    STAGES,
+    data_file=sample.file,
+    instprm=instrument.instprm,
+    phases=[{"cif": CIF_FILE, "name": PHASE, "cell": list(START_CELL)}],
+    limits=limits,
+    cycles=10,
+    max_passes=MAX_PASSES,
+    pass_tolerance=0.1,
+    broadening={PHASE: {"size": 1.0, "mustrain": 0.0, "lgmix": 1.0}},
+    export_prefix=OUT / SAMPLE,
+)
+print(
+    f"job action {job['action']}, {len(job['stages'])} stages, {job['cycles']} cycles"
+)
+result = run_job(job, OUT / "work")
+print(f"completed {result['completed']}, final model from {result['final_from']}")
+```
+
+It prints the installation, the inputs it took from the project file, the job
+it built and whether GSAS-II finished it.
+
+```text
+GSAS-II found: python.exe beside GSAS-II
+powder_a: 4141 points from 10.01 to 99.98 degrees
+refining 17.0 to 99.98 degrees, background {'function': 'chebyschev-1', 'terms': 6}
+instrument file data\standards\lab6.instprm
+stages ['scale and background', 'zero and cell', 'profile']
+job action refine, 3 stages, 10 cycles
+completed True, final model from profile
+```
+
+Note where each input came from. The scan, the instrument parameter file, the
+two theta range and the background all came out of the project file through
+Section 27's loader and resolvers, not out of the settings at the top of the
+script; only the phase, the CIF and the start cell are the script's own. That
+is the division worth keeping in a script of your own, because it means a
+sample is described in one place.
+
+The run took about forty seconds.
+
+Continues `refine_stages.py`. Add these lines at the end of the file.
+
+```python
+print("  stage                 Rwp     Rp    GOF  variables  passes  status")
+for stage in result["stages"]:
+    print(
+        f"  {stage['name']:20s} {stage['rwp']:5.3f}  {stage['rp']:5.3f}"
+        f"  {stage['gof']:5.3f}  {stage['n_variables']:9d}"
+        f"  {len(stage['passes']):6d}  {stage['status']}"
+    )
+for row in stage_statuses(result):
+    if row["reason"]:
+        print(f"  {row['name']}: {row['reason']}")
+
+phase = result["final"]["phases"][0]
+cell, esd = phase["cell"], phase["cell_esd"]
+print(f"a = {cell['length_a']:.4f} +/- {esd['length_a']:.4f} angstrom")
+print(f"c = {cell['length_c']:.4f} +/- {esd['length_c']:.4f} angstrom")
+print(f"V = {cell['volume']:.3f} +/- {esd['volume']:.3f} cubic angstrom")
+zero = result["final"]["instrument"]["Zero"]
+print(f"zero {zero['value']:.4f} +/- {zero['esd']:.4f} degrees")
+for key in ("U", "V", "W"):
+    entry = result["final"]["instrument"][key]
+    print(f"{key} {entry['value']:9.4f} +/- {entry['esd']:.4f} centidegrees squared")
+print("exports")
+for name, written in sorted(result["exports"].items()):
+    files = written.values() if isinstance(written, dict) else [written]
+    for one in files:
+        print(f"  {name}: {Path(one).relative_to(root)}")
+```
+
+It prints every stage, the refined cell and instrument, and the files GSAS-II
+exported.
+
+```text
+  stage                 Rwp     Rp    GOF  variables  passes  status
+  scale and background 8.383  5.787  2.890          7       2  clean
+  zero and cell        7.791  5.588  2.687         10       6  clean
+  profile              5.439  4.222  1.876         13      14  clean
+a = 12.4755 +/- 0.0006 angstrom
+c = 3.9322 +/- 0.0002 angstrom
+V = 612.003 +/- 0.073 cubic angstrom
+zero -0.0343 +/- 0.0013 degrees
+U  444.9634 +/- 54.6354 centidegrees squared
+V -209.2662 +/- 42.2414 centidegrees squared
+W   49.3307 +/- 7.4550 centidegrees squared
+exports
+  histogram: results\library\gsas2_powder_a\powder_a_histogram.csv
+  instprm: results\library\gsas2_powder_a\powder_a.instprm
+  reflections: results\library\gsas2_powder_a\powder_a_reflections_ttb_p4bm.csv
+```
+
+Read the stage table downwards. Rwp falls from 8.383 to 7.791 to 5.439 per
+cent as the three stages free seven, then ten, then thirteen parameters, and
+the goodness of fit falls from 2.890 to 1.876 with it. The largest single
+gain is the profile stage, which frees U, V and W: the instrument file was
+measured on a standard in Section 3, and this sample's lines are broader than
+the standard's, so until those three are free the calculated pattern has the
+wrong widths everywhere. That is a demonstration of the machinery and not good
+practice, incidentally. Refining the instrument terms against a sample throws
+away the separation Section 3.1 exists to make; the right way to account for
+sample broadening is the size and microstrain of Section 29, which is what the
+commands refine.
+
+The passes column is `max_passes` at work. The first stage settled in two
+passes and the last needed fourteen, which is what freeing three correlated
+width terms at once costs. Had the cap of twenty been reached, the stage would
+have come back `unsettled` rather than `clean`.
+
+The cell comes out at a = 12.4755(6) and c = 3.9322(2) angstrom, against the
+12.4740(3) and 3.9318(1) the Le Bail extraction of Section 8.3 gave and this
+script started from. The two agree in c and differ in a by 0.0015 angstrom,
+five of the extraction's esds, which is the difference between fitting
+intensities freely and calculating them from a structure whose composition is
+not quite the sample's.
+
+The exports are the three files every refinement writes: the observed and
+calculated pattern, the reflection list per phase, and the refined instrument
+parameter file. They are what `plot_rietveld` of Section 15.6 draws from, and
+Section 9.10 lists them as the commands write them.
+
+## 29. pipeline
+
+`xrdkit.pipeline` is `xrdkit lebail` and `xrdkit rietveld`: the four modes,
+the stages each one runs, what each takes from the result of the one before,
+and the run itself. Section 8 is the commands and how to read what they
+report, and this section is the functions they are made of.
+
+The public surface divides in three. Four stage builders turn a project's
+settings into a list of stages, and need no GSAS-II at all. `start_from_result`
+and `StartPoint` read what a previous mode left. `run_mode` and `run_sequence`
+do the run, with `Options` going in and `Outcome` coming out.
+
+`MODES` is the four in order, `lebail`, `fixed_atoms`, `coordinates` and
+`occupancies`. `CYCLES` is 10, the most least squares cycles of one GSAS-II
+refinement; `LE_BAIL_CYCLES` is 10, the extraction-only cycles run whenever a
+stage switches Le Bail extraction on; and `PASS_TOLERANCE` is 0.1, the esds a
+parameter may move between passes and still count as settled, which is the
+`pass_tolerance` of Section 28.4. `START_BROADENING` is where a Le Bail
+refinement starts its size and microstrain and holds them until its own stages
+reach them.
+
+### 29.1 The stage language, and why a stage names only what it adds
+
+The builders give stages in the form Section 28.4 describes, and they rely on
+the driver carrying every flag forward. A stage therefore names only what it
+switches on, and the scale, zero and displacement switches are stated
+explicitly in the first stage of every mode so that the mode does not inherit
+a guess.
+
+That accumulation is what makes rollback work. A stage the driver rejects
+holds what that stage alone refined from then on, so the run continues with
+the parameters of the stages before it and nothing the rejected stage touched.
+Section 8.16 is how a rejected stage is read, and Section 8.8 shows one: the
+`O sites` stage of the coordinates mode.
+
+With two phases or more, the stage that would free the histogram scale frees
+the phase fractions instead and holds the scale, since the two are the same
+quantity counted twice.
+
+### 29.2 The four stage builders
+
+`lebail_stages(background, phases=1, displacement=False, mustrain_test=True)`
+gives five stages: `background and scale`, with extraction on for every phase
+and the zero and displacement held; `zero`, or `displacement` when
+`displacement` is true; `cell`; `size`; and `microstrain`, which
+`mustrain_test` drops. No instrument parameter but the zero and no atomic
+parameter is freed anywhere in it.
+
+`fixed_atoms_stages(background, phases=1, displacement=False, mustrain=False,
+preferred_orientation=None)` gives `scale and background` with extraction off,
+`zero and cell` (or `displacement and cell`), `size` or `size and
+microstrain`, `overall Uiso`, and a `preferred orientation` stage when an
+[h, k, l] axis is given.
+
+`coordinates_stages(plan, background, phases=1, displacement=False,
+mustrain=False)` gives `profile`, then `Uiso groups`, the plan's groups in
+place of one overall Uiso, then one stage per kind of site named `<kind>
+sites`, in the order of the plan's kinds. A kind with nothing to free has no
+stage, and the origin site's coordinate along its axis is held throughout.
+
+`occupancy_stages(plan, background, phases=1, displacement=False,
+mustrain=False)` gives `profile and Uiso` and then one stage per exchange
+group, named `<kind> site occupancies`, trading the occupancies of that
+group's elements between its sites with each element's total held. The
+coordinates are held throughout. It raises `PipelineError` when the plan names
+no phase or an exchange group's sites are of more than one kind.
+
+The last two take a `plan`, the site plan `site_setup` of Section 26.2 gives,
+with the phase name added as `plan["phase"]`.
+
+### 29.3 The stages of the example sample
+
+The script builds all four sequences for the sample and structure of Section
+2.2. It needs no GSAS-II, and it is worth running before a refinement rather
+than after, because it is the cheapest way to see what a mode is going to do.
+
+The plan comes from `site_setup` as Section 26.2 built it, with one change:
+the atoms are read out of a result an earlier refinement wrote rather than
+parsed from the CIF. The driver records every atom at every stage, so a result
+JSON carries its atoms in exactly the form `site_setup` takes, which saves the
+CIF parsing of Section 26.1 whenever a refinement has already been run.
+
+Start a new file named `refine_pipeline.py`.
+
+```python
+import json
+from pathlib import Path
+
+from xrdkit.library import load_entry
+from xrdkit.pipeline import (
+    CYCLES,
+    MODES,
+    PASS_TOLERANCE,
+    coordinates_stages,
+    fixed_atoms_stages,
+    lebail_stages,
+    occupancy_stages,
+)
+from xrdkit.project import find_project, load_project, refine_settings
+from xrdkit.structure import site_setup
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SAMPLE = "powder_a"
+STRUCTURE = "ttb_p4bm"
+ATOMS_FROM = "results/rietveld/powder_a/powder_a_fixed_atoms_result.json"
+
+project = load_project(find_project())
+root = project.root
+sample = project.samples[SAMPLE]
+spec = project.structures[STRUCTURE]
+entry = load_entry(spec.library)
+settings = refine_settings(project, sample)
+background = settings.background
+print(f"modes {MODES}, {CYCLES} cycles, pass tolerance {PASS_TOLERANCE} esds")
+print(f"background {background}, form {sample.form}")
+
+# The plan of Section 26.2, from the atoms an earlier refinement recorded.
+atoms = json.loads(Path(ATOMS_FROM).read_text(encoding="utf-8"))
+atoms = atoms["final"]["phases"][0]["atoms"]
+placed = {site["label"]: site["atoms"] for site in spec.atoms or ()}
+present = {atom["label"] for atom in atoms}
+sites = []
+for site in entry.sites:
+    on_site = {
+        label: element
+        for label, element in (placed.get(site.label) or {site.label: "O"}).items()
+        if label in present
+    }
+    sites.append(
+        {
+            "name": next(iter(on_site)),
+            "label": site.label,
+            "atoms": on_site,
+            "wyckoff": site.wyckoff,
+            "kind": site.kind,
+        }
+    )
+by_label = {site["label"]: site["name"] for site in sites}
+groups = {}
+for site in entry.sites:
+    groups.setdefault(site.uiso_group or site.label, []).append(by_label[site.label])
+plan = site_setup(
+    {
+        "name": STRUCTURE,
+        "library": entry.name,
+        "sites": sites,
+        "free_coordinates": {},
+        "uiso_groups": [
+            {"name": name, "sites": members} for name, members in groups.items()
+        ],
+        "origin": {"site": by_label[entry.origin_site], "axis": "z"},
+        "exchange": {
+            "elements": list(spec.exchange[0]),
+            "sites": [by_label["A1"], by_label["A2"]],
+        },
+    },
+    atoms,
+)
+plan["phase"] = STRUCTURE
+
+displacement = sample.form == "pellet"
+for name, stages in (
+    ("lebail", lebail_stages(background, displacement=displacement)),
+    ("fixed_atoms", fixed_atoms_stages(background, displacement=displacement)),
+    ("coordinates", coordinates_stages(plan, background, displacement=displacement)),
+    ("occupancies", occupancy_stages(plan, background, displacement=displacement)),
+):
+    print(f"{name}: {len(stages)} stages")
+    for stage in stages:
+        switches = ", ".join(key for key in stage if key != "name")
+        print(f"  {stage['name']:22s} {switches}")
+```
+
+It prints the constants, then each mode with its stages and the flags each
+stage switches on.
+
+```text
+modes ('lebail', 'fixed_atoms', 'coordinates', 'occupancies'), 10 cycles, pass tolerance 0.1 esds
+background {'function': 'chebyschev-1', 'terms': 6}, form powder
+lebail: 5 stages
+  background and scale   background, scale, le_bail, zero, displacement
+  zero                   zero, displacement
+  cell                   cell
+  size                   size
+  microstrain            mustrain
+fixed_atoms: 4 stages
+  scale and background   background, scale, le_bail, zero, displacement
+  zero and cell          zero, displacement, cell
+  size                   size
+  overall Uiso           overall_uiso
+coordinates: 5 stages
+  profile                background, scale, le_bail, zero, displacement, cell, size
+  Uiso groups            overall_uiso, uiso_groups
+  A sites                coordinates
+  B sites                coordinates, origin
+  O sites                coordinates
+occupancies: 2 stages
+  profile and Uiso       background, scale, le_bail, zero, displacement, cell, size, overall_uiso, uiso_groups
+  A site occupancies     occupancies
+```
+
+Those stage names are the ones Section 8.3 and Section 8.8 report, in the same
+order, because the commands print what these builders return. Read the flag
+columns across and the accumulation is visible: `background`, `scale` and
+`le_bail` appear in the first stage of the Le Bail mode and again in the first
+stage of every Rietveld mode, because each mode is a fresh GSAS-II project and
+has to state them again, while `cell` appears once in the Le Bail mode and is
+carried by the driver into the three stages after it.
+
+Two details in the Rietveld modes repay attention. The `B sites` stage of the
+coordinates mode carries an `origin` flag that the `A sites` and `O sites`
+stages do not: the origin site is `B1`, and its z is held as soon as that
+kind's coordinates are freed. And the occupancies mode has one exchange stage,
+`A site occupancies`, because the project file's `exchange` names one group,
+strontium and barium, and both sit on A sites.
+
+### 29.4 start_from_result, run_mode and one mode run
+
+`start_from_result(path, stage=None)` reads a result JSON and returns a
+`StartPoint`: each phase as a `PhaseStart` with its name, cell, size,
+microstrain, fraction and atoms; the histogram's `zero`, `displacement`,
+`scale`, `background` and `limits`; the run's `start_model`; and the `stage`
+taken, the last accepted by default. `cell`, `size`, `microstrain` and `atoms`
+are properties reaching the first phase. It raises `PipelineError` when the
+file is missing or not a result, when the stage was not accepted, or when a
+value it needs is not recorded.
+
+`Options` is what a run takes besides the project file: `cell` and `zero` to
+start from, over the project's; `displacement`, whether the specimen
+displacement is refined in place of the zero, by default from the sample's
+form; `mustrain`; `preferred_orientation`; `max_passes`, a cap over the
+project's; and `out`, the folder every file goes to in place of
+`results/lebail/<key>` and `results/rietveld/<key>`.
+
+`out` has to be an absolute path. `mode_paths` takes it as given and the
+GSAS-II driver runs in a working folder of its own, so a relative `out` sends
+the result JSON somewhere neither of them expects and the run fails when the
+driver tries to write it. The docstring does not say so; the script below
+makes its own absolute against the project root and says why in a comment.
+
+`run_mode(project, sample, mode, options=None, reporter=None)` runs one mode
+and returns an `Outcome`: the `mode`, the names of its `accepted` stages, its
+`final` model, its `residuals`, the `undetermined` parameters, the `paths` it
+wrote and the `error` that stopped it, `None` when it finished. `reporter` is
+a callable taking a line of text, which is how the commands print their
+progress. It raises `PipelineError` when an input is missing or a run leaves
+no usable model, and `Gsas2Error` when GSAS-II itself failed; either carries
+the run's `result` and `log`.
+
+`run_sequence(project, sample, modes, options=None, reporter=None)` runs
+several modes in order, each from the one before, stopping at the first that
+fails and writing that mode a `failure.md` from the error and the stages its
+own run got through, then a `summary.md` over the modes run. That is
+`xrdkit rietveld` entire, and Section 8.8 is the run of it on this sample;
+this guide does not call it, because it would write over the results Part I
+recorded.
+
+The block below runs one mode instead: `fixed_atoms` on `powder_a`, starting
+from the Le Bail result of Section 8.3, with everything written to
+`results/library/pipeline_powder_a`. A mode looks for the previous mode's
+result in its own output folder, so the Le Bail result is copied there first;
+that copy is the only reason the block touches `results/lebail` at all, and it
+reads it rather than writing to it.
+
+Continues `refine_pipeline.py`. Add these lines at the end of the file.
+
+```python
+import shutil
+
+from xrdkit.pipeline import Options, mode_paths, run_mode, start_from_result
+
+LEBAIL_RESULT = "results/lebail/powder_a/powder_a_lebail_result.json"
+# Options.out must be absolute: the GSAS-II driver runs in a working folder
+# of its own, so a relative path would be written there instead.
+OUT = root / "results/library/pipeline_powder_a"
+
+start = start_from_result(LEBAIL_RESULT)
+print(f"start_from_result: stage {start.stage!r}, zero {start.zero:.4f} degrees")
+print(f"  cell a {start.cell['a']:.4f}, c {start.cell['c']:.4f} angstrom")
+print(f"  size {start.size:.4f} micron, microstrain {start.microstrain:.0f}")
+print(f"  scale {start.scale:.4f}, limits {start.limits}")
+print(f"  background {start.background['function']}, {start.background['terms']} terms")
+
+options = Options(out=OUT)
+paths = mode_paths(project, sample, "fixed_atoms", options)
+before = mode_paths(project, sample, "lebail", options)["result"]
+before.parent.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(LEBAIL_RESULT, before)
+print(f"the mode starts from {before.relative_to(root)}")
+
+outcome = run_mode(project, sample, "fixed_atoms", options, reporter=print)
+print(f"mode {outcome.mode}, error {outcome.error}")
+print(f"accepted {outcome.accepted}")
+print(
+    f"Rwp {outcome.residuals['rwp']:.3f} per cent,"
+    f" reduced chi squared {outcome.residuals['reduced_chi_squared']:.3f}"
+)
+result = json.loads(paths["result"].read_text(encoding="utf-8"))
+print("  stage                 passes  status")
+for stage in result["stages"]:
+    print(f"  {stage['name']:22s} {len(stage['passes']):6d}  {stage['status']}")
+cell = outcome.final["phases"][0]["cell"]
+print(f"a = {cell['length_a']:.4f}, c = {cell['length_c']:.4f} angstrom")
+```
+
+It prints the start point, the run as the reporter hears it, and what the mode
+came to.
+
+```text
+start_from_result: stage 'microstrain', zero -0.0357 degrees
+  cell a 12.4740, c 3.9318 angstrom
+  size 0.2051 micron, microstrain 1011
+  scale 0.0004, limits (17.0, 99.98)
+  background chebyschev-1, 6 terms
+the mode starts from results\library\pipeline_powder_a\powder_a_lebail_result.json
+powder_a: fixed_atoms started, 4 stages, at most 60 passes each
+powder_a: fixed_atoms: scale and background clean
+powder_a: fixed_atoms: zero and cell clean
+powder_a: fixed_atoms: size clean
+powder_a: fixed_atoms: overall Uiso clean
+mode fixed_atoms, error None
+accepted ['scale and background', 'zero and cell', 'size', 'overall Uiso']
+Rwp 4.290 per cent, reduced chi squared 2.190
+  stage                 passes  status
+  scale and background        2  clean
+  zero and cell               3  clean
+  size                        2  clean
+  overall Uiso                2  clean
+a = 12.4735, c = 3.9318 angstrom
+```
+
+The run took about twenty seconds and reproduces the fixed atoms line of
+Section 8.8 exactly: four stages accepted, in two, three, two and two passes,
+an Rwp of 4.290 per cent and a reduced chi squared of 2.190. It has to, since
+`xrdkit rietveld` calls this function with these arguments; what changes is
+only where the files land.
+
+The start point is worth reading beside the run. `start_from_result` with no
+stage named gives the last accepted stage, `microstrain`, and the cell, size
+and microstrain that stage left. `run_mode` does not take that one: its
+docstring says the fixed atoms mode starts from the Le Bail result's `size`
+stage, because the microstrain stage of a Le Bail run is a test rather than a
+measurement, as Section 8.3 explains. Naming a stage is therefore not an
+unusual thing to do, and the default is not always the right start.
+
+The zero of minus 0.0357 degrees, the cell of 12.4740 and 3.9318 angstrom and
+the limits of 17 to 99.98 all came out of the Le Bail result rather than the
+project file. That is the chain Section 8.9 describes: each mode is a separate
+GSAS-II project, and the only thing joining them is the result JSON.
+
+### 29.5 Reading a project's refinements back
+
+The last block does no refining at all. It walks the two results folders,
+reads every result JSON that belongs to a sample of the project, and prints
+one line per sample and mode. This is the shape of a script that tabulates a
+composition series: the refinements are run once by the commands, and
+everything afterwards is reading files.
+
+Continues `refine_pipeline.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.gsas2 import accepted_stages
+
+FOLDERS = ("results/lebail", "results/rietveld")
+
+found_results = []
+for folder in FOLDERS:
+    for found in Path(folder).glob("*/*_result.json"):
+        key = found.parent.name
+        if key not in project.samples:
+            print(f"  {found.parent} is not a sample of the project, skipped")
+            continue
+        mode = found.name[len(f"{key}_") : -len("_result.json")]
+        found_results.append((key, MODES.index(mode), mode, found))
+
+print("  sample    mode          stages  Rwp    chi2   a         c")
+for key, _, mode, found in sorted(found_results):
+    record = json.loads(found.read_text(encoding="utf-8"))
+    kept = accepted_stages(record)
+    last = kept[-1]
+    cell = record["final"]["phases"][0]["cell"]
+    print(
+        f"  {key:9s} {mode:13s} {len(kept):5d}  {last['rwp']:5.3f}"
+        f"  {last['gof'] ** 2:5.3f}  {cell['length_a']:.4f}"
+        f"  {cell['length_c']:.4f}"
+    )
+```
+
+It prints one line per result found.
+
+```text
+  results\lebail\powder_a_full is not a sample of the project, skipped
+  sample    mode          stages  Rwp    chi2   a         c
+  powder_a  lebail            5  3.888  1.799  12.4740  3.9318
+  powder_a  fixed_atoms       4  4.290  2.190  12.4735  3.9318
+  powder_a  coordinates       4  4.158  2.062  12.4734  3.9318
+  powder_a  occupancies       2  4.088  1.990  12.4736  3.9319
+```
+
+Four results for one sample, in mode order, and the numbers are those of
+Sections 8.3 and 8.8. Rwp rises from the Le Bail extraction's 3.888 to the
+fixed atoms mode's 4.290 and then falls through 4.158 to 4.088, which is the
+shape to expect: an extraction has an intensity free for every reflection and
+should always fit better than a structure, so the step from 3.888 to 4.290 is
+the cost of calculating the intensities instead, and the fall after it is the
+structure being improved.
+
+The skipped folder is the other half of the lesson.
+`results/lebail/powder_a_full` is the run of Section 8.4 over the whole scan,
+made with `--out`, and its name
+is not a sample key, so the loop passes over it rather than reporting a sample
+that does not exist. A results folder accrues runs that are not the current
+ones, and a script reading them back has to say which it is using.
+
+`accepted_stages` from Section 28.5 is what counts the stages, so a mode with
+a rejected stage shows fewer here than its builder produced: the coordinates
+mode shows four of the five stages Section 29.3 built, the `O sites` stage
+having been rolled back, which Section 8.8 reports and Section 8.16 reads.
