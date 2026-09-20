@@ -5,12 +5,17 @@ workflows in [USER_GUIDE.md](USER_GUIDE.md) can be run. It assumes no previous
 experience of Python and no previous experience of the command line. Everything
 below is either a thing to click or a line to type.
 
+Nothing here asks you to write any code. xrdkit is a set of commands typed into
+a terminal, and what is installed is Python, the package itself, and GSAS-II
+for the three commands that need it. There is no editor to set up and no script
+to keep.
+
 Part A covers Windows 11 and Part B covers macOS. Do one of them, not both.
 Part C is the same on either system, and where a command differs the Windows
 form and the macOS form are given side by side.
 
 Allow about half an hour for the whole of Parts A to C, and longer if GSAS-II
-is needed, which is Step 7 and is optional.
+is needed, which is Step 6 and is optional.
 
 1. [Part A: Windows 11](#part-a-windows-11)
 2. [Part B: macOS](#part-b-macos)
@@ -80,43 +85,27 @@ To close the terminal, type `exit` or close the window.
 
 ### Step A3. Create the project folder
 
-Everything to do with one project lives in one folder, and the workflows in the
-user guide are written on the assumption that they are run from it. Create it
-under your user folder. In PowerShell, type the following lines one at a time,
-pressing Enter after each.
+Everything to do with one project lives in one folder, and every command in the
+user guide is run from it. Create it under your user folder. In PowerShell,
+type the following lines one at a time, pressing Enter after each.
 
 ```
 cd C:\Users\<name>
 mkdir xrd
 cd xrd
-mkdir data\raw, data\standards, cifs, config, results, figures
+mkdir data\standards, figures
 ```
 
 Replace `<name>` with your own Windows user name, which is the name that
 already appeared in the prompt in Step A2. The project folder can be called
 something other than `xrd` and can live somewhere other than the user folder,
 but it should not be inside OneDrive, because the synchronisation can move
-files while a script is writing them.
+files while a command is writing them.
 
-The result is the layout that Section 3 of the user guide describes.
-
-```
-C:\Users\<name>\xrd\
-    data\raw\          scans as the instrument wrote them, never edited
-    data\standards\    LaB6 and silicon scans, and the instrument parameter files
-    cifs\              one CIF per phase, with a note of its source
-    config\            the TOML settings the Rietveld workflow reads
-    results\           peak lists, indexing tables, refinement projects and exports
-    figures\           the png and pdf files the plotting routines write
-```
-
-Check it with `ls`, which should list the six folders just made.
-
-Three of those folders, `data/raw`, `cifs` and `results`, are also made by
-`xrdkit init`, which writes the project file `xrdkit.toml` beside them; run it
-in this folder once Step A4 has installed the kit, if a project file is
-wanted. `figures` is made by the figure writer the first time a script saves
-one, so it need not exist in advance.
+Those two are the folders the commands use without making them first:
+`data\standards` for the scan of a standard and the instrument parameter file
+made from it, and `figures` for the png and pdf files the plotting commands
+write. The rest of the layout is made in Step 5 by `xrdkit init`.
 
 ### Step A4. Install xrdkit
 
@@ -133,11 +122,12 @@ the folder the terminal happens to be in, so it does not matter which folder
 this is run from, and it is done once for the whole computer rather than once
 for each project.
 
-Phase matching against the Crystallography Open Database needs one further
-library, pymatgen, which comes with the optional extra named phases. It is a
-large download, and it is what Workflow 2 of the user guide needs; install it
-now if the phases are to be identified, and skip it otherwise. To install it,
-type:
+One command needs more than that. `xrdkit phases`, which identifies the phases
+of a pattern against the Crystallography Open Database, needs the library
+pymatgen, which comes with the optional extra named phases. It is a large
+download; install it now if the phases are to be identified, and skip it
+otherwise. That command also needs the network while it runs, because the
+database is searched rather than shipped. To install the extra, type:
 
 ```
 py -m pip install "xrdkit[phases]"
@@ -180,8 +170,8 @@ work through the installer.
    is Python 3.x inside Applications. Double click the file in it named Install
    Certificates.command, let the small terminal window that appears finish, and
    close it. This sets up the certificates Python uses for secure downloads,
-   which the phase matching routines need in order to reach the Crystallography
-   Open Database.
+   which `xrdkit phases` needs in order to reach the Crystallography Open
+   Database.
 
 Now confirm the installation. Open Terminal, which Step B2 explains how to
 find, then type the following and press Return.
@@ -230,41 +220,25 @@ To close the terminal, type `exit` or close the window.
 
 ### Step B3. Create the project folder
 
-Everything to do with one project lives in one folder, and the workflows in the
-user guide are written on the assumption that they are run from it. Create it
-in your home folder. In Terminal, type the following lines one at a time,
-pressing Return after each.
+Everything to do with one project lives in one folder, and every command in the
+user guide is run from it. Create it in your home folder. In Terminal, type the
+following lines one at a time, pressing Return after each.
 
 ```
 cd ~
 mkdir xrd
 cd xrd
-mkdir -p data/raw data/standards cifs config results figures
+mkdir -p data/standards figures
 ```
 
 The project folder can be called something other than `xrd` and can live
 somewhere other than the home folder, but it should not be inside iCloud Drive,
-because the synchronisation can move files while a script is writing them.
+because the synchronisation can move files while a command is writing them.
 
-The result is the layout that Section 3 of the user guide describes.
-
-```
-/Users/<name>/xrd/
-    data/raw/          scans as the instrument wrote them, never edited
-    data/standards/    LaB6 and silicon scans, and the instrument parameter files
-    cifs/              one CIF per phase, with a note of its source
-    config/            the TOML settings the Rietveld workflow reads
-    results/           peak lists, indexing tables, refinement projects and exports
-    figures/           the png and pdf files the plotting routines write
-```
-
-Check it with `ls`, which should list the six folders just made.
-
-Three of those folders, `data/raw`, `cifs` and `results`, are also made by
-`xrdkit init`, which writes the project file `xrdkit.toml` beside them; run it
-in this folder once Step B4 has installed the kit, if a project file is
-wanted. `figures` is made by the figure writer the first time a script saves
-one, so it need not exist in advance.
+Those two are the folders the commands use without making them first:
+`data/standards` for the scan of a standard and the instrument parameter file
+made from it, and `figures` for the png and pdf files the plotting commands
+write. The rest of the layout is made in Step 5 by `xrdkit init`.
 
 ### Step B4. Install xrdkit
 
@@ -281,11 +255,12 @@ the folder the terminal happens to be in, so it does not matter which folder
 this is run from, and it is done once for the whole computer rather than once
 for each project.
 
-Phase matching against the Crystallography Open Database needs one further
-library, pymatgen, which comes with the optional extra named phases. It is a
-large download, and it is what Workflow 2 of the user guide needs; install it
-now if the phases are to be identified, and skip it otherwise. To install it,
-type:
+One command needs more than that. `xrdkit phases`, which identifies the phases
+of a pattern against the Crystallography Open Database, needs the library
+pymatgen, which comes with the optional extra named phases. It is a large
+download; install it now if the phases are to be identified, and skip it
+otherwise. That command also needs the network while it runs, because the
+database is searched rather than shipped. To install the extra, type:
 
 ```
 python3 -m pip install "xrdkit[phases]"
@@ -313,110 +288,57 @@ Part B is finished. Continue at Part C.
 
 From here the two systems differ in only two ways. Python is started with `py`
 on Windows and `python3` on macOS, and the terminal is PowerShell on Windows
-and Terminal on macOS. Both forms are given wherever it matters. The steps of
-the two parts above are numbered A1 to A4 and B1 to B4, and a reference below
-to Step 3 or Step 4 means the one in whichever part was followed.
+and Terminal on macOS. The `xrdkit` command itself is typed the same way on
+both. The steps of the two parts above are numbered A1 to A4 and B1 to B4, and
+a reference below to Step 3 or Step 4 means the one in whichever part was
+followed.
 
-### Step 5. Install an editor
+### Step 5. Start the project
 
-An editor is where the scripts are written. Visual Studio Code is recommended
-but is not required, and anything that saves plain text will do: Notepad on
-Windows, or TextEdit on macOS with Format set to Make Plain Text. A word
-processor such as Word will not do, because it saves formatting along with the
-words and Python cannot read the result.
+Everything from here is typed in the terminal, in the project folder made in
+Step 3, which is reached with `cd C:\Users\<name>\xrd` on Windows or `cd ~/xrd`
+on macOS. One command starts a project.
 
-Visual Studio Code is free. Download it from <https://code.visualstudio.com>,
-which offers the right version for the system it is visited from.
+```
+xrdkit init --name xrd
+```
 
-On Windows, run the installer that was downloaded, accept the licence, and
-click Next through to Install. On the screen offering additional tasks, leaving
-every box at its default is fine.
+It prints the one file it wrote, which on Windows is:
 
-On macOS, open the file that was downloaded, which unpacks to an application
-named Visual Studio Code, and drag that application into the Applications
-folder. Open it from there.
+```
+C:\Users\<name>\xrd\xrdkit.toml
+```
 
-Then add the Python extension, which colours the code, points out mistakes as
-they are typed, and offers a button that runs the open file.
+`--name` is the project name recorded in the file and defaults to the name of
+the folder, so it can be left out. An existing `xrdkit.toml` is never
+overwritten, so running the command twice is safe.
 
-1. Open Visual Studio Code.
-2. Click the Extensions icon in the bar down the left side, which is the one
-   made of four small squares. The keyboard equivalent is Ctrl and Shift and X
-   together on Windows, or Command and Shift and X together on macOS.
-3. Type Python into the search box.
-4. Install the extension named Python that is published by Microsoft, which is
-   normally the first result.
+Besides the file, `init` makes three folders if they are missing, and with the
+two made by hand in Step 3 the layout is this.
 
-To open the project folder in the editor, choose File, then Open Folder on
-Windows or Open on macOS, and select the `xrd` folder made in Step 3 of Part A
-or Part B.
+```
+xrd\
+    cifs\              one CIF per phase, with a note of its source
+    data\raw\          scans as the instrument wrote them, never edited
+    data\standards\    the standard scan and the instrument parameter file
+    figures\           the png and pdf files the plotting commands write
+    results\           peak lists, refinement projects and exports
+    xrdkit.toml        the project file
+```
 
-### Step 6. Running the scripts in the user guide
+Check it with `ls`. Section 2.1 of the user guide is the same command in full,
+and Section 2.2 goes through `xrdkit.toml` table by table: the instrument, the
+structures and the samples are filled in there, and every command after this
+one can then take a sample key in place of a file name.
 
-There is no menu and no dialogue to click through in
-[USER_GUIDE.md](USER_GUIDE.md): the way to follow it is to put the lines of a
-code block into a file, save the file, and run it. Section 2 and each of the
-four workflows begin with a part headed Start here: the complete script, which
-gives the whole of a script in one block under the name to save it as, so one
-copy is all it takes. Section 8 is the known limitations and has no script of
-its own; its 8.1 is prose, and points to Section 3.1 for the formats the reader
-accepts. The procedure is the same every time.
+### Step 6. GSAS-II, if it is needed
 
-1. In the editor, make a new file and paste the block into it.
-2. Save it in the project folder made in Step 3, under the name the guide gives
-   for it, such as `plot_pattern.py`. A name of your own works as well, as long
-   as it ends in `.py` and is not `xrdkit.py`, because a file of that name
-   would be found instead of the library.
-3. In the terminal, change to the project folder, which is
-   `cd C:\Users\<name>\xrd` on Windows or `cd ~/xrd` on macOS.
-4. Run it, with `py plot_pattern.py` on Windows or `python3 plot_pattern.py` on
-   macOS.
-
-The kit is also a command. `xrdkit check`, `plot`, `stack`, `density`,
-`lattice`, `lebail` and `rietveld` do the same work from the terminal, each
-taking a scan file or the key of a sample recorded in `xrdkit.toml`, and
-`xrdkit COMMAND --help` describes one in full. The scripts and the commands
-reach the same results; the guide is written as scripts because a script is
-easier to change and to keep.
-
-Four things follow from running a script that way.
-
-Anything the script prints appears in the terminal, underneath the command,
-which is where the printed output shown in the user guide comes from.
-
-Anything the script writes, such as a figure or a CSV file, appears in the
-project folder, in the sub folder the path names. Figures are not displayed in
-a window; they are saved as files, and `save_figure` writes a png and a pdf of
-each by default.
-
-Every path in the code blocks, such as `data/raw/10s.xrdml` or
-`figures/pattern_10`, is relative to the folder the terminal is working in when
-the script is run. Running from anywhere else gives an error saying the file
-was not found. If that happens, check with `pwd` that the terminal really is in
-the project folder. Forward slashes in a path work on Windows as well as on
-macOS, which is why the guide uses them throughout.
-
-Every script begins with its settings, under the comment `Edit these lines for
-each new sample. Nothing below needs changing.` Those two or three lines name
-the scan, the label for the figure and the stem the output files are named
-from, and they are the lines to change for a sample of your own. Change them by
-hand rather than with Replace All: the same numbers appear further down the
-script as two theta ranges and intensity thresholds, and replacing those
-changes the analysis without saying so.
-
-The blocks that come after the complete script are the same script taken in
-pieces, and a piece part way through depends on the pieces before it, which is
-where its `scan` or its `peaks` came from. Copy the complete script instead, or
-put the pieces of a section into one file in the order they appear; a piece run
-on its own will stop at a name it has never heard of.
-
-### Step 7. GSAS-II, if it is needed
-
-GSAS-II is needed for two things only: Workflow 4, which is Rietveld
-refinement, and Route B of Workflow 3, which extracts the lattice parameters
-from a Le Bail fit. Workflows 1 and 2 and Route A of Workflow 3 do not use it,
-and neither does anything else in the kit. Skip this step until one of those
-two is actually wanted.
+GSAS-II is needed by three commands and by nothing else: `xrdkit instrument`,
+which makes the instrument parameter file; `xrdkit lebail`, which extracts a
+cell by Le Bail fitting; and `xrdkit rietveld`, which is the full Rietveld
+refinement. Sections 3 and 8 of the user guide are those commands. Everything
+else in the kit works without it, so skip this step until one of the three is
+actually wanted.
 
 GSAS-II is not a Python library and cannot be installed with pip. It brings its
 own Python with it, and xrdkit runs its refinement jobs under that Python
@@ -460,23 +382,12 @@ export XRDKIT_GSAS2_HOME=/path/to/gsas2/GSAS-II
 and for every window from now on, by adding those two lines to the file
 `~/.zshrc`, which the shell reads when it starts.
 
-Either way, check what the kit resolves to before going any further. Save this
-as `check_gsas2.py` and run it as Step 6 describes.
+There is nothing separate to run to check this. Each of the three commands
+looks GSAS-II up before it does anything else, and one that cannot find it
+stops with a single line naming what was missing and both variables, having
+written nothing.
 
-```python
-from xrdkit import find_gsas2
-
-install = find_gsas2()
-print(f"GSAS-II Python: {install.python}")
-print(f"GSAS-II home:   {install.home}")
-```
-
-It prints the two paths it found, as in the example in Section 6.3 of the user
-guide. If instead it raises `FileNotFoundError`, the message names what was
-missing and both variables, and nothing in Workflow 4 will run until it is
-resolved.
-
-### Step 8. Copying a scan from the diffractometer
+### Step 7. Copying a scan from the diffractometer
 
 The diffractometer writes the scan to a file. The reader accepts `.xrdml` and
 the two and three column text patterns `.xy` and `.xye`: most diffractometer
@@ -485,70 +396,93 @@ that writes `.xy` will do. Copy the file, by USB stick or over the network
 share the instrument writes to, into the `data/raw` folder of the project. A
 `.xy` or `.xye` carries no wavelength, so it is given on the command line with
 `--wavelength`, or by the instrument table of the project file when the scan is
-named as a sample.
+named as a sample. Section 2.3 of the user guide is the formats and that
+wavelength rule in full.
 
 Copy it rather than moving it, and do not open it in anything that might write
 it back. The raw file is the record of what the instrument measured, the kit
-never writes into it, and every result can be produced again from it. Section 1
-of the user guide says what the kit does and does not touch.
+never writes into it, and every result can be produced again from it. Section 9
+of the user guide lists what each command writes and where.
 
 Two points of practice save trouble later. Give the file a name you will
 recognise, such as the sample identifier, and note the original instrument file
 name alongside it, in a notebook or in a table of your own. Keep the standard
-scans apart from the samples: a LaB6 or silicon scan measured on the same
-instrument with the same optics belongs in `data/standards`, not in `data/raw`,
-because it describes the instrument rather than a sample. Workflow 3 and
-Workflow 4 both need one.
+scans apart from the samples: a lanthanum hexaboride or silicon scan measured
+on the same instrument with the same optics belongs in `data/standards`, not in
+`data/raw`, because it describes the diffractometer rather than a sample.
+`xrdkit instrument` is what turns it into the instrument parameter file that
+`xrdkit lebail` and `xrdkit rietveld` both need.
 
 Check that the file arrived, with `ls data/raw` on either system.
 
-### Step 9. Check that everything works
+### Step 8. Check that everything works
 
-This plots one scan, which exercises the reader, the plotting style and the
-figure writer in one go. Put a scan of your own in `data/raw` first, as Step 8
-describes.
+Two commands exercise the reader, the quality criteria, the plotting style and
+the figure writer in one go. Put a scan of your own in `data/raw` first, as
+Step 7 describes, and use its name in place of `powder_a.xrdml` below.
 
-Save the following as `check.py` in the project folder, changing
-`data/raw/10s.xrdml` to the name of the file that was copied there.
-
-```python
-from xrdkit import apply_style, plot_pattern, read_xrdml, save_figure
-
-apply_style()
-scan = read_xrdml("data/raw/10s.xrdml")
-print(f"{scan.sample_id}: {len(scan.two_theta)} points, wavelength {scan.wavelength} A")
-
-fig, ax = plot_pattern(scan, scale="sqrt")
-paths = save_figure(fig, "figures/check")
-print("wrote", ", ".join(str(path) for path in paths))
-```
-
-Run it with `py check.py` on Windows or `python3 check.py` on macOS, from the
-project folder. The output names the sample the file carries, the number of
-points in the scan and the wavelength it was measured at, then the files
-written. On Windows it looks like this:
+The first reports what the scan is and whether it is good enough for each
+workflow.
 
 ```
-10s: 4141 points, wavelength 1.540598 A
-wrote figures\check.png, figures\check.pdf
+xrdkit check data/raw/powder_a.xrdml
 ```
 
-On macOS the two paths are written with forward slashes instead. Open
-`figures/check.png` and you should see the diffraction pattern, on a square
-root intensity scale, with two theta along the bottom.
+It prints the numbers it measured, then a verdict per workflow.
+
+```
+range   10.01 to 99.98 degrees
+step    0.0217 degrees
+points  4141
+time    34.2 s per step
+maximum 10032 counts
+median  1079 counts
+peak over median 9
+high angle maximum 1505 counts, from 69.99 degrees
+high angle median  1008 counts
+
+plotting: suitable
+phase_identification: not suitable (peak over median 9.3, below 20, weak phases may not be visible)
+le_bail: not suitable (range 10.01 to 99.98 degrees, short of 10 to 120; high angle peak over median 1.5, below 10)
+rietveld: not suitable (range 10.01 to 99.98 degrees, short of 5 to 130; step 0.0217 degrees, outside 0.01 to 0.02; strongest peak 10032 counts, below 20000)
+```
+
+Your numbers will be your own, and so will the verdicts. Not suitable is not a
+failure of the installation: it is the command saying what that scan will and
+will not support, and Section 4.2 of the user guide is the table of criteria
+behind every line of it.
+
+The second draws the pattern.
+
+```
+xrdkit plot data/raw/powder_a.xrdml --scale sqrt
+```
+
+It prints the files it wrote, which on Windows are:
+
+```
+results\peaks_powder_a.csv
+figures\pattern_powder_a.png
+figures\pattern_powder_a.pdf
+```
+
+On macOS the same paths are written with forward slashes. Open
+`figures/pattern_powder_a.png` and you should see the diffraction pattern, on a
+square root intensity scale, with two theta along the bottom.
 
 If that worked, the installation is sound and everything in the user guide will
-run. Three things go wrong at this point more often than anything else. A
-`ModuleNotFoundError` naming xrdkit means Step 4 of Part A or Part B did not
-finish, or was run under a different Python from the one running the script. A `FileNotFoundError`
-means the terminal is not in the project folder, or the scan is not in
-`data/raw` under the name the script uses. An error from the reader means the
-file is not one of the formats it accepts; Section 3.1 of the user guide lists
-them and says how to supply the wavelength a text pattern leaves out.
+run. Three things go wrong at this point more often than anything else. A reply
+that the term xrdkit is not recognised means Step 4 of Part A or Part B did not
+finish, or finished into a different Python from the one the terminal finds. A
+message that the file does not exist means the terminal is not in the project
+folder, or the scan is not in `data/raw` under the name that was typed. An
+error from the reader means the file is not one of the formats it accepts;
+Section 2.3 of the user guide lists them and says how to supply the wavelength
+a text pattern leaves out.
 
-### Step 10. VESTA, if structures are to be looked at
+### Step 9. VESTA, if structures are to be looked at
 
-VESTA draws crystal structures. Nothing in the kit calls it and no workflow
+VESTA draws crystal structures. Nothing in the kit calls it and no command
 needs it, but it is the quickest way to see what a file actually holds. A CIF
 downloaded from the Crystallography Open Database opens in it in a second,
 which is how to tell at a glance that the entry is the phase it was taken for
@@ -562,28 +496,25 @@ for macOS. The download page is
 
 ### Where to go next
 
-Steps 8 and 9 come first, and neither can be skipped. Section 2 of the user
-guide reads a scan of your own and prints what it is, so the scan has to be in
-`data/raw` under a name you know, which is Step 8, and the check in Step 9 has
-to have run, before Section 2 can be followed at all.
+Steps 5, 7 and 8 come first, and none of them can be skipped. The project file
+has to exist, the scan has to be in `data/raw` under a name you know, and the
+two commands of Step 8 have to have run, before the user guide can be followed
+at all.
 
-Read Section 2 of [USER_GUIDE.md](USER_GUIDE.md) first, which says in numbers
-what a scan has to be for each of the four workflows, and how to check a scan
-against it. Then take Workflow 1, in Section 4, which plots a pattern and
-labels its reflections and needs nothing beyond what was installed above.
-Workflow 2, in Section 5, names the phases the pattern is made of, and needs
-the phases extra of Step 4 of Part A or Part B, and an internet connection.
-Workflow 3, in Section 6, refines the lattice parameters and calculates a
-theoretical density. Workflow 4, in Section 7, is the full Rietveld refinement,
-and needs GSAS-II from Step 7.
+Then read [USER_GUIDE.md](USER_GUIDE.md). Part I, Sections 1 to 10, is the
+whole kit as commands, in the order a project runs them: `init` and the project
+file in Section 2, `instrument` and `add-sample` in Section 3, `check` in
+Section 4, `plot` and `stack` in Section 5, `phases` in Section 6, `lattice`
+and `density` in Section 7, and `lebail` and `rietveld` in Section 8. Section 9
+is what each command writes and where, and Section 10 is the known limitations,
+which is worth reading before relying on a result. Part II, Sections 11 to 31,
+is the library reference, for anyone who would rather call the same functions
+from code of their own than type the commands.
 
-#### Reusing the scripts
+#### Doing it again for the next sample
 
-None of it has to be written twice. Once a workflow has been saved as a script
-and has run on one scan, the next dataset needs no new code at all: open the
-script, change the settings lines at the top of it, which are the scan file,
-the sample label and the stem the figures and results files are named from, and
-run the script again. Nothing below those lines is touched, because every
-output path is built from the stem. That is the whole of the work for each
-further sample, and it is why the guide is written as scripts rather than as
-commands typed one at a time.
+None of it has to be set up twice. Once the project file names the instrument
+and the structures, the next dataset is one copy into `data/raw` and one
+`xrdkit add-sample`, after which every command takes the new sample key and
+writes its results under that key. Nothing is edited but the project file, and
+nothing is repeated but the commands themselves.

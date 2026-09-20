@@ -20,7 +20,7 @@ pip install xrdkit
 ```
 
 Phase matching against the COD needs pymatgen, which comes with the `phases`
-extra. It is what Workflow 2 of [docs/USER_GUIDE.md](https://github.com/amirkhesro/xrdkit/blob/main/docs/USER_GUIDE.md) uses
+extra. It is what Section 6 of [docs/USER_GUIDE.md](https://github.com/amirkhesro/xrdkit/blob/main/docs/USER_GUIDE.md) uses
 to identify the phases in a pattern:
 
 ```bash
