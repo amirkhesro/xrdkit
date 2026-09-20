@@ -1631,7 +1631,10 @@ leaves the function alone.
 | `unsettled` | `accept` for every mode | whether a stage still moving after those passes is kept or rolled back |
 | `followed` | none | reflections to follow from mode to mode, as `[h, k, l]` triples |
 
-`two_theta` is the key worth setting per sample, and Section 8.4 shows why.
+`two_theta` is the key worth setting per sample, and Section 8.4 shows why. It
+is also the one key both commands can override for a single run, with
+`--two-theta MIN MAX`; the table is what a sample keeps, the option is for
+trying another range against it.
 `background` should be as few terms as will follow the background and no more,
 since a flexible polynomial will absorb intensity that belongs to the peaks.
 `max_passes` and `unsettled` are about how hard the refinement tries and what
@@ -1704,11 +1707,13 @@ The next section shows what the same sample gives when that is not true.
 ### 8.4 The same sample over the whole scan
 
 The range for `powder_a` is set to 17 to 99.98 degrees by the per sample table
-of Section 2.2, rather than the scan's own 10.01 to 99.98. Comment that table
-out and the extraction runs over everything measured.
+of Section 2.2, rather than the scan's own 10.01 to 99.98. `--two-theta MIN
+MAX` overrides that table for one run without editing the project file, and a
+range wider than the scan is clipped to it, so 10 to 100 asks for everything
+measured.
 
 ```console
-xrdkit lebail powder_a --out results/lebail/powder_a_full
+xrdkit lebail powder_a --two-theta 10 100 --out results/lebail/powder_a_full
 ```
 
 It writes the same nine files, to the folder `--out` names. The stage lines
@@ -1754,7 +1759,9 @@ negative to narrow them, after which the size and the microstrain correlate
 strongly and neither is worth reading. Starting the range above those
 reflections removes the correlation, which is why a sample whose low angle
 reflections are absent or very weak is given a range of its own rather than
-the scan's.
+the scan's. That belongs in the sample's refine table, where it is recorded
+and applies to every run; `--two-theta` is for trying another range against
+it, as here, and for the run that wants the whole scan once.
 
 Notice what did not change. The cell is the same to the fourth decimal place
 and the zero to the fourth, so nothing in the numbers you were after says that
@@ -1860,6 +1867,18 @@ against.
 instrument's. `--displacement` refines the specimen displacement with the zero
 held, which is what a pellet does in any case, and is the flag for a powder
 you have reason to think sits proud of the holder.
+
+`--two-theta MIN MAX` refines over that range in degrees instead of the
+`two_theta` of the refine table, for this run alone. It is clipped to the scan
+the same way the table is, so a range wider than the scan at either end fits
+the whole scan, which is how Section 8.4 asks for everything measured from a
+sample whose table narrows it. The command refuses `MIN` not below `MAX`, and
+a range that does not reach the scan at all, before it writes anything:
+
+```text
+xrdkit lebail: --two-theta takes MIN MAX with MIN below MAX, not 60 20
+xrdkit lebail: --two-theta 100 140 lies outside the scan's 10.01 to 99.98 degrees
+```
 
 `--out` sends every file to a folder of your choosing rather than to
 `results/lebail/KEY`, which is how Section 8.4 keeps two runs of one sample
@@ -2051,6 +2070,14 @@ orientation has not yet been exercised on a real refinement. The stage is
 built and its flags are checked, but no measured scan has been carried through
 it, so check any result it gives against a scan of the same sample loaded to
 limit texture before relying on it.
+
+`--two-theta MIN MAX` refines over that range in degrees instead of the
+`two_theta` of the refine table, exactly as it does for `xrdkit lebail`: it is
+clipped to the scan, `MIN` must be below `MAX`, and a range that does not
+reach the scan is refused before anything is written. Every mode of the one
+call takes the range given, rather than carrying the range of the result it
+starts from, so a Rietveld run made with it does not have to match the Le Bail
+run that preceded it.
 
 `--out DIR` writes every file into that folder itself, not under a `results`
 folder inside it, so a Rietveld run given the same `--out` as the Le Bail run
@@ -2441,7 +2468,7 @@ refused without `--overwrite`.
 
 ## 10. Known limitations
 
-Eleven things the kit does not do yet, or does in a way worth knowing about
+Ten things the kit does not do yet, or does in a way worth knowing about
 before you rely on it. Each says what the limitation is, when you meet it and
 what to do meanwhile.
 
@@ -2533,15 +2560,7 @@ more than the matching tolerance, and the ranking is then meaningless unless
 `--zero` is given, which is why Section 6 takes the offset from the plot run
 of Section 5.
 
-### 10.10 The refined range comes only from the project file
-
-`xrdkit lebail` and `xrdkit rietveld` take the two theta range from the
-`[refine]` table or a sample's own, and there is no command line option for
-it. Trying a different range means editing the project file, as Section 8.4
-does, which is awkward when comparing two ranges on one sample. Use `--out` to
-keep the two runs apart while you do it.
-
-### 10.11 A text pattern carries no counting time
+### 10.10 A text pattern carries no counting time
 
 A two or three column `.xy` or `.xye` file records positions and intensities
 and nothing else. `xrdkit check` therefore reports its time per step as
@@ -2549,7 +2568,7 @@ unknown rather than as a number, and the counting statistics have to be judged
 from the intensities alone. Where the counting time matters to the record,
 keep the instrument's own file beside the converted one.
 
-### 10.12 Where to go next
+### 10.11 Where to go next
 
 Part I ends here. Everything above is done with the commands, and for most
 work that is all that is needed.
@@ -2705,7 +2724,7 @@ else is what the file said about it.
 Two of those are `None` more often than a reader expects. A two or three
 column text pattern carries no wavelength and no counting time, so both come
 back as `None` and have to be supplied from the project file or the command
-line. Section 10.11 says what the missing time means for `xrdkit check`.
+line. Section 10.10 says what the missing time means for `xrdkit check`.
 
 `sample_id` is what the diffractometer wrote into the file, not the sample key
 of your project. The example scans keep the identifiers they were measured
@@ -2893,7 +2912,7 @@ finder, the flagging rule, the filter that applies it, and a CSV writer.
 | `d_spacing` | from Bragg's law at the scan's wavelength, in angstroms |
 | `relative_intensity` | the height as a percentage of the strongest peak in the list, so the strongest is always 100 |
 | `kalpha2_of` | the index in the list of the K alpha 1 parent this peak is a satellite of, or `None` |
-| `background` | the counts under the peak, the lowest intensity within one degree of it, or `0.0` when it was not estimated |
+| `background` | the counts under the peak, the lowest intensity within one degree either side of it. Only `find_peaks` estimates it, so a `Peak` built by hand keeps `0.0` |
 
 The position is refined rather than taken from the grid because the step is
 0.0217 degrees on the example scans and the positions that matter are wanted
@@ -3074,11 +3093,14 @@ that come back and work on those.
 ### 15.1 apply_style
 
 `apply_style()` sets the global matplotlib rcParams to a clean single column
-journal style: serif text, thin lines, ticks on all four sides pointing in, no
-grid, and a figure size of 3.5 by 2.6 inches. Call it once, before anything is
-drawn. It changes the rcParams of the process, so a script that draws figures
-of its own alongside the kit's should call it first and then override what it
-wants.
+journal style: sans serif text, Arial where it is installed and DejaVu Sans
+otherwise, thin lines, ticks on all four sides pointing in, no grid, and a
+figure size of 3.5 by 2.6 inches. Call it once, before anything is drawn.
+
+It changes the rcParams of the process and puts nothing back, which the
+docstring now says. A script that draws figures of its own alongside the
+kit's should call this first and then override what it wants, or build those
+figures inside `matplotlib.rc_context`.
 
 ### 15.2 plot_pattern
 
@@ -4965,12 +4987,15 @@ That pair is what makes the relation useful. A sample reflection almost never
 sits at the angle of a standard reflection, and `fwhm` and `fwhm_esd` give the
 instrumental width and its esd wherever it is wanted.
 
-A note on the weights. The docstring of `fit_caglioti` says that for a width
-with esd s the weight in the sum of squared FWHM squared residuals is
-1 / (2 FWHM s) squared, which is the weight that carries the esd of a width
-through to the square of that width. `fit_instrument_widths` in Section 22,
-which is the kit's own caller and what `xrdkit instrument` runs, passes
-1 / s squared instead, which weights the width rather than its square. Both
+A note on the weights. `fit_caglioti` uses the weights it is given as they
+are: each residual is scaled by the root of its weight, and the reduced chi
+squared the covariance is scaled by follows from the same weights. Which
+weights to pass is yours to decide, and the docstring now says so.
+`fit_instrument_widths` in Section 22, which is the kit's own caller and what
+`xrdkit instrument` runs, passes 1 / s squared with s the esd of the fitted
+FWHM, which weights each width by its own precision. The alternative is
+1 / (2 FWHM s) squared, which carries the esd of a width through to the square
+of that width, since the variance of FWHM squared is (2 FWHM s) squared. Both
 are defensible and the fit is judged on the FWHM residuals either way, but the
 two are not the same weighting and the example standard gives U of 0.0107
 against 0.0105 depending on which is used. Pass the weights you mean.
@@ -5245,7 +5270,9 @@ standard's reflections to the Caglioti relation and returns a `WidthFit`.
 Every peak found inside `window` has its K alpha 2 satellites excluded and is
 then fitted as a split pseudo-Voigt doublet by `fit_profile`, and the widths
 of the fits that converged go into `fit_caglioti` weighted by one over the
-square of each width's own esd. `WIDTH_WINDOW` is ten to ninety-eight degrees:
+square of each width's own esd, which its docstring now states; Section 21.4
+is the other weighting and when it is wanted. `WIDTH_WINDOW` is ten to
+ninety-eight degrees:
 below the lower limit the reflections of a standard are few and asymmetric,
 and above the upper one the doublet is wide enough that the fit is about the
 splitting rather than the instrument. Section 3.3 is the `--window` option
@@ -5276,8 +5303,9 @@ at an arbitrary angle asks for `fit.caglioti.fwhm(angle)`.
 One thing this fit does not give is the instrumental mixing parameter.
 `correct_broadening` needs `eta_inst` beside `fwhm_inst`, and nothing in
 `WidthFit` or `Caglioti` carries one: the Caglioti relation is about widths
-only. A script has to get the instrumental `eta` from the standard's own
-profile fits, which is what Section 23.5 does and says.
+only. Both docstrings say so, and both send the reader the same way: a script
+has to get the instrumental `eta` from the standard's own profile fits, which
+is what Section 23.5 does.
 
 ### 22.2 refine_instrument and InstrumentRefinement
 
@@ -5574,7 +5602,8 @@ instrument, and it is the width fit of Section 22.4 with one thing added.
 
 `correct_broadening` needs an instrumental mixing parameter as well as an
 instrumental width, and Section 22.1 says that `WidthFit` carries no such
-thing: the Caglioti relation describes widths and says nothing about shape. So
+thing: the Caglioti relation describes widths and says nothing about shape.
+Both docstrings say as much, and neither offers a way round it. So
 the standard's reflections are fitted a second time here, with `fit_profile`
 directly, and their mixing parameters are kept alongside their angles. A
 sample reflection then takes the instrumental `eta` interpolated between the
@@ -6280,12 +6309,16 @@ degrees is the offset Section 5.1 measured on this scan and Section 6.2 passed
 to the command with `--zero`.
 
 One thing about what you will see on screen. pymatgen writes its CIF parser
-warnings to standard error, and several of the entries Section 6.2 fetched
-raise them: 2311739 and 2311740 warn about stoichiometry, and 2103856 warns
-that it found no symmetry operators and is defaulting to P1, which is the same
-nonstandard centring Section 6.3 rejects. This particular CIF raises none, but
-the printed block below is standard output only either way, so a warning would
-never appear in it.
+warnings through the warnings module, which puts them on standard error, and
+several of the entries Section 6.2 fetched raise them: 2311739 and 2311740
+warn about stoichiometry, and 2103856 warns that it found no symmetry
+operators and is defaulting to P1, which is the same nonstandard centring
+Section 6.3 rejects. `xrdkit phases` holds those warnings back over the calls
+that reach pymatgen, so they do not break up what the command prints. A script
+like this one calls the library directly and so still sees them, which is
+right: a warning about the CIF you chose is worth reading. This particular CIF
+raises none, and the printed block below is standard output only either way,
+so a warning would never appear in it.
 
 The whole of `phase_match.py`:
 
@@ -8125,15 +8158,17 @@ value it needs is not recorded.
 `Options` is what a run takes besides the project file: `cell` and `zero` to
 start from, over the project's; `displacement`, whether the specimen
 displacement is refined in place of the zero, by default from the sample's
-form; `mustrain`; `preferred_orientation`; `max_passes`, a cap over the
-project's; and `out`, the folder every file goes to in place of
-`results/lebail/<key>` and `results/rietveld/<key>`.
+form; `mustrain`; `preferred_orientation`; `two_theta`, the `(min, max)`
+range refined in place of the refine tables', clipped to the scan the same
+way, which every mode of a run shares; `max_passes`, a cap over the project's;
+and `out`, the folder every file goes to in place of `results/lebail/<key>`
+and `results/rietveld/<key>`.
 
-`out` has to be an absolute path. `mode_paths` takes it as given and the
-GSAS-II driver runs in a working folder of its own, so a relative `out` sends
-the result JSON somewhere neither of them expects and the run fails when the
-driver tries to write it. The docstring does not say so; the script below
-makes its own absolute against the project root and says why in a comment.
+`out` may be relative. `mode_paths` resolves it against the folder the caller
+is running in, which it has to do because the GSAS-II driver runs in a working
+folder of its own and would otherwise write the result there. The script below
+makes its own absolute against the project root, which is no longer necessary
+and does no harm: an absolute path resolves to itself.
 
 `run_mode(project, sample, mode, options=None, reporter=None)` runs one mode
 and returns an `Outcome`: the `mode`, the names of its `accepted` stages, its
@@ -8448,7 +8483,7 @@ class.
 Two hundred and one names are in it. `__version__`, the package version
 string, is the only one with no section of its own.
 
-Three things are worth knowing before reading it.
+Two things are worth knowing before reading it.
 
 A name in the table is one this guide documents, not one the package promises
 forever. The modules of Section 30 are in it too, since they have `__all__` of
@@ -8457,13 +8492,6 @@ their own, and their rows point at Section 30 rather than at a worked example.
 `TetragonalCell` is the one deprecated name. It is kept so that older scripts
 keep working and returns `Cell.tetragonal(a, c)`, which is what to write
 instead, and Section 17 says so.
-
-Seven names are re-exported from `xrdkit/__init__.py` without being in the
-`__all__` of the module that defines them: `accepted_stages`,
-`failure_markdown`, `log_tail`, `stage_status`, `stage_status_table`,
-`stage_statuses` and `summary_markdown`, all of `gsas2`. They are public by
-every other measure, Sections 28.5 and 29.5 use three of them, and they are
-listed here under `gsas2`.
 
 | Name | Module | Documented in |
 | --- | --- | --- |
