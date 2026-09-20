@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `docs/USER_GUIDE.md` is rewritten around the commands: Part I is the
+  workflows by command and Part II is the library reference.
 - `docs/USER_GUIDE.md`: the instrument parameter file the guide's scripts write
   and read is named `instrument.instprm` rather than after one laboratory's
   diffractometer, the hkl figure of `plot_pattern.py` takes the same headroom
