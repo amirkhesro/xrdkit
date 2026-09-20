@@ -32,8 +32,10 @@ import json
 import math
 import re
 import sys
+import warnings
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from urllib.error import URLError
@@ -2170,6 +2172,26 @@ def _phases_elements(args: argparse.Namespace, item: _Input) -> list[str]:
     return list(elements)
 
 
+@contextmanager
+def _quiet_pymatgen() -> Iterator[None]:
+    """Hold pymatgen's own warnings back for the length of a call into it.
+
+    pymatgen reports a doubtful CIF through the ``warnings`` module, as a
+    plain ``UserWarning`` with no category of its own: an entry whose formula
+    cannot be checked against its sites, or one with no symmetry operations,
+    which it falls back to P1 for. Several COD entries draw one, and the
+    lines land on stderr in the middle of the command's own output, where
+    they read as errors of xrdkit's.
+
+    The filter goes on only around a call that reaches pymatgen, so every
+    other line the command writes to stderr is untouched, and a library
+    caller of :mod:`xrdkit.phases` still sees the warnings.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        yield
+
+
 def _run_phases(args: argparse.Namespace) -> int:
     # Every option, the scan, the extra and the folders are settled before any
     # request is made: a search takes a while and the COD is someone else's.
@@ -2191,7 +2213,8 @@ def _run_phases(args: argparse.Namespace) -> int:
     wavelength = _require_wavelength(scan, item)
     elements = _phases_elements(args, item)
     try:
-        require_phases_extra()
+        with _quiet_pymatgen():
+            require_phases_extra()
     except MissingPhasesExtra:
         raise CommandError(
             "phase identification needs the phases extra; install with "
@@ -2251,9 +2274,10 @@ def _run_phases(args: argparse.Namespace) -> int:
     report(f"index written to {index}")
 
     try:
-        candidates = rank_candidates(
-            records, cifs, observed, wavelength, (low, high), args.tolerance
-        )
+        with _quiet_pymatgen():
+            candidates = rank_candidates(
+                records, cifs, observed, wavelength, (low, high), args.tolerance
+            )
     except MissingPhasesExtra as error:
         raise CommandError(str(error)) from None
     except ValueError as error:
@@ -2295,15 +2319,16 @@ def _run_phases(args: argparse.Namespace) -> int:
         }
     )
     try:
-        unexplained = attribute_unexplained(
-            observed,
-            explained_positions,
-            main_cif,
-            wavelength,
-            main,
-            (low, high),
-            args.tolerance,
-        )
+        with _quiet_pymatgen():
+            unexplained = attribute_unexplained(
+                observed,
+                explained_positions,
+                main_cif,
+                wavelength,
+                main,
+                (low, high),
+                args.tolerance,
+            )
     except MissingPhasesExtra as error:
         raise CommandError(str(error)) from None
     for peak in unexplained:

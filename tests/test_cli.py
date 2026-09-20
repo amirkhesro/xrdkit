@@ -5,6 +5,8 @@ import csv
 import datetime
 import json
 import os
+import sys
+import warnings
 from pathlib import Path
 from urllib.error import URLError
 
@@ -2560,6 +2562,39 @@ def phases_scan(tmp_path, monkeypatch):
 
 def _phases_argv(scan: Path, *extra: str) -> list[str]:
     return ["phases", str(scan), "--elements", "Na", "Cl", *extra]
+
+
+def _warn_to_stderr(message, category, filename, lineno, file=None, line=None):
+    """The warnings module's own handler, which pytest replaces while it
+    records warnings; the test puts it back so that a warning reaching
+    stderr can be seen."""
+    sys.stderr.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+
+def test_phases_keeps_pymatgens_warnings_off_stderr(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    """A UserWarning raised inside the simulation, which is what pymatgen's
+    CIF parser does for a doubtful COD entry, does not reach stderr."""
+    from xrdkit import phases as phases_module
+
+    quiet = phases_module.simulate_pattern
+
+    def noisy(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        warnings.warn(
+            "Issues encountered while parsing CIF: Skipping relative "
+            "stoichiometry check because CIF does not contain formula keys.",
+            stacklevel=2,
+        )
+        return quiet(cif_path, wavelength=wavelength, two_theta_range=two_theta_range)
+
+    monkeypatch.setattr(phases_module, "simulate_pattern", noisy)
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.showwarning = _warn_to_stderr
+        assert main(_phases_argv(phases_scan)) == 0
+
+    assert capsys.readouterr().err == ""
 
 
 def test_phases_writes_its_files(tmp_path, cod, phases_scan, capsys) -> None:
