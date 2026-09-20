@@ -29,6 +29,7 @@ from xrdkit.pipeline import (
     coordinates_stages,
     fixed_atoms_stages,
     lebail_stages,
+    mode_paths,
     occupancy_stages,
     resolve_inputs,
     run_mode,
@@ -1275,6 +1276,24 @@ def test_run_mode_file_layout_and_a_key_with_a_dot(tmp_path, fake) -> None:
     out = tmp_path / "elsewhere"
     run_mode(project, "x0.10.powder", "lebail", Options(out=out))
     assert (out / "x0.10.powder_lebail_result.json").is_file()
+
+
+def test_run_mode_resolves_a_relative_out(tmp_path, fake, monkeypatch) -> None:
+    """A library caller may give Options.out relative to its own working
+    folder; the driver runs somewhere else, so mode_paths resolves it."""
+    project = fake_project(tmp_path)
+    here = tmp_path / "here"
+    here.mkdir()
+    monkeypatch.chdir(here)
+
+    paths = mode_paths(project, "x0.10.powder", "lebail", Options(out=Path("out")))
+    assert paths["result"].is_absolute()
+    assert paths["result"] == here / "out" / "x0.10.powder_lebail_result.json"
+
+    outcome = run_mode(project, "x0.10.powder", "lebail", Options(out=Path("out")))
+    assert outcome.error is None
+    assert paths["result"].is_file()
+    assert Path(outcome.paths["result"]).is_absolute()
 
 
 def test_run_mode_start_cell_order(tmp_path, fake) -> None:

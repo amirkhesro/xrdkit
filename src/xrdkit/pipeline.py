@@ -1113,9 +1113,10 @@ def mode_paths(
 ) -> dict[str, Path]:
     """Where a mode's files go: ``folder``, ``results/lebail/<key>`` for the
     Le Bail mode and ``results/rietveld/<key>`` for the others, or
-    ``options.out``; the ``prefix`` ``<folder>/<key>_<mode>`` the exports
-    are named from; the ``gpx`` and ``result`` JSON beside them, named with
-    ``with_name`` so that a dot in the key stays; and the ``work`` folder
+    ``options.out`` resolved to an absolute path; the ``prefix``
+    ``<folder>/<key>_<mode>`` the exports are named from; the ``gpx`` and
+    ``result`` JSON beside them, named with ``with_name`` so that a dot in
+    the key stays; and the ``work`` folder
     ``<folder>/work/<mode>`` holding the jobs, the logs and the start
     instrument parameter file."""
     if mode not in MODES:
@@ -1123,7 +1124,10 @@ def mode_paths(
     options = options or Options()
     sample = _sample_of(project, sample)
     if options.out is not None:
-        folder = Path(options.out)
+        # Resolved here rather than taken as given: the GSAS-II driver runs in
+        # a working folder of its own, so a relative out would send the result
+        # file there and the read back would not find it.
+        folder = Path(options.out).resolve()
     else:
         command = "lebail" if mode == "lebail" else "rietveld"
         folder = results_dir(project, command, sample)
