@@ -829,15 +829,24 @@ class Options:
     in place of the zero (by default for a pellet and not for a powder);
     whether the microstrain is refined in the Rietveld modes; the [h, k, l]
     axis of a March-Dollase preferred orientation for the fixed atoms mode;
-    a cap on the passes of every stage, over the project's by mode; and the
-    folder every file is written to in place of ``results/lebail/<key>`` and
-    ``results/rietveld/<key>``."""
+    the ``(min, max)`` two theta range fitted, over the refine tables'; a cap
+    on the passes of every stage, over the project's by mode; and the folder
+    every file is written to in place of ``results/lebail/<key>`` and
+    ``results/rietveld/<key>``.
+
+    ``two_theta`` None, the default, leaves the range to the project file.
+    A pair replaces the refine tables' ``two_theta`` for the run and is
+    clipped to the scan the same way, so the scan's own limits or anything
+    wider fit the whole scan. Every mode of a run takes the same pair, the
+    Rietveld modes included, which otherwise carry the range of the result
+    they start from."""
 
     cell: Mapping[str, float] | None = None
     zero: float | None = None
     displacement: bool | None = None
     mustrain: bool = False
     preferred_orientation: Sequence[int] | None = None
+    two_theta: tuple[float, float] | None = None
     max_passes: int | None = None
     out: Path | str | None = None
 
@@ -1020,7 +1029,8 @@ def resolve_inputs(
     """What a run of ``sample`` takes from the project file: its scan and
     the scan's range, its instrument and instrument parameter file, its
     phases in the order of its structures, its refine settings with the two
-    theta range clipped to the scan, the start cell of the first phase and
+    theta range clipped to the scan (``options.two_theta`` in place of the
+    refine tables' where it is given), the start cell of the first phase and
     where it came from, whether the displacement is refined and the start
     zero.
 
@@ -1046,16 +1056,22 @@ def resolve_inputs(
         raise PipelineError(f"{sample.file}: cannot be read: {error}") from None
     scan_range = (float(np.min(scan.two_theta)), float(np.max(scan.two_theta)))
     refine = refine_settings(project, sample)
-    if refine.two_theta is None:
+    # options.two_theta stands in for the refine tables' range; either is
+    # clipped to the scan, so the scan's own limits or wider fit all of it.
+    wanted = refine.two_theta if options.two_theta is None else options.two_theta
+    source = (
+        f"samples.{sample.key}" if options.two_theta is None else "the two theta range"
+    )
+    if wanted is None:
         limits = scan_range
     else:
         limits = (
-            max(refine.two_theta[0], scan_range[0]),
-            min(refine.two_theta[1], scan_range[1]),
+            max(wanted[0], scan_range[0]),
+            min(wanted[1], scan_range[1]),
         )
         if not limits[0] < limits[1]:
             raise PipelineError(
-                f"samples.{sample.key}: two_theta {list(refine.two_theta)} lies "
+                f"{source}: two_theta {[float(value) for value in wanted]} lies "
                 f"outside the scan's {scan_range[0]:.2f} to {scan_range[1]:.2f} degrees"
             )
 
@@ -1899,7 +1915,9 @@ def _run_mode(project, sample, mode, options, report, context) -> Outcome:
                 }
                 for phase in inputs.phases
             ],
-            limits=start.limits,
+            # The range of the result started from, unless this run was given
+            # one of its own, which every mode of it shares.
+            limits=inputs.limits if options.two_theta is not None else start.limits,
             broadening={
                 key: {
                     "size": phase.size,

@@ -1278,6 +1278,46 @@ def test_run_mode_file_layout_and_a_key_with_a_dot(tmp_path, fake) -> None:
     assert (out / "x0.10.powder_lebail_result.json").is_file()
 
 
+def test_two_theta_option_overrides_the_refine_table(tmp_path) -> None:
+    """The refine table sets 20.5 to 59.5 over a scan of 20 to 60."""
+    project = fake_project(tmp_path)
+
+    assert resolve_inputs(project, "chain").limits == (20.5, 59.5)
+    assert resolve_inputs(project, "chain", Options(two_theta=(25.0, 55.0))).limits == (
+        25.0,
+        55.0,
+    )
+
+
+def test_two_theta_option_is_clipped_to_the_scan(tmp_path) -> None:
+    project = fake_project(tmp_path)
+
+    inputs = resolve_inputs(project, "chain", Options(two_theta=(10.0, 100.0)))
+
+    assert inputs.scan_range == (20.0, 60.0)
+    assert inputs.limits == (20.0, 60.0)
+
+
+def test_two_theta_option_off_the_scan_is_refused(tmp_path) -> None:
+    project = fake_project(tmp_path)
+
+    with pytest.raises(PipelineError, match="lies outside the scan"):
+        resolve_inputs(project, "chain", Options(two_theta=(100.0, 140.0)))
+
+
+def test_rietveld_modes_take_the_two_theta_option(tmp_path, fake) -> None:
+    """A Rietveld mode carries the range of the result it starts from unless
+    the run was given one of its own."""
+    project = fake_project(tmp_path)
+    run_mode(project, "chain", "lebail")
+
+    run_mode(project, "chain", "fixed_atoms")
+    assert refine_jobs(fake)[-1]["limits"] == [20.5, 59.5]
+
+    run_mode(project, "chain", "fixed_atoms", Options(two_theta=(25.0, 55.0)))
+    assert refine_jobs(fake)[-1]["limits"] == [25.0, 55.0]
+
+
 def test_run_mode_resolves_a_relative_out(tmp_path, fake, monkeypatch) -> None:
     """A library caller may give Options.out relative to its own working
     folder; the driver runs somewhere else, so mode_paths resolves it."""

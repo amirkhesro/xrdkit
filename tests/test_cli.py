@@ -1751,6 +1751,17 @@ def test_refinement_usage_errors(refinement, capsys, argv) -> None:
             ["lebail", "nope"],
             "xrdkit lebail: no sample nope in ",
         ),
+        (
+            ["lebail", "chain", "--two-theta", "60", "20"],
+            "xrdkit lebail: --two-theta takes MIN MAX with MIN below MAX, not 60 20",
+        ),
+        (
+            ["rietveld", "chain", "--two-theta", "100", "140"],
+            (
+                "xrdkit rietveld: --two-theta 100 140 lies outside the scan's "
+                "20.00 to 60.00 degrees"
+            ),
+        ),
     ],
     ids=[
         "zero and displacement",
@@ -1759,6 +1770,8 @@ def test_refinement_usage_errors(refinement, capsys, argv) -> None:
         "orientation without fixed atoms",
         "orientation of zeros",
         "missing sample",
+        "two theta the wrong way round",
+        "two theta off the scan",
     ],
 )
 def test_refinement_conflicts_return_1(refinement, capsys, argv, message) -> None:
@@ -1815,6 +1828,71 @@ def test_lebail_prints_its_files_and_the_fit(refinement, capsys) -> None:
     assert "zero 0.0100 +/- 0.0010 degrees" in lines
     assert "Rwp 10.000 per cent, reduced chi squared 2.250" in lines
     assert "start cell of bronze from structures.bronze.cell" in lines
+
+
+def _recorded_options(monkeypatch) -> list:
+    """Every Options the handlers hand to run_sequence, which still runs."""
+    seen: list = []
+    real = cli.run_sequence
+
+    def recorder(project, sample, modes, options=None, reporter=None):
+        seen.append(options)
+        return real(project, sample, modes, options, reporter)
+
+    monkeypatch.setattr(cli, "run_sequence", recorder)
+    return seen
+
+
+def test_lebail_two_theta_reaches_the_options(refinement, capsys, monkeypatch) -> None:
+    seen = _recorded_options(monkeypatch)
+
+    assert main(["lebail", "chain", "--two-theta", "25", "55"]) == 0
+
+    assert [options.two_theta for options in seen] == [(25.0, 55.0)]
+    result = json.loads(
+        (
+            refinement.root
+            / "results"
+            / "lebail"
+            / "chain"
+            / "chain_lebail_result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert result["inputs"]["limits"] == [25.0, 55.0]
+
+
+def test_rietveld_two_theta_reaches_the_options(
+    refinement, capsys, monkeypatch
+) -> None:
+    assert main(["lebail", "chain"]) == 0
+    seen = _recorded_options(monkeypatch)
+
+    assert main(["rietveld", "chain", "--two-theta", "25", "55"]) == 0
+
+    assert [options.two_theta for options in seen] == [(25.0, 55.0)]
+    folder = refinement.root / "results" / "rietveld" / "chain"
+    # Every mode of the one call took the range given, not the Le Bail's.
+    for mode in ("fixed_atoms", "coordinates", "occupancies"):
+        result = json.loads(
+            (folder / f"chain_{mode}_result.json").read_text(encoding="utf-8")
+        )
+        assert result["inputs"]["limits"] == [25.0, 55.0]
+
+
+def test_two_theta_wider_than_the_scan_fits_all_of_it(refinement, capsys) -> None:
+    """The sample table narrows the range; the scan's own limits widen it back."""
+    assert main(["lebail", "chain", "--two-theta", "20", "60"]) == 0
+
+    result = json.loads(
+        (
+            refinement.root
+            / "results"
+            / "lebail"
+            / "chain"
+            / "chain_lebail_result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert result["inputs"]["limits"] == [20.0, 60.0]
 
 
 def test_rietveld_from_coordinates(refinement, capsys) -> None:

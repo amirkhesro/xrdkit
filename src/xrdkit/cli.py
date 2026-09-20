@@ -2523,6 +2523,47 @@ def _add_phases(subparsers) -> None:
     parser.set_defaults(handler=_run_phases)
 
 
+def _two_theta_option(args: argparse.Namespace, sample: Sample) -> tuple | None:
+    """``--two-theta`` as a pair, or None for the project file's range.
+
+    Refused here, before anything is written: a range the wrong way round,
+    and one that does not reach the scan at all. A range that overhangs the
+    scan at either end is allowed and is clipped to it by
+    :func:`~xrdkit.pipeline.resolve_inputs`, which is how the whole scan is
+    fitted where the sample's refine table narrows it."""
+    if args.two_theta is None:
+        return None
+    low, high = (float(value) for value in args.two_theta)
+    if not low < high:
+        raise CommandError(
+            f"--two-theta takes MIN MAX with MIN below MAX, not {low:g} {high:g}"
+        )
+    try:
+        scan = read_scan(sample.file)
+    except (OSError, ValueError) as error:
+        raise CommandError(f"{sample.file}: cannot be read: {error}") from None
+    start, end = float(np.min(scan.two_theta)), float(np.max(scan.two_theta))
+    if high <= start or low >= end:
+        raise CommandError(
+            f"--two-theta {low:g} {high:g} lies outside the scan's {start:.2f} to "
+            f"{end:.2f} degrees"
+        )
+    return (low, high)
+
+
+def _add_two_theta_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--two-theta",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help=(
+            "two theta range to fit, in degrees, clipped to the scan "
+            "(default: the project file's refine two_theta)"
+        ),
+    )
+
+
 def _run_lebail(args: argparse.Namespace) -> int:
     # Every option and input is checked before anything is written.
     cell = _cell_option(args)
@@ -2538,6 +2579,7 @@ def _run_lebail(args: argparse.Namespace) -> int:
         else {name: getattr(cell, name) for name, _ in GSAS_CELL},
         zero=args.zero,
         displacement=True if args.displacement else None,
+        two_theta=_two_theta_option(args, sample),
         out=_out_folder(args),
     )
     return _run_refinement(args, project, sample, ["lebail"], options)
@@ -2576,6 +2618,7 @@ def _add_lebail(subparsers) -> None:
         action="store_true",
         help="refine the specimen displacement, the zero held (always for a pellet)",
     )
+    _add_two_theta_option(parser)
     _add_refinement_output_options(parser, "lebail")
     parser.set_defaults(handler=_run_lebail)
 
@@ -2623,6 +2666,7 @@ def _run_rietveld(args: argparse.Namespace) -> int:
     options = Options(
         mustrain=args.mustrain,
         preferred_orientation=None if axis is None else tuple(axis),
+        two_theta=_two_theta_option(args, sample),
         out=_out_folder(args),
     )
     before = MODES[MODES.index(modes[0]) - 1]
@@ -2707,6 +2751,7 @@ def _add_rietveld(subparsers) -> None:
             "(refused by default)"
         ),
     )
+    _add_two_theta_option(parser)
     _add_refinement_output_options(parser, "rietveld")
     parser.set_defaults(handler=_run_rietveld)
 
