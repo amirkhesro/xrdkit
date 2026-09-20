@@ -3416,3 +3416,1409 @@ rather than 5: a stack has less vertical room per trace, so fewer labels fit.
 To put the labels in a row above a chosen trace instead of on it, pass that
 trace's base from `bases` as `y`, raised by enough to clear its tallest peak,
 and leave `line` out.
+
+## 16. indexing
+
+`xrdkit.indexing` assigns reflections of a cell to observed peaks and refines
+the cell as it goes. Section 5.3 says what that is for and Section 7 runs it
+from the command line; this section is the functions themselves. Eleven of the
+module's thirteen public names are here: two dataclasses for what the indexing
+produces, one for the cell fit and one for the zero offset search, six
+functions and a CSV writer. The other two are covered elsewhere,
+`TetragonalCell` in Section 17 and `TTB_CELL` in Section 11.2.
+
+### 16.1 Reflection and IndexedPeak
+
+`Reflection` is one calculated reflection of a cell at one wavelength.
+
+| Field | What it holds |
+| --- | --- |
+| `h`, `k`, `l` | the Miller indices of the family's representative |
+| `hkl` | those three as a tuple |
+| `d_spacing` | from the cell's reciprocal metric, in angstroms |
+| `two_theta` | from Bragg's law at the wavelength, in degrees |
+| `multiplicity` | how many reflections the family holds under the Laue group, or 1 for one built by hand |
+
+`IndexedPeak` is one observed peak with its assignment.
+
+| Field | What it holds |
+| --- | --- |
+| `peak` | the `Peak` of Section 14.1, as it was given |
+| `corrected_two_theta` | that peak's position with the zero offset subtracted, in degrees |
+| `reflection` | the `Reflection` assigned to it, or `None` |
+| `difference` | corrected less calculated, in degrees, or `nan` when nothing was assigned |
+| `candidates` | every reflection within the tolerance, nearest first |
+| `is_indexed` | whether a reflection was assigned |
+
+`candidates` is the field to read before a cell is believed. A peak with one
+candidate has been identified. A peak with three has been labelled with
+whichever of the three is nearest, which is a different thing, and the label
+may change the next time the cell moves. That is why every refinement in the
+kit, here and in Section 18, is run on the peaks with exactly one candidate.
+
+### 16.2 generate_reflections
+
+`generate_reflections(cell, wavelength, two_theta_max, two_theta_min=0.0,
+space_group=None)` returns the allowed reflections of `cell` inside a two
+theta window, as a list of `Reflection`.
+
+| Argument | What it does |
+| --- | --- |
+| `cell` | the `Cell` of Section 17 to calculate d spacings from |
+| `wavelength` | the radiation wavelength in angstroms |
+| `two_theta_max` | the upper limit of the window in degrees, above `two_theta_min` and below 180 |
+| `two_theta_min` | the lower limit in degrees, 0 by default |
+| `space_group` | a symbol whose systematic absences to remove, one of the eight of Section 20, or `None` for none |
+
+How far h, k and l run is worked out from the cell and the window rather than
+fixed. The smallest d spacing that can diffract inside the window sets the
+limits, since h can reach a over that d spacing before falling below it, and
+likewise k with b and l with c, so a large cell is enumerated further than a
+small one without anyone having to choose a cut-off.
+
+Reflections equivalent under the Laue group are merged into one entry,
+labelled by the representative of Section 20.4 and carrying the family's
+multiplicity, and a space group drops the ones it forbids. Without a space
+group the Laue group of the holohedry of the cell's crystal system is used,
+which merges the families but removes nothing.
+
+The order is by two theta, and two reflections whose angles agree to within
+`COINCIDENCE_TOLERANCE`, a module constant of 1e-9 degrees, count as
+coincident and are ordered by hkl instead, compared as a tuple, lowest first.
+Exact coincidences are common in a tetragonal cell, where (550) and (710) both
+give an h squared plus k squared of 50, and the metric returns such a pair
+about 1e-14 degrees apart because it sums their terms in a different order.
+Without the tolerance the order of that pair, and so the label a peak between
+them takes, would be settled by rounding.
+
+It raises `ValueError` when the window is empty or falls outside 0 to 180
+degrees, or the space group is not one of the eight.
+
+### 16.3 index_peaks
+
+`index_peaks(peaks, cell, wavelength, tolerance=DEFAULT_TOLERANCE,
+zero_offset=DEFAULT_ZERO_OFFSET, space_group=None)` returns one `IndexedPeak`
+per peak, in the order the peaks were given.
+
+| Argument | What it does |
+| --- | --- |
+| `peaks` | the observed peaks to index, satellites already removed |
+| `cell` | the cell to index against, which is not refined here |
+| `wavelength` | the radiation wavelength in angstroms |
+| `tolerance` | the largest difference allowed between a corrected and a calculated position, in degrees. `DEFAULT_TOLERANCE` is 0.05, a few times the width of a well resolved peak on a lab instrument |
+| `zero_offset` | a zero point correction in degrees, subtracted from every observed position before the comparison. `DEFAULT_ZERO_OFFSET` is 0 |
+| `space_group` | as for `generate_reflections` |
+
+The calculated window is the corrected peak positions widened by the tolerance
+at both ends, so a peak at either end of the list can still find a partner
+just outside the observed range. Each peak then takes the nearest reflection
+within the tolerance; distances within `COINCIDENCE_TOLERANCE` of each other
+are ties, and a tie goes to the lowest hkl, so a peak sitting on two
+coincident reflections always takes the same label. A peak with nothing inside
+the tolerance keeps `reflection=None` and a difference of `nan`, and still
+appears in the list. An empty list of peaks gives an empty list back.
+
+Nothing is refined here and no zero offset is looked for. Both of those are
+`index_and_refine`, which calls this function in a loop.
+
+### 16.4 refine_cell and CellFit
+
+`refine_cell(indexed, wavelength=None, start_cell=None)` refines a cell from
+indexed peaks by linear least squares and returns a `CellFit`. This is the fit
+the indexing cycles use internally. It reports no esds; the refinement that
+does is `refine_lattice` in Section 18.
+
+One over d squared is linear in the components of the reciprocal metric, and
+the crystal system of `start_cell` decides which of them are free: one for a
+cubic cell, two for tetragonal, hexagonal and trigonal, three for
+orthorhombic, four for monoclinic and six for triclinic. Tetragonal is assumed
+when no start cell is given. A component that no indexed peak carries any
+information on, its column being all zero, is held at the value `start_cell`
+gives it and named in `held`. The fitted reciprocal metric is inverted to the
+direct metric and the six parameters are read off that, so no crystal system
+needs a formula of its own.
+
+The observed d spacings are recomputed from `corrected_two_theta` rather than
+taken off the peaks, which is what carries a zero point correction already
+applied into the fit.
+
+`CellFit` carries the result.
+
+| Field | What it holds |
+| --- | --- |
+| `cell` | the fitted `Cell` |
+| `n_peaks` | how many indexed peaks it was fitted on |
+| `rms_two_theta` | the root mean square difference in degrees between their corrected positions and the positions the fitted cell puts them at |
+| `held` | the names of the parameters held at the start cell's values, empty when all were fitted |
+| `zero_offset` | the offset the indexing ran with, in degrees; 0 from `refine_cell` on its own |
+| `coarse_two_theta_max` | the upper limit of `index_and_refine`'s first cycle, in corrected degrees; `None` from `refine_cell` on its own |
+
+Those last two fields are filled in by `index_and_refine` and left at their
+defaults by `refine_cell`, which is worth knowing before a script reads a zero
+offset off a fit that never searched for one.
+
+It raises `ValueError` when no wavelength is given, when there are not more
+indexed peaks than free components, when a component has to be held and no
+start cell was given, when the peaks cannot separate the free components, and
+when the fitted reciprocal metric is not positive definite, which usually
+means the assignments were wrong.
+
+### 16.5 index_and_refine
+
+`index_and_refine(peaks, start_cell, wavelength, zero_offset=0.0,
+coarse_tolerance=0.4, coarse_two_theta_max=None,
+fine_tolerance=DEFAULT_TOLERANCE, space_group=None, n_cycles=2,
+search_zero=True)` indexes and refines in cycles and returns two things: the
+whole peak list indexed against the final cell, and the `CellFit` of the last
+cycle.
+
+| Argument | What it does |
+| --- | --- |
+| `peaks` | the observed peaks to index |
+| `start_cell` | the cell the first cycle indexes against, which also sets the crystal system |
+| `wavelength` | the radiation wavelength in angstroms |
+| `zero_offset` | a zero point correction in degrees. Giving one turns the search off, since the offset is then already known |
+| `coarse_tolerance` | the tolerance of the first cycle in degrees, 0.4 by default, wide enough for a cell that is still some way off |
+| `coarse_two_theta_max` | the upper limit of the first cycle in corrected degrees, or `None` to choose it from the data |
+| `fine_tolerance` | the tolerance of every later cycle and of the indexing returned, `DEFAULT_TOLERANCE` by default |
+| `space_group` | as for `generate_reflections` |
+| `n_cycles` | how many cycles to run, at least one. The first is the coarse one |
+| `search_zero` | look for the zero offset before indexing. Only done when `zero_offset` is left at zero |
+
+The first cycle indexes the low angle peaks alone at the coarse tolerance,
+where a cell that is still some way off can be trusted to put reflections near
+the right peaks, and every later cycle indexes the whole list at the fine
+tolerance against the cell the cycle before gave. Each cycle refines on the
+peaks that matched exactly one reflection, so an ambiguous peak never chooses
+between two candidates on the strength of a cell that has not converged.
+
+The coarse window is chosen from the data and not fixed. Limits of 35, 50 and
+70 degrees are tried in turn, and the first that holds enough lone peaks is
+used: enough being the free parameters of the start cell's crystal system plus
+two, and never fewer than three. If none of the three does, the whole pattern
+is used and the refinement says how many peaks it lacks. One fixed limit does
+not suit every cell, because a large cell has plenty of reflections below 35
+degrees while a small or pseudo-cubic one has few there and those crowd
+together, so it can be left with too few lone peaks to refine on at all.
+
+It raises `ValueError` when `n_cycles` is below one, when there are no peaks
+or none falls below a `coarse_two_theta_max` that was given, and from
+`refine_cell` when a cycle has too few peaks to refine on.
+
+### 16.6 estimate_zero_offset and ZeroSearch
+
+`estimate_zero_offset(peaks, cell, wavelength, search=(-0.4, 0.4), step=0.01,
+tolerance=DEFAULT_TOLERANCE, two_theta_max=None, space_group=None)` is the
+search `index_and_refine` runs first, and it returns a `ZeroSearch` with the
+best `offset` in degrees, the `n_indexed` peaks that offset left with exactly
+one candidate, the `rms` of their differences, and the whole profile tried as
+`offsets` and `counts`.
+
+A specimen sitting proud of its holder moves every reflection by close to a
+constant, which no cell can absorb, so a pattern indexed against an
+uncorrected cell loses most of its peaks. Every offset across `search` is
+tried at `step`, and the one leaving the most peaks with exactly one candidate
+wins; a tie goes to the offset whose matched peaks sit closest to their
+calculated positions.
+
+Every trial gets a cell refined for it, from the low angle peaks, rather than
+sharing one. That matters. A constant offset and a cell that is a per cent out
+shift the low angle peaks by much the same amount, so a search holding one
+cell returns whichever offset best hides the error in that cell rather than
+the one that is right.
+
+It raises `ValueError` when `search` is not a rising pair, when `step` is not
+positive, or when `two_theta_max` leaves no peak to search on.
+
+### 16.7 indexing_summary and indexed_to_csv
+
+`indexing_summary(indexed)` returns a dict of five numbers: `n_peaks`,
+`n_indexed`, `n_unindexed`, `n_ambiguous`, the peaks with more than one
+candidate within the tolerance, and `rms_difference`, the root mean square of
+the differences of the indexed peaks in degrees, which is `nan` when nothing
+was indexed.
+
+`indexed_to_csv(indexed, path)` writes the list as CSV with a header and
+returns the path, creating the parent folder if it does not exist. The columns
+are `two_theta`, `corrected_two_theta`, `d_spacing`, `relative_intensity`,
+`h`, `k`, `l`, `calculated_two_theta`, `difference` and `n_candidates`. A peak
+with no assignment leaves the hkl, the calculated position and the difference
+blank but keeps its row, so the file is the whole peak list and not only the
+part of it that worked.
+
+### 16.8 The reflections of a cell, and the peaks they index
+
+The script below takes the peak list of Section 14.5, the same scan through
+the same finder with the same window, and does both halves of the module on
+it: the reflections the start cell of Section 2.2 calculates, and then the
+indexing and the refinement those reflections feed.
+
+The whole of `reflections.py`:
+
+```python
+from xrdkit.cell import Cell
+from xrdkit.indexing import (
+    generate_reflections,
+    index_and_refine,
+    index_peaks,
+    indexed_to_csv,
+    indexing_summary,
+    refine_cell,
+)
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+STEM = "pellet_a"
+START_CELL = Cell.tetragonal(12.45, 3.94)
+SPACE_GROUP = "P4bm"
+WINDOW = (10.0, 80.0)
+REFLECTION_LIMIT = 30.0
+
+scan = read_scan(SCAN_FILE)
+every = generate_reflections(START_CELL, scan.wavelength, REFLECTION_LIMIT)
+allowed = generate_reflections(
+    START_CELL, scan.wavelength, REFLECTION_LIMIT, space_group=SPACE_GROUP
+)
+allowed_hkl = {reflection.hkl for reflection in allowed}
+absent = sorted({reflection.hkl for reflection in every} - allowed_hkl)
+print(f"{len(every)} reflections below {REFLECTION_LIMIT:.0f} degrees")
+print(f"{len(allowed)} of them allowed in {SPACE_GROUP}, absent {absent}")
+print("    h   k   l  d_spacing  two_theta  multiplicity")
+for reflection in allowed[:8]:
+    print(
+        f"  {reflection.h:3d} {reflection.k:3d} {reflection.l:3d}"
+        f"  {reflection.d_spacing:9.4f}  {reflection.two_theta:9.3f}"
+        f"  {reflection.multiplicity:12d}"
+    )
+
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=WINDOW))
+plain = index_peaks(peaks, START_CELL, scan.wavelength, space_group=SPACE_GROUP)
+matched = sum(1 for entry in plain if entry.is_indexed)
+print(f"{matched} of {len(peaks)} peaks indexed against the start cell, zero offset 0")
+
+indexed, fit = index_and_refine(
+    peaks,
+    start_cell=START_CELL,
+    wavelength=scan.wavelength,
+    space_group=SPACE_GROUP,
+)
+summary = indexing_summary(indexed)
+print(f"coarse window to {fit.coarse_two_theta_max:.2f} degrees")
+print(f"zero offset {fit.zero_offset:.3f} degrees")
+print(f"a = {fit.cell.a:.4f}, c = {fit.cell.c:.4f} angstrom, held {fit.held}")
+print(
+    f"{summary['n_indexed']} of {summary['n_peaks']} peaks indexed, "
+    f"{summary['n_ambiguous']} with more than one candidate"
+)
+print(f"rms {summary['rms_difference']:.4f} degrees")
+
+ambiguous = [entry for entry in indexed if len(entry.candidates) > 1]
+first = ambiguous[0]
+print(
+    f"first ambiguous peak at {first.peak.two_theta:.3f} degrees, "
+    f"corrected {first.corrected_two_theta:.3f}"
+)
+for candidate in first.candidates:
+    print(f"  {candidate.hkl} at {candidate.two_theta:.3f} degrees")
+
+lone = [entry for entry in indexed if len(entry.candidates) == 1]
+again = refine_cell(lone, scan.wavelength, START_CELL)
+print(
+    f"refine_cell on {again.n_peaks} lone peaks: "
+    f"a = {again.cell.a:.4f}, c = {again.cell.c:.4f} angstrom"
+)
+print(
+    f"rms {again.rms_two_theta:.4f} degrees, "
+    f"zero_offset {again.zero_offset:.1f}, "
+    f"coarse_two_theta_max {again.coarse_two_theta_max}"
+)
+print(indexed_to_csv(indexed, f"results/library/indexed_{STEM}.csv"))
+```
+
+It prints the head of the reflection list, then what the start cell alone can
+index, then the refinement, then a peak with more than one candidate, then the
+same cell again from `refine_cell` on its own, then the file it wrote.
+
+```text
+15 reflections below 30 degrees
+12 of them allowed in P4bm, absent [(1, 0, 0), (1, 0, 1), (3, 0, 0)]
+    h   k   l  d_spacing  two_theta  multiplicity
+    1   1   0     8.8035     10.040             4
+    2   0   0     6.2250     14.216             4
+    2   1   0     5.5678     15.905             8
+    2   2   0     4.4017     20.157             4
+    0   0   1     3.9400     22.549             2
+    3   1   0     3.9370     22.566             8
+    1   1   1     3.5963     24.737             8
+    3   2   0     3.4530     25.780             8
+8 of 35 peaks indexed against the start cell, zero offset 0
+coarse window to 35.00 degrees
+zero offset 0.170 degrees
+a = 12.4799, c = 3.9323 angstrom, held ()
+35 of 35 peaks indexed, 7 with more than one candidate
+rms 0.0076 degrees
+first ambiguous peak at 43.644 degrees, corrected 43.474
+  (6, 0, 0) at 43.473 degrees
+  (5, 1, 1) at 43.519 degrees
+refine_cell on 28 lone peaks: a = 12.4799, c = 3.9323 angstrom
+rms 0.0076 degrees, zero_offset 0.0, coarse_two_theta_max None
+results\library\indexed_pellet_a.csv
+```
+
+Read the reflection list first. Fifteen families reach 30 degrees for this
+cell and twelve of them are allowed in P4bm; the three that are not are (100),
+(101) and (300), which Section 20.3 gets from the operations of the group. The
+multiplicities are the families and not the reflections: (001) stands for two
+reflections and (211) for sixteen, and the list holds one row per family
+rather than one row per reflection.
+
+The two rows at 22.549 and 22.566 degrees are why the tolerances of this
+module are what they are. (001) and (310) lie 0.017 degrees apart, which is
+less than the step of the scan, so no peak finder will separate them and any
+peak there has two candidates whatever the tolerance.
+
+Next the indexing. Against the start cell with no zero offset, 8 of the 35
+peaks find a reflection inside the default tolerance of 0.05 degrees. That is
+not a bad cell; it is an uncorrected one. `index_and_refine` searches for the
+offset first, finds 0.170 degrees, chooses a coarse window of 35 degrees from
+the data, and comes back with all 35 peaks indexed at an rms of 0.0076
+degrees. The 0.170 degrees is `estimate_zero_offset`'s answer, the same number
+Section 5.1 reported for this scan and the same one Section 7.4 calls a false
+zero, for the reason Section 18 returns to.
+
+Seven of the thirty five peaks carry more than one candidate. The first, at
+43.644 degrees, could be (600) or (511), which sit 0.046 degrees apart: the
+corrected position is 0.001 degrees from the first and 0.045 from the second,
+so (600) is the label, but the peak is not evidence for it. Those seven take
+no part in the refinement, which is why `refine_cell` on the twenty eight lone
+peaks returns the same cell and the same rms. It is the same arithmetic: the
+last cycle of `index_and_refine` is exactly that call. Its `CellFit` comes
+back with `zero_offset` at 0 and `coarse_two_theta_max` at `None`, because
+`refine_cell` on its own neither searched nor windowed.
+
+The cell of 12.4799 and 3.9323 angstrom is all but the cell of Section 15.8,
+which came to 12.4803 and 3.9324. The arguments are the same and the scan is
+the same; what differs is the window, 10 to 80 degrees here against 10 to 100
+there, which adds eight peaks at the top of the pattern and moves a by four
+ten thousandths of an angstrom. Neither is the cell of Section 7.1, and
+Section 18 says why.
+
+## 17. cell
+
+`xrdkit.cell` holds one public name, `Cell`, and every cell anywhere in the
+kit is one. It carries all six parameters and a crystal system, in angstroms
+and degrees, and it is frozen, so two cells of the same parameters and system
+are equal and neither can be altered in place.
+
+Every quantity a cell can be asked for comes from its metric tensor G, whose
+entries are the dot products of the three axes. The volume is the square root
+of its determinant and a d spacing comes from its inverse, one over d squared
+being h dotted into G star h. There is therefore no formula per crystal
+system in this module and none in this section: a monoclinic cell and a
+tetragonal one are the same three lines of arithmetic on different numbers.
+
+`TetragonalCell(a, c)`, in `xrdkit.indexing`, is the older name for a
+tetragonal cell and returns `Cell.tetragonal(a, c)`; it is kept so that
+existing scripts keep working, and new ones should use `Cell.tetragonal`.
+
+### 17.1 The parameters, the constructors and what is refused
+
+The six parameters are `a`, `b`, `c`, `alpha`, `beta` and `gamma`, and
+`crystal_system` is one of the seven. A cell always holds all six. The system
+decides which of them are free and the rest follow: b equals a in a tetragonal
+cell, every angle is 90 in an orthorhombic one, gamma is 120 in a hexagonal
+one. Monoclinic cells take b as the unique axis, so alpha and gamma are 90 and
+beta is free. Hexagonal and trigonal cells are on hexagonal axes, so a cell in
+the rhombohedral setting has to be converted to hexagonal axes before it can
+be one of these.
+
+There is a named constructor per system, each taking the free parameters in
+the order above: `Cell.cubic(a)`, `Cell.tetragonal(a, c)`,
+`Cell.orthorhombic(a, b, c)`, `Cell.hexagonal(a, c)`, `Cell.trigonal(a, c)`,
+`Cell.monoclinic(a, b, c, beta)` and `Cell.triclinic(a, b, c, alpha, beta,
+gamma)`. Each fills in the dependent parameters and hands the result through
+the same checks as the constructor of the class itself, which takes all six
+and the system.
+
+Four things are refused, each with a message naming the parameter. A length or
+an angle that is not a number or is not above zero, an angle that is not below
+180, a parameter that disagrees with what the crystal system fixes by more
+than a millionth, and a crystal system that is not one of the seven. Then the
+angles are checked together: three angles that individually look reasonable
+can still describe no cell at all, and a set whose metric is not positive
+definite is refused as well.
+
+Start a new file named `cell_geometry.py`.
+
+```python
+from xrdkit.cell import Cell
+
+# Edit these lines for each new cell. Nothing below needs changing.
+A, C = 12.4740, 3.9305
+HKL = (3, 1, 0)
+
+REFUSED = (
+    ("a zero length", lambda: Cell.tetragonal(A, 0.0)),
+    ("an angle of 180", lambda: Cell.monoclinic(A, A, C, 180.0)),
+    ("b set apart from a", lambda: Cell(A, 12.0, C, 90.0, 90.0, 90.0, "tetragonal")),
+    ("a crystal system of its own", lambda: Cell.from_parameters("rhombic", {"a": A})),
+    (
+        "angles that make no cell",
+        lambda: Cell.triclinic(5.0, 5.0, 5.0, 20.0, 20.0, 150.0),
+    ),
+)
+
+cell = Cell.tetragonal(A, C)
+print(cell)
+print(f"crystal system {cell.crystal_system}")
+print(f"a {cell.a}, b {cell.b}, c {cell.c}")
+print(f"alpha {cell.alpha}, beta {cell.beta}, gamma {cell.gamma}")
+for description, build in REFUSED:
+    try:
+        build()
+    except ValueError as error:
+        print(f"{description}: {error}")
+```
+
+It prints the cell, its parameters and the five refusals.
+
+```text
+Cell(a=12.474, b=12.474, c=3.9305, alpha=90.0, beta=90.0, gamma=90.0, crystal_system='tetragonal')
+crystal system tetragonal
+a 12.474, b 12.474, c 3.9305
+alpha 90.0, beta 90.0, gamma 90.0
+a zero length: cell parameter c must be greater than 0, not 0.0
+an angle of 180: cell parameter beta must be below 180 degrees, not 180.0
+b set apart from a: cell parameter b must be 12.474 in a tetragonal cell, not 12
+a crystal system of its own: unknown crystal_system 'rhombic'; the crystal systems are cubic, tetragonal, orthorhombic, hexagonal, trigonal, monoclinic, triclinic
+angles that make no cell: cell parameters alpha, beta and gamma (20, 20, 150) make no cell: the metric is not positive definite
+```
+
+The dependent parameters are filled in and not merely tolerated: `b` comes
+back as 12.474 without being asked for. The tolerance of a millionth is what
+lets a value computed rather than typed, a b of 12.473999999999998 from a
+refinement, pass as equal to a, while a b of 12.0 beside an a of 12.474 is
+refused as what it is, a cell that is not tetragonal. The last refusal is the
+one that cannot be caught parameter by parameter: 5, 5 and 5 angstrom with
+angles of 20, 20 and 150 degrees has nothing wrong with any one of its six
+numbers and is not a cell.
+
+### 17.2 from_parameters, from_entry and CELL_PARAMETERS
+
+`Cell.from_parameters(crystal_system, parameters)` builds a cell from a
+mapping. It is the constructor for a cell whose system is not known until the
+program runs, which is what a refinement reading a project file or a library
+entry is doing. `parameters` gives either exactly the parameters the system
+leaves free or all six, and all six are checked against the system as usual.
+
+Which parameters a system leaves free is `CELL_PARAMETERS`, a dict in
+`xrdkit.library` of crystal system to a tuple of names, and it is the order
+everything in the kit uses: the free vector of Section 18, the esds of a fit,
+`Cell.parameters`. Reading it is how to write a loop over the systems rather
+than a chain of conditions, and `cell.parameter_names` is the entry for a
+cell's own system.
+
+`Cell.from_entry(entry, parameters)` is the same thing with the crystal system
+taken from a structure library entry, the `StructureEntry` of Section 25. An
+entry names which parameters its cell leaves free but carries no values for
+them, since the values are a property of the sample and not of the structure
+type, so they come separately.
+
+Both raise `ValueError` naming the key when a parameter is unknown, is missing
+or is not free for the system, and both raise on an unknown crystal system or
+a value out of range.
+
+Continues `cell_geometry.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.library import CELL_PARAMETERS, load_entry
+
+REFUSED_PARAMETERS = (
+    ("one the system fixes", {"a": A, "b": A, "c": C}),
+    ("one left out", {"a": A}),
+    ("one that is not a parameter", {"a": A, "d": C}),
+)
+
+for system, names in CELL_PARAMETERS.items():
+    print(f"{system:14s} {', '.join(names)}")
+hexagonal = Cell.from_parameters("hexagonal", {"a": 5.0, "c": 13.0})
+print(f"hexagonal a {hexagonal.a}, b {hexagonal.b}, gamma {hexagonal.gamma}")
+six = Cell.from_parameters(
+    "tetragonal",
+    {"a": A, "b": A, "c": C, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+)
+print(f"the same cell from all six: {six == cell}")
+entry = load_entry("ttb/P4bm")
+print(f"entry {entry.name}, {entry.crystal_system}, {entry.space_group}")
+print(f"its cell parameters {entry.cell_parameters}")
+from_entry = Cell.from_entry(entry, {"a": A, "c": C})
+print(f"the same cell from the entry: {from_entry == cell}")
+for description, parameters in REFUSED_PARAMETERS:
+    try:
+        Cell.from_parameters("tetragonal", parameters)
+    except ValueError as error:
+        print(f"{description}: {error}")
+```
+
+It prints the free parameters of the seven systems, three ways of reaching the
+same cell, and the three refusals.
+
+```text
+cubic          a
+tetragonal     a, c
+orthorhombic   a, b, c
+hexagonal      a, c
+trigonal       a, c
+monoclinic     a, b, c, beta
+triclinic      a, b, c, alpha, beta, gamma
+hexagonal a 5.0, b 5.0, gamma 120.0
+the same cell from all six: True
+entry ttb/P4bm, tetragonal, P4bm
+its cell parameters ('a', 'c')
+the same cell from the entry: True
+one the system fixes: cell parameter 'b' is not free in a tetragonal cell; give a, c or all six
+one left out: missing cell parameter 'c'; a tetragonal cell needs a, c
+one that is not a parameter: unknown cell parameter 'd'; the cell parameters are a, b, c, alpha, beta, gamma
+```
+
+The entry `ttb/P4bm` is the one the `[structures.ttb_p4bm]` table of Section
+2.2 names, and `from_entry` builds the same cell that `Cell.tetragonal` did,
+because the entry's crystal system is tetragonal and its cell parameters are a
+and c. Giving all six works as well and gives an equal cell, which is what a
+script reading six numbers out of a CIF wants.
+
+The three refusals are worth reading as a group, because they are the three
+ways a mapping can be wrong and the messages tell them apart. Giving `b` is
+giving a parameter the system fixes, and the message says what to give
+instead. Leaving `c` out is giving too few. Giving `d` is not a cell parameter
+at all.
+
+### 17.3 The geometry: volume, d spacings and the metric
+
+`cell.metric_tensor` is G, so a fractional vector v has a length of the square
+root of v dotted into G v. It is a plain property, computed when asked for.
+`cell.reciprocal_metric` is G star, the inverse of G, cached on first use and
+returned read only, since everything that indexes a cell asks for it over and
+over.
+
+`cell.volume` is the square root of the determinant of G, in cubic angstroms.
+
+`cell.d_spacing(h, k, l)` is the d spacing of one reflection in angstroms,
+from one over d squared being h dotted into G star h. It raises `ValueError`
+for (000), which has no d spacing. `cell.d_spacings(hkl)` is the same for an
+array of shape (n, 3) and returns an array of n, which is the form the
+indexing of Section 16 and the refinement of Section 18 use, both of them
+asking for hundreds of d spacings at a time. It raises `ValueError` when the
+array is not of that shape or a row is (000).
+
+Continues `cell_geometry.py`. Add these lines at the end of the file.
+
+```python
+import numpy as np
+
+
+def show_matrix(matrix, decimals):
+    """Print a 3 by 3 matrix, rounded so that no minus zero is printed."""
+    for row in matrix:
+        values = [round(value, decimals) + 0.0 for value in row]
+        width = decimals + 4
+        print("  " + "  ".join(f"{value:{width}.{decimals}f}" for value in values))
+
+
+print(f"V = {cell.volume:.3f} cubic angstrom")
+print(f"sqrt(det G) = {np.sqrt(np.linalg.det(cell.metric_tensor)):.3f}")
+print(f"d{HKL} = {cell.d_spacing(*HKL):.4f} angstrom")
+spacings = cell.d_spacings(np.array([(1, 1, 0), (0, 0, 1), HKL]))
+print("d_spacings " + "  ".join(f"{value:.4f}" for value in spacings))
+print("metric tensor G")
+show_matrix(cell.metric_tensor, 6)
+print("reciprocal metric G*")
+show_matrix(cell.reciprocal_metric, 8)
+identity = cell.metric_tensor @ cell.reciprocal_metric
+print(f"G G* is the identity: {np.allclose(identity, np.eye(3))}")
+try:
+    cell.d_spacing(0, 0, 0)
+except ValueError as error:
+    print(f"(000): {error}")
+```
+
+It prints the volume two ways, one d spacing and three, the two metric
+tensors, and the refusal.
+
+```text
+V = 611.588 cubic angstrom
+sqrt(det G) = 611.588
+d(3, 1, 0) = 3.9446 angstrom
+d_spacings 8.8204  3.9305  3.9446
+metric tensor G
+  155.600676    0.000000    0.000000
+    0.000000  155.600676    0.000000
+    0.000000    0.000000   15.448830
+reciprocal metric G*
+    0.00642671    0.00000000    0.00000000
+    0.00000000    0.00642671    0.00000000
+    0.00000000    0.00000000    0.06472982
+G G* is the identity: True
+(000): (000) has no d spacing
+```
+
+The two volumes agree because they are the same calculation: `cell.volume` is
+the square root of that determinant. In a tetragonal cell G is diagonal, its
+first two entries a squared and its third c squared, and G star is diagonal
+with the reciprocals, which is the whole of the tetragonal d spacing formula
+without anyone writing it down. Read across the diagonal of G star and the
+first entry is one over 155.60, the second the same and the third one over
+15.45; a reflection's one over d squared is h squared times the first plus k
+squared times the second plus l squared times the third. A monoclinic cell
+fills in one off-diagonal pair and a triclinic one fills in all three, and
+nothing else in the arithmetic changes.
+
+The off-diagonal entries print as zeros here after the rounding the script
+does. They are not exactly zero in floating point, being of the order of 1e-15
+in G and 1e-19 in G star, which is the inversion of a matrix whose diagonal
+spans an order of magnitude and is far below anything that matters.
+
+### 17.4 parameters, replace and to_dict
+
+Four names read a cell out again.
+
+`cell.parameter_names` is the tuple of names the crystal system leaves free,
+which is `CELL_PARAMETERS` for that system. `cell.parameters` is those names
+with their values, as a dict in the same order.
+
+`cell.replace(**changes)` returns a new cell of the same crystal system with
+the free parameters named in `changes` set to new values, the dependent ones
+following. A cell is frozen, so this is how a cell is moved: a refinement step
+that widens a by a thousandth, or the central differences the volume esd of
+Section 18 is propagated through. It raises `ValueError` naming the parameter
+when one is not free for the system, which is the check that stops a script
+setting `b` on a tetragonal cell and silently getting something that is not a
+cell of that system.
+
+`cell.to_dict()` is all six parameters by name with `crystal_system` beside
+them, which is the form for a CSV row, a JSON file or a project file table.
+
+Continues `cell_geometry.py`. Add these lines at the end of the file.
+
+```python
+print(f"parameter_names {cell.parameter_names}")
+print(f"parameters {cell.parameters}")
+wider = cell.replace(a=12.50)
+print(f"replace(a=12.50) gives a {wider.a}, b {wider.b}, c {wider.c}")
+print(f"its volume {wider.volume:.3f} against {cell.volume:.3f} cubic angstrom")
+print(f"to_dict {cell.to_dict()}")
+try:
+    cell.replace(b=12.50)
+except ValueError as error:
+    print(f"replace(b=12.50): {error}")
+```
+
+It prints the free parameters, a cell moved, and the dict.
+
+```text
+parameter_names ('a', 'c')
+parameters {'a': 12.474, 'c': 3.9305}
+replace(a=12.50) gives a 12.5, b 12.5, c 3.9305
+its volume 614.141 against 611.588 cubic angstrom
+to_dict {'a': 12.474, 'b': 12.474, 'c': 3.9305, 'alpha': 90.0, 'beta': 90.0, 'gamma': 90.0, 'crystal_system': 'tetragonal'}
+replace(b=12.50): cell parameter 'b' is not free in a tetragonal cell; the free parameters are a, c
+```
+
+`replace(a=12.50)` moved b with a, because b is not free to be left behind,
+and the volume followed. `replace(b=12.50)` is refused for the same reason.
+Note the difference between `parameters`, which gives the two free numbers and
+is what a fit reports, and `to_dict`, which gives all six and the system and
+is what a file records.
+
+## 18. lattice
+
+`xrdkit.lattice` is the refinement behind `xrdkit lattice`. It refines the
+free parameters of a cell together with the systematic errors that move every
+peak of a pattern, and unlike `refine_cell` in Section 16 it reports an
+estimated standard deviation for each. There are three public names: the
+refinement, the dataclass it returns, and a flattener for a CSV row.
+
+Everything the command does around this function is Section 7 and is not
+repeated here: choosing the start cell and the space group from the project
+file, refitting each peak as a K alpha 1 line of a doublet, recovering flagged
+satellites, and freeing the displacement for a pellet and the zero for a
+powder. A script that wants that work done should run the command.
+
+### 18.1 refine_lattice
+
+`refine_lattice(indexed, wavelength, start_cell, fit_zero=True,
+fit_displacement=False, radius_mm=None, start_zero=0.0)` refines by least
+squares and returns a `LatticeFit`.
+
+| Argument | What it does |
+| --- | --- |
+| `indexed` | the indexed peaks, from `index_peaks` or the first element of `index_and_refine` |
+| `wavelength` | the radiation wavelength in angstroms |
+| `start_cell` | the cell to start from, which sets the crystal system and so which parameters are free |
+| `fit_zero` | refine the zero point error. `False` holds it at `start_zero`, which is the thing to do when the instrument zero is known from a standard |
+| `fit_displacement` | refine the specimen displacement. Held at zero when `False` |
+| `radius_mm` | the goniometer radius in millimetres, needed only to refine a displacement |
+| `start_zero` | the zero point error to start from in degrees: refined from there when `fit_zero`, held there when not |
+
+The free vector is the cell parameters of the crystal system, in the order of
+`start_cell.parameter_names`, then the zero and then the displacement, and the
+last two appear only when they are refined. Each peak is modelled as its Bragg
+position for the trial cell, plus the zero, plus a displacement term of minus
+two s cos(theta) over R radians, the usual flat plate term: a specimen below
+the focusing circle moves every peak to low angle, most of all at low angle.
+
+The observed positions are `peak.two_theta` and not `corrected_two_theta`,
+because the zero point is what is being refined rather than something already
+assumed. An indexing run with a zero offset is still the right input; its
+assignments are used and its correction is not.
+
+Only peaks that matched exactly one reflection are used, so an assignment that
+was a choice between rivals cannot pull the cell. The fit needs at least three
+more such peaks than it has parameters, and raises `ValueError` when it has
+fewer, or when a displacement is asked for without a radius.
+
+A zero point error and a specimen displacement are not independent. One is a
+constant and the other follows the cosine of theta, and over a short angular
+range the two are very nearly the same parameter, so a fit that frees both on
+a narrow pattern reports small esds for two numbers trading against each
+other. Section 7.3 says why the choice between them belongs to the mounting
+and not to the data.
+
+### 18.2 LatticeFit
+
+| Field | What it holds |
+| --- | --- |
+| `cell` | the refined `Cell` |
+| `a`, `b`, `c`, `alpha`, `beta`, `gamma` | all six parameters of that cell, in angstroms and degrees |
+| `esd_a` to `esd_gamma` | the esd of each, or `None` for one that was not refined, whether held or fixed by the crystal system |
+| `volume`, `esd_volume` | the cell volume in cubic angstroms and its esd |
+| `zero`, `esd_zero` | the zero point error in degrees, added to every calculated position, and its esd or `None` |
+| `displacement`, `esd_displacement` | the specimen displacement in millimetres, positive below the focusing circle, or `None` when it was not refined, and its esd |
+| `radius_mm` | the radius the displacement was refined with, as it was given |
+| `n_peaks` | how many lone peaks the fit used |
+| `rms_two_theta` | the root mean square residual in degrees |
+| `residuals` | observed less calculated for each of those peaks, in degrees, as an array |
+| `hkl` | the reflection of each, as a list of tuples in the same order |
+| `converged` | whether the optimiser reported success |
+| `parameter_names` | the free cell parameters, in the order of the vector |
+| `covariance` | the covariance matrix of the refined parameters |
+
+`covariance` is in the order of the free vector: the cell parameters first,
+then the zero and the displacement where they were refined. It is the inverse
+curvature at the solution scaled by the reduced chi squared, so the error bars
+reflect how well the model actually fits rather than only how sharply the
+surface curves, and its off-diagonal entries are where the correlation between
+a parameter and a systematic error can be read.
+
+`esd_volume` is propagated through the cell block of that matrix, correlations
+included, the derivative of the volume with respect to each free parameter
+being taken by central differences. It is therefore not the same number as
+adding the parameters' own esds in quadrature, which is what `cell_volume` in
+Section 19 does with esds typed in by hand.
+
+`lattice_fit_to_dict(fit)` flattens the scalar fields into a dict ready for a
+CSV row: all six parameters with their esds, `c_over_a` for a tetragonal,
+hexagonal or trigonal cell, the volume and its esd, the zero, the displacement
+and the radius, the peak count, the rms and `converged`. The residuals, the
+hkl and the covariance are left out, being more than one value each. It is
+what writes the `lattice_STEM.csv` of Section 7.7.
+
+### 18.3 Refining a cell on a peak list you have edited
+
+A command cannot be handed an edited peak list. `xrdkit lattice` finds the
+peaks, refits them, indexes them and refines, and there is no point in the
+middle where a peak can be struck out. That is the reason this script exists,
+and it is the only reason: everything else it does the command does better,
+because the command refits every peak as a doublet first.
+
+Striking peaks out is worth doing when a pattern holds a second phase, or a
+tube line, or a reflection whose position is known to be poor. The honest way
+to record such an edit is to say which rows went and why. The script below
+makes the edit in code, by position in the peak list, so that the run is
+reproducible; deleting those rows from `results/library/peaks_pellet_a.csv` by
+hand and reading the file back is the same edit and gives the same answer.
+
+The two rows here are the ones Section 15.8 marked, the peaks whose nearest
+reflection is more than 0.02 degrees away once the cell is fixed. The sample
+is `pellet_a` fitted as the command fits a pellet: the displacement free, the
+zero held at zero, and the goniometer radius of 145 millimetres that its
+instrument table of Section 3.2 records.
+
+The whole of `lattice_fit.py`:
+
+```python
+import numpy as np
+
+from xrdkit.cell import Cell
+from xrdkit.indexing import index_and_refine
+from xrdkit.io import read_scan
+from xrdkit.lattice import refine_lattice
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+START_CELL = Cell.tetragonal(12.45, 3.94)
+SPACE_GROUP = "P4bm"
+WINDOW = (10.0, 100.0)
+RADIUS_MM = 145.0
+DROPPED_ROWS = (2, 41)
+
+scan = read_scan(SCAN_FILE)
+found = exclude_kalpha2(find_peaks(scan, two_theta_range=WINDOW))
+dropped = ", ".join(f"{found[row].two_theta:.3f}" for row in DROPPED_ROWS)
+peaks = [peak for row, peak in enumerate(found) if row not in DROPPED_ROWS]
+print(f"{len(found)} peaks found, rows {list(DROPPED_ROWS)} deleted: {dropped} degrees")
+
+indexed, _ = index_and_refine(
+    peaks,
+    start_cell=START_CELL,
+    wavelength=scan.wavelength,
+    space_group=SPACE_GROUP,
+)
+fit = refine_lattice(
+    indexed,
+    scan.wavelength,
+    START_CELL,
+    fit_zero=False,
+    fit_displacement=True,
+    radius_mm=RADIUS_MM,
+)
+
+print(f"parameter_names {fit.parameter_names}, converged {fit.converged}")
+for name in ("a", "b", "c", "alpha", "beta", "gamma"):
+    esd = getattr(fit, f"esd_{name}")
+    shown = "not refined" if esd is None else f"+/- {esd:.4f}"
+    print(f"  {name:5s} {getattr(fit, name):8.4f}  {shown}")
+print(f"V = {fit.volume:.3f} +/- {fit.esd_volume:.4f} cubic angstrom")
+print(f"zero {fit.zero:.4f} degrees, esd {fit.esd_zero}")
+print(
+    f"displacement {fit.displacement:.4f} +/- {fit.esd_displacement:.4f} mm, "
+    f"radius {fit.radius_mm:.0f} mm"
+)
+print(f"rms {fit.rms_two_theta:.4f} degrees on {fit.n_peaks} peaks")
+
+worst = int(np.argmax(np.abs(fit.residuals)))
+print(f"largest residual {fit.residuals[worst]:+.4f} degrees at {fit.hkl[worst]}")
+print(f"first three hkl used {fit.hkl[:3]}")
+deviations = np.sqrt(np.diag(fit.covariance))
+correlation = fit.covariance / np.outer(deviations, deviations)
+print("correlation of a, c and the displacement")
+for row in correlation:
+    print("  " + "  ".join(f"{value:+.3f}" for value in row))
+```
+
+It prints the edit, then every field of the fit that is one number, then the
+worst residual and its reflection, then the correlations.
+
+```text
+43 peaks found, rows [2, 41] deleted: 26.921, 94.318 degrees
+parameter_names ('a', 'c'), converged True
+  a      12.4740  +/- 0.0006
+  b      12.4740  not refined
+  c       3.9305  +/- 0.0002
+  alpha  90.0000  not refined
+  beta   90.0000  not refined
+  gamma  90.0000  not refined
+V = 611.593 +/- 0.0674 cubic angstrom
+zero 0.0000 degrees, esd None
+displacement -0.2020 +/- 0.0034 mm, radius 145 mm
+rms 0.0063 degrees on 32 peaks
+largest residual -0.0121 degrees at (0, 0, 1)
+first three hkl used [(0, 0, 1), (3, 2, 0), (2, 1, 1)]
+correlation of a, c and the displacement
+  +1.000  +0.120  -0.756
+  +0.120  +1.000  -0.527
+  -0.756  -0.527  +1.000
+```
+
+Take the parameters first. Only a and c are refined, so only those two carry
+an esd; b is equal to a and the three angles are 90 because the crystal system
+says so, and all four come back with an esd of `None` rather than of zero. The
+zero was held, so `esd_zero` is `None` as well while `zero` is the 0.0000
+degrees it was held at. `parameter_names` is `('a', 'c')`, which is the order
+of the first two rows and columns of the covariance.
+
+The displacement comes out at minus 0.2020 millimetres, about sixty times its
+own esd, and the rms is 0.0063 degrees on 32 peaks. Thirty two and not forty
+one, because every one of the forty one was indexed but nine of them carried
+more than one candidate and were left out.
+
+The correlations are the reason the section keeps saying the zero and the
+displacement are the same parameter twice over. With the zero held there are
+three free numbers and a and the displacement correlate at minus 0.756: a
+shift of the specimen and a change of the a axis do much the same thing to
+this pattern, and the fit can only tell them apart because they do it in
+different proportions at different angles. Had the zero been free as well
+there would have been a fourth row, correlating with the displacement more
+strongly still.
+
+Now compare the cell with Section 7.1, which is the same scan, the same start
+cell, the same space group and the same choice of what to refine, run through
+`xrdkit lattice pellet_a`.
+
+| | Section 7.1 | this script |
+| --- | --- | --- |
+| a, angstrom | 12.4740 +/- 0.0011 | 12.4740 +/- 0.0006 |
+| c, angstrom | 3.9295 +/- 0.0004 | 3.9305 +/- 0.0002 |
+| V, cubic angstrom | 611.426 +/- 0.136 | 611.593 +/- 0.067 |
+| displacement, mm | -0.2033 +/- 0.0069 | -0.2020 +/- 0.0034 |
+| rms, degrees | 0.0128 | 0.0063 |
+| peaks used | 33 | 32 |
+
+The a axis agrees to four decimal places and the displacement agrees well
+within one esd, which is the check that the script is doing the command's
+arithmetic. The c axis is a thousandth of an angstrom higher here, which is
+between two and five times the esds involved, and the volume follows it up by
+0.167 cubic angstrom.
+
+Two differences in the input account for that. The command refits every
+unflagged peak as the K alpha 1 line of a doublet before it indexes anything,
+which moves a blended position to where the K alpha 1 line really is, and it
+recovers one flagged peak that turned out to be a genuine reflection. This
+script uses the peak finder's positions as they stand, which are parabola
+vertices through a blend wherever the doublet is unresolved, and it never sees
+the recovered peak at all. It also has two rows struck out that the command
+kept.
+
+Do not read the smaller esds here as the better answer. They are smaller
+because the rms is half the command's, and the rms is half the command's
+partly because two of the worst-fitting peaks were deleted by hand. An esd
+measures the spread of the peaks that were kept. It says nothing about the
+peaks that were not, and nothing at all about the doublet bias that the
+command removes and this script leaves in. Where both can be run, quote the
+command.
+
+## 19. density
+
+`xrdkit.density` turns a cell and a composition into the density the material
+would have with no porosity, and compares a measured density with it. It is
+what `xrdkit density` and the density half of `xrdkit lattice` are, and
+Section 7.6 says what the answer is worth. There are six public names: the
+table of masses, two functions over a formula, one over a cell and two over a
+density.
+
+### 19.1 parse_formula, formula_mass and ATOMIC_MASSES
+
+`parse_formula(text)` reads a chemical formula and returns a dict of element
+symbol to atoms per formula unit, in order of first appearance. A formula is a
+run of element symbols, each followed by an optional count that may be
+fractional, as in `"Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"` or `"LaB6"`. Parentheses
+group symbols under one multiplier, as in `"Ca(OH)2"`, and may nest, and an
+element named more than once has its counts added.
+
+It raises `ValueError` when the formula is empty, when it holds anything other
+than element symbols, counts and balanced parentheses, when it names an
+element the mass table lacks, or when a pair of parentheses is empty, and the
+message quotes the text it could not read.
+
+`formula_mass(composition)` returns the mass of one formula unit in grams per
+mole. `composition` is either a mapping of element symbol to coefficient or a
+formula string, which it passes through `parse_formula` first, so the two ways
+of saying the same thing give the same number. It raises `ValueError` on an
+empty composition, an element with no mass in the table, or a negative
+coefficient, and from `parse_formula` on a formula it cannot read.
+
+`ATOMIC_MASSES` is the table behind both: a dict of element symbol to standard
+atomic weight in grams per mole, every element from hydrogen to uranium, from
+the IUPAC 2021 table. The fourteen elements whose standard atomic weight is an
+interval rather than a number, hydrogen, lithium, boron, carbon, nitrogen,
+oxygen, magnesium, silicon, sulphur, chlorine, argon, bromine, thallium and
+lead, take the conventional value IUPAC gives for them. The eight with no
+stable isotope and so no standard atomic weight, technetium, promethium,
+polonium, astatine, radon, francium, radium and actinium, take the mass number
+of their longest lived isotope. Read the dict to put a mass into a table of
+your own rather than copying one out.
+
+### 19.2 cell_volume
+
+`cell_volume(cell, esd=None)` returns the volume of `cell` in cubic angstroms
+and its esd, as a pair. `esd` maps free parameters of the cell, the names of
+`cell.parameter_names`, to their esds. The esd of the volume is propagated to
+first order, the derivative with respect to each free parameter taken by
+central differences with the dependent parameters moving along, and the
+parameters are treated as uncorrelated, since no covariance is given here. A
+free parameter left out of the mapping counts as zero, and the esd comes back
+as `None` when no mapping was given at all or when every esd in it is zero. It
+raises `ValueError` when `esd` names a parameter that is not free in the cell.
+
+That treatment is the difference between this function and
+`LatticeFit.esd_volume` of Section 18, which carries the full covariance of
+the fit and so the correlations between the parameters as well. Section 19.4
+puts the two side by side.
+
+### 19.3 theoretical_density and relative_density
+
+`theoretical_density(composition, z, volume_a3, esd_volume_a3=None)` returns
+the X-ray density in grams per cubic centimetre and its esd, as a pair. The
+density is Z M over N sub A V, with M the formula mass, Z the formula units
+per cell and V the cell volume. `composition` is whatever `formula_mass`
+takes. Only the volume carries an error here, so the density has the same
+relative esd as the volume, and the esd is `None` when no volume esd was
+given. It raises `ValueError` when Z or the volume is not positive, and from
+`formula_mass` on a composition it cannot read.
+
+`relative_density(measured, theoretical, esd_measured=None,
+esd_theoretical=None)` returns the measured density as a percentage of the
+theoretical one, and its esd, as a pair. The esd adds the two relative errors
+in quadrature. An esd left as `None` counts as zero, and the esd comes back as
+`None` only when neither was given. It raises `ValueError` when either density
+is not positive.
+
+### 19.4 A density from a refined cell
+
+The cell below is the one Section 18 refined, with its esds, typed into the
+settings the way `xrdkit density` is given a cell on the command line. The
+composition and the Z are the `composition` and `z` of the
+`[structures.ttb_p4bm]` table of Section 2.2. The Archimedes measurement is an
+example rather than one of the example files, which carry none, and it is
+there to show what `relative_density` does with one.
+
+The whole of `density_from_cell.py`:
+
+```python
+from xrdkit.cell import Cell
+from xrdkit.density import (
+    ATOMIC_MASSES,
+    cell_volume,
+    formula_mass,
+    parse_formula,
+    relative_density,
+    theoretical_density,
+)
+
+# Edit these lines for each new sample. Nothing below needs changing.
+FORMULA = "Sr0.4Ba0.5La0.1Nb1.9Ti0.1O6"
+Z = 5
+A, C = 12.4740, 3.9305
+ESD_A, ESD_C = 0.0006, 0.0002
+ARCHIMEDES, ESD_ARCHIMEDES = 5.15, 0.02
+
+composition = parse_formula(FORMULA)
+print(composition)
+print(f"{sum(composition.values()):.1f} atoms per formula unit")
+for element, n in composition.items():
+    print(
+        f"  {element:2s} {n:5.2f} x {ATOMIC_MASSES[element]:9.4f} "
+        f"= {n * ATOMIC_MASSES[element]:8.4f} g/mol"
+    )
+mass = formula_mass(FORMULA)
+print(f"M = {mass:.3f} g/mol per formula unit")
+print(f"from the dict: {formula_mass(composition) == mass}")
+
+cell = Cell.tetragonal(A, C)
+volume, esd_volume = cell_volume(cell, esd={"a": ESD_A, "c": ESD_C})
+print(f"V = {volume:.3f} +/- {esd_volume:.4f} cubic angstrom")
+print(f"without esds: {cell_volume(cell)}")
+
+density, esd_density = theoretical_density(FORMULA, Z, volume, esd_volume)
+print(f"theoretical density {density:.4f} +/- {esd_density:.4f} g/cm3")
+print(f"relative esd {esd_density / density:.2e}, volume {esd_volume / volume:.2e}")
+
+ratio, esd_ratio = relative_density(ARCHIMEDES, density, ESD_ARCHIMEDES, esd_density)
+print(f"relative density {ratio:.2f} +/- {esd_ratio:.2f} per cent")
+
+for description, call in (
+    ("an element the table lacks", lambda: formula_mass("SrNqO3")),
+    ("a formula it cannot read", lambda: parse_formula("Sr0.4-Ba0.5")),
+    ("an empty group", lambda: parse_formula("Ca()2")),
+):
+    try:
+        call()
+    except ValueError as error:
+        print(f"{description}: {error}")
+```
+
+It prints the composition and the mass term by term, then the volume, then the
+density, then the relative density, then three formulas it refuses.
+
+```text
+{'Sr': 0.4, 'Ba': 0.5, 'La': 0.1, 'Nb': 1.9, 'Ti': 0.1, 'O': 6.0}
+9.0 atoms per formula unit
+  Sr  0.40 x   87.6200 =  35.0480 g/mol
+  Ba  0.50 x  137.3270 =  68.6635 g/mol
+  La  0.10 x  138.9055 =  13.8905 g/mol
+  Nb  1.90 x   92.9064 = 176.5221 g/mol
+  Ti  0.10 x   47.8670 =   4.7867 g/mol
+  O   6.00 x   15.9990 =  95.9940 g/mol
+M = 394.905 g/mol per formula unit
+from the dict: True
+V = 611.588 +/- 0.0666 cubic angstrom
+without esds: (611.5884570180001, None)
+theoretical density 5.3611 +/- 0.0006 g/cm3
+relative esd 1.09e-04, volume 1.09e-04
+relative density 96.06 +/- 0.37 per cent
+an element the table lacks: unknown element 'Nq' in formula 'SrNqO3'
+a formula it cannot read: cannot read '-Ba0.5' in formula 'Sr0.4-Ba0.5'
+an empty group: empty group '()' in formula 'Ca()2'
+```
+
+The mass of 394.905 grams per mole is the M that `xrdkit lattice pellet_a`
+reported in Section 7.1, which is the same composition through the same table.
+Printing it term by term is worth doing once for a composition of your own:
+the commonest way to get a density badly wrong is a coefficient that does not
+mean what it was meant to, and a line of the table showing oxygen at six atoms
+and 95.994 grams per mole says at a glance whether the formula was read as
+intended.
+
+Now the volume. Section 18 refined a of 12.474044 and c of 3.930501 and got a
+volume of 611.593 cubic angstrom; this script types those in to four decimal
+places and gets 611.588. The five thousandths are the rounding, and they are a
+fair warning: a volume goes as a squared times c, so a thousandth of an
+angstrom of rounding in a shows up multiplied by two in the volume and again
+in the density.
+
+The esd differs too, and for a different reason: 0.0666 cubic angstrom here
+against 0.0674 in Section 18. Both are the same first order propagation
+through the same derivatives. What differs is what they are propagated
+through. Section 18 has the covariance of the fit, in which a and c correlate
+at plus 0.120, and pushes the esd through all of it. This function has two
+numbers typed in and no way of knowing they were ever correlated, so it adds
+them in quadrature as though they were independent, which here understates the
+esd by about one per cent. Quote the refinement's number where you have it,
+as Section 7.6 says.
+
+The theoretical density of 5.3611 grams per cubic centimetre carries a
+relative esd of 1.09 times ten to the minus four, exactly the volume's,
+because the formula mass and Z are taken as exact. Against them the measured
+density dominates the relative density entirely: the Archimedes value of 5.15
+plus or minus 0.02 is a relative error of four parts in a thousand, some
+thirty five times the cell's, so the 96.06 plus or minus 0.37 per cent is very
+nearly the weighing error alone. This is the usual state of affairs, and it is
+why Section 7.5 asks for a cell good to a thousandth of an angstrom and then
+stops asking for more.
+
+## 20. symmetry
+
+`xrdkit.symmetry` is where the reflection conditions, the equivalence of
+reflections and the multiplicities of Section 16 come from. It knows eight
+space groups, which is the limitation Section 10.1 records, and it works
+entirely in exact arithmetic: rotations are integer matrices and translations
+are fractions, so nothing here is ever decided by a tolerance.
+
+There are nine public names: the tuple of symbols, two functions that produce
+operations, one that tests a reflection against them, and five over a Laue
+group.
+
+### 20.1 What an operation is, and parse_xyz
+
+An operation is a pair (R, t): R a three by three integer rotation matrix, as
+a tuple of rows, and t a translation of three `Fraction` reduced modulo 1, so
+that a fractional position x goes to R x plus t. A reflection h, a row of
+three integers, transforms the other way round, as h times R.
+
+`parse_xyz(text)` returns the operation of one line of the xyz notation the
+`_symmetry_equiv_pos_as_xyz` field of a CIF uses, such as `"-y,x,z"` or
+`"x+1/2,-y+1/2,z"`. Spaces are ignored, case does not matter, and the
+translation is reduced modulo 1. It raises `ValueError` when the text does not
+have three components, when a component holds something it cannot read or has
+no x, y or z in it, when a term after the first carries no sign, or when a
+translation is not a multiple of one twelfth, which every space group's
+translations are.
+
+### 20.2 SUPPORTED_SPACE_GROUPS and space_group_operations
+
+`SUPPORTED_SPACE_GROUPS` is the tuple of symbols the module knows: `Pm-3m`,
+`P4mm`, `P4bm`, `P4/mbm`, `R3c`, `R3m`, `Pbnm` and `Amm2`. Each is stored as a
+few generators from International Tables Volume A in the setting its symbol
+names, with the centring translations among the generators. `R3c` and `R3m`
+are on hexagonal axes in the obverse setting, so a cell in the rhombohedral
+setting has to be converted first, and `Pbnm` is the cab setting of Pnma.
+
+`space_group_operations(symbol)` returns every operation of the group,
+centring included, with the identity first. The generators are expanded by
+closure once and the result is cached, so a zero offset search asking for the
+same group two hundred times pays for it once. It raises `ValueError` when the
+symbol is not one of the eight, listing the eight, and when the generators do
+not close to the order the group should have, which is a check on the table
+rather than on the caller.
+
+`xrdkit plot` and `xrdkit lattice` catch the first of those: given a symbol
+outside the eight they print a note and index without conditions, so a peak
+may be labelled with a reflection its group forbids and the labels are
+provisional until they are checked by hand. Section 10.1 is the whole of that
+limitation.
+
+### 20.3 is_absent
+
+`is_absent(hkl, operations)` returns whether a reflection is systematically
+absent under those operations. A reflection is absent when some operation
+leaves it fixed, h times R equal to h, while h dotted into t is not an
+integer. That one test gives the integral, zonal and serial conditions of a
+group together, without any of them being written out as a rule: the centring
+conditions come from the operations whose R is the identity, and a glide or a
+screw gives the zone or the row it forbids.
+
+Equivalent reflections share their absence, so `generate_reflections` tests
+one member of each family and drops the family on its answer.
+
+### 20.4 The Laue group and its orbits
+
+`laue_group(operations)` returns the Laue group of a set of operations: their
+distinct rotations together with the inversion, closed under multiplication
+and sorted. The translations play no part, which is why two space groups
+differing only in their glides share a Laue group.
+
+`holohedry(crystal_system)` returns the Laue group of the holohedral class of
+a crystal system, for when no space group is given: m-3m, 4/mmm, mmm, 6/mmm on
+hexagonal axes for both hexagonal and trigonal, 2/m with b unique, or -1. It
+raises `ValueError` on anything that is not one of the seven systems.
+
+`laue_orbit(hkl, laue)` returns the distinct reflections equivalent to a given
+one under that group, largest first, and `multiplicity(hkl, laue)` is how many
+there are.
+
+`representative(hkl, laue)` is the label of the orbit: of the members with no
+negative index, or of all of them if none qualifies, the lexicographically
+largest, h first, then k, then l. That gives h greater than or equal to k
+greater than or equal to 0 and l greater than or equal to 0 for a tetragonal
+group, (100) for the cubic family of that name, (110) rather than (2 -1 0) on
+hexagonal axes, and it keeps the sign of l in a monoclinic (h 0 -l). On
+obverse hexagonal axes -3m keeps (h k l) and (k h l) with l not zero in
+separate orbits, so a label never swaps h and k: (101) rather than (011),
+which is absent in R3m, and (104) and (012) in R3c, where (014) and (102) are
+absent.
+
+### 20.5 The group of the example structure
+
+P4bm is the space group of the `[structures.ttb_p4bm]` table of Section 2.2
+and of every indexing run in this guide. The script below takes it apart: the
+operations, the conditions they imply, the one absent reflection Section 16.8
+met, and the orbit of a reflection with its label and its multiplicity.
+
+The whole of `space_group.py`:
+
+```python
+from xrdkit.symmetry import (
+    SUPPORTED_SPACE_GROUPS,
+    holohedry,
+    is_absent,
+    laue_group,
+    laue_orbit,
+    multiplicity,
+    parse_xyz,
+    representative,
+    space_group_operations,
+)
+
+# Edit these lines for each new group. Nothing below needs changing.
+SPACE_GROUP = "P4bm"
+CRYSTAL_SYSTEM = "tetragonal"
+HKL = (3, 1, 0)
+ZONES = {
+    "0kl": [(0, k, 1) for k in range(1, 5)],
+    "h0l": [(h, 0, 1) for h in range(1, 5)],
+    "h00": [(h, 0, 0) for h in range(1, 5)],
+    "hk0": [(h, k, 0) for h in range(1, 4) for k in range(1, 4)],
+    "hhl": [(h, h, 1) for h in range(1, 5)],
+}
+
+
+def as_xyz(operation):
+    """Write an operation back in the notation parse_xyz reads."""
+    rotation, translation = operation
+    components = []
+    for row, shift in zip(rotation, translation):
+        terms = [
+            f"{'-' if value < 0 else '+'}{axis}"
+            for axis, value in zip("xyz", row)
+            if value
+        ]
+        if shift:
+            terms.append(f"+{shift}")
+        components.append("".join(terms).lstrip("+"))
+    return ",".join(components)
+
+
+print(
+    f"{len(SUPPORTED_SPACE_GROUPS)} space groups: {', '.join(SUPPORTED_SPACE_GROUPS)}"
+)
+operations = space_group_operations(SPACE_GROUP)
+print(f"{SPACE_GROUP} has {len(operations)} operations")
+for start in range(0, len(operations), 4):
+    row = operations[start : start + 4]
+    print("  " + "  ".join(f"{as_xyz(operation):16s}" for operation in row).rstrip())
+rotation, translation = parse_xyz("x+1/2,-y+1/2,z")
+print(f"parse_xyz rotation {rotation}")
+print(f"parse_xyz translation {translation}")
+
+for zone, family in ZONES.items():
+    absent = [hkl for hkl in family if is_absent(hkl, operations)]
+    print(f"{zone:4s} absent {absent}" if absent else f"{zone:4s} none absent")
+print(
+    f"(100) absent {is_absent((1, 0, 0), operations)}, "
+    f"(200) absent {is_absent((2, 0, 0), operations)}"
+)
+
+laue = laue_group(operations)
+print(f"Laue group of {SPACE_GROUP}: {len(laue)} rotations")
+print(f"same as the {CRYSTAL_SYSTEM} holohedry: {laue == holohedry(CRYSTAL_SYSTEM)}")
+orbit = laue_orbit(HKL, laue)
+print(f"orbit of {HKL}, largest first")
+for start in range(0, len(orbit), 4):
+    row = orbit[start : start + 4]
+    print("  " + "  ".join(f"{member!s:12s}" for member in row).rstrip())
+print(
+    f"representative {representative(HKL, laue)}, "
+    f"multiplicity {multiplicity(HKL, laue)}"
+)
+
+try:
+    space_group_operations("P4/mmm")
+except ValueError as error:
+    print(f"an unsupported symbol: {error}")
+```
+
+It prints the eight groups, the operations of this one written back in the
+notation they were read from, one operation as it is really held, the zones,
+the Laue group, an orbit, and the message an unsupported symbol gets.
+
+```text
+8 space groups: Pm-3m, P4mm, P4bm, P4/mbm, R3c, R3m, Pbnm, Amm2
+P4bm has 8 operations
+  x,y,z             -y,x,z            x+1/2,-y+1/2,z    -x,-y,z
+  y+1/2,x+1/2,z     -y+1/2,-x+1/2,z   y,-x,z            -x+1/2,y+1/2,z
+parse_xyz rotation ((1, 0, 0), (0, -1, 0), (0, 0, 1))
+parse_xyz translation (Fraction(1, 2), Fraction(1, 2), Fraction(0, 1))
+0kl  absent [(0, 1, 1), (0, 3, 1)]
+h0l  absent [(1, 0, 1), (3, 0, 1)]
+h00  absent [(1, 0, 0), (3, 0, 0)]
+hk0  none absent
+hhl  none absent
+(100) absent True, (200) absent False
+Laue group of P4bm: 16 rotations
+same as the tetragonal holohedry: True
+orbit of (3, 1, 0), largest first
+  (3, 1, 0)     (3, -1, 0)    (1, 3, 0)     (1, -3, 0)
+  (-1, 3, 0)    (-1, -3, 0)   (-3, 1, 0)    (-3, -1, 0)
+representative (3, 1, 0), multiplicity 8
+an unsupported symbol: unsupported space group 'P4/mmm'; the supported space groups are Pm-3m, P4mm, P4bm, P4/mbm, R3c, R3m, Pbnm, Amm2
+```
+
+The eight operations are the four rotations of a four fold axis and four
+mirrors, four of them carrying a translation of a half along a and b. That
+half is the b glide of the symbol, and everything the group forbids follows
+from it. No condition applies to hk0 or to hhl; a 0kl is absent when k is odd,
+an h0l when h is odd, and an h00 when h is odd, which is the h0l condition at
+l equal to zero. Those are the conditions International Tables lists for P4bm,
+and nothing in the module wrote them down: the script asked `is_absent` about
+a few reflections and read them off the answers.
+
+That is where the (100), (101) and (300) of Section 16.8 come from. (100) is
+absent and (200) is not, and any tungsten bronze pattern indexed in P4bm will
+have no reflection labelled (100), which is a thing worth knowing before a
+peak near 7 degrees is explained.
+
+The Laue group of P4bm has sixteen rotations and is the tetragonal holohedry,
+4/mmm. It must be: the Laue group throws the translations away, so the b glide
+that distinguishes P4bm from P4mm cannot survive into it, and the inversion is
+added whether the group has one or not. This is why the multiplicities in
+Section 16.8 are the same with a space group and without one, while the
+absences are not.
+
+The orbit of (310) holds eight reflections and its representative is (310)
+itself, the largest of the two members with no negative index. A multiplicity
+of eight is what `generate_reflections` puts on that row, and it is the number
+an intensity calculation needs: eight reflections of the same d spacing
+contribute to one peak.
