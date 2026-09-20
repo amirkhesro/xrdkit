@@ -5025,6 +5025,8 @@ which is the module refusing to turn noise into a crystallite size. `excess`
 is the observed less the instrumental FWHM over their combined esd, reported
 either way, so a caller can see how close a reflection came.
 
+`BroadeningCorrection` is what comes back.
+
 | Field | What it holds |
 | --- | --- |
 | `fwhm`, `esd_fwhm` | the sample FWHM and its esd, in the units given |
@@ -7280,9 +7282,9 @@ sites as `xrdkit.config.read_sites` gives them, each carrying its entry
 `label` for a library structure.
 
 `Sample` carries `key`, `file`, `instrument`, `structures` as a tuple of keys,
-`form`, and the optional `stage`, `temperature_c`, `archimedes` and `notes`,
-with `refine`, the keys of `[refine]` this sample overrides, checked but not
-yet merged.
+`form`, which is one of `FORMS`, powder or pellet, and the optional `stage`,
+`temperature_c`, `archimedes` and `notes`, with `refine`, the keys of
+`[refine]` this sample overrides, checked but not yet merged.
 
 `Refine` carries `two_theta`, `None` for the scan's own range; `background`;
 `max_passes` and `unsettled`, both by mode; and `followed`, the reflections
@@ -7700,6 +7702,18 @@ edits that set it up again in a new project read from the same CIF, so that
 one refinement can start where another ended. It is how the Rietveld modes of
 Section 29 carry their atoms from mode to mode. It raises `ValueError` when an
 atom the CIF lacks shares no site with one it has.
+
+Four more names in this module render a run as markdown rather than read it.
+`stage_status_table(result)` is the stage table of Section 8.14 as markdown
+lines; `log_tail(path, lines=40)` is the last lines of a GSAS-II log, empty
+when there is none; `failure_markdown(title, result, error, log, intro=())`
+is the `failure.md` a mode that did not finish leaves, from the error, the
+stages its run got through and that log tail; and `summary_markdown(title,
+entries, columns=(), intro=())` is the `summary.md` written over a sequence
+of modes. `run_sequence` of Section 29.4 writes both files, Section 8.14
+reads them and Section 8.16 is what a failure page says. They render the
+frame of a page; the per mode pages themselves are the `writeup` module of
+Section 30.
 
 ### 28.6 A refinement of your own, stage by stage
 
@@ -8140,6 +8154,24 @@ own run got through, then a `summary.md` over the modes run. That is
 this guide does not call it, because it would write over the results Part I
 recorded.
 
+Five more public names are the parts a run is assembled from, and a script
+reaches for them only to look at what a run would do before doing it.
+`resolve_inputs(project, sample, options=None)` is everything a run takes
+from the project file, as an `Inputs`: the sample, its instrument and
+instrument parameter file, the scan's range and the range to refine over, the
+resolved `Refine` settings, the phases as a tuple of `PhaseInput`, and
+whether the displacement is refined and the zero to start from. A
+`PhaseInput` is one phase as the project gives it, its structure key, spec,
+library entry, composition, formula units and start cell with where that cell
+came from. `mode_paths(project, sample, mode, options=None)`, which Section
+29.4's block uses, says where a mode's files go without running anything.
+`exchange_edits(atoms, plan)` adds an atom at occupancy zero for each
+exchanged element a site of an exchange group lacks, so that the element has
+somewhere to move to; the occupancies mode calls it before its own stages.
+And `HELD_INSTRUMENT` is the instrument parameters a run never refines, U, V,
+W, X, Y, Z and SH/L: they belong to the instrument file of Section 3, and
+`run_mode` checks after every run that none of them came back changed.
+
 The block below runs one mode instead: `fixed_atoms` on `powder_a`, starting
 from the Le Bail result of Section 8.3, with everything written to
 `results/library/pipeline_powder_a`. A mode looks for the previous mode's
@@ -8301,3 +8333,340 @@ ones, and a script reading them back has to say which it is using.
 a rejected stage shows fewer here than its builder produced: the coordinates
 mode shows four of the five stages Section 29.3 built, the `O sites` stage
 having been rolled back, which Section 8.8 reports and Section 8.16 reads.
+
+## 30. The modules you are not expected to call
+
+Four modules of the package are not documented as a library, because nothing
+you would write needs them. Each exists so that something else in Sections 12
+to 29 can be simple, and each is named here with what it is for, what calls
+it, and where to look if you turn out to need one of its functions after all.
+
+Nothing in this section has a worked example, and none of it is a stable
+promise in the way the rest of Part II is: these are the seams of the package,
+and they may move.
+
+### 30.1 cli
+
+`xrdkit.cli` is argparse over the library. Every `xrdkit` command in Part I is
+one function here that reads the arguments, calls the project loader of
+Section 27 and then the library, and prints what came back. There is no
+analysis in it; anything a command computes, it computes by calling something
+this guide has already documented, which is why Part II never has to say
+"unlike the command".
+
+Three names are public: `main(argv=None)`, the entry point the `xrdkit`
+executable runs; `build_parser()`, the whole argparse parser, which is what
+`--help` prints and what the tests read the options off; and `CommandError`,
+raised for anything a user can fix, which `main` catches and prints as one
+line on the error stream before exiting non-zero.
+
+The reason not to call it is that a command's arguments are a user interface
+and the library's are an API. If you want a command's behaviour in a script,
+call the functions it calls; if you want the command itself, run it. Section 9
+lists every file each command writes, which is what a script wrapping one
+actually needs to know.
+
+### 30.2 config
+
+`xrdkit.config` reads the settings tables that describe a structure's sites.
+It is the older half of what is now the project file: `xrdkit.toml` is read by
+`project.py` of Section 27, and `project.py` calls this module for the parts
+of a structure table that describe sites and compositions.
+
+Ten names are public. `load_config(path)`, `validate_config(config)` and
+`sample_settings(config, sample_id)` read and check a standalone settings
+file, which is the arrangement the older guide used and which the project file
+has replaced. `read_sites(value, where)` and `read_library_atoms(value,
+where)` read the two shapes a structure's `atoms` may take, the list of a
+CIF's sites and the table of a library entry's, and they are what gives
+`StructureSpec.atoms` of Section 27.2 its form. `check_composition` and
+`host_elements` settle which element hosts an added one, the rule Section 26.4
+applies and Section 8.11 explains. `wyckoff_multiplicity(wyckoff)` is the
+multiplicity of a Wyckoff position such as `"8d"`, which Section 26.1 uses to
+give each atom its multiplicity. `SITE_KIND` is the pattern a kind of site
+must match, and `ConfigError` is what any of them raises.
+
+Of those, `wyckoff_multiplicity` is the one worth knowing: it is a plain
+function of a string and Section 26 calls it directly. The rest are reached
+through `load_project` of Section 27.1, which is the supported way in.
+
+### 30.3 gsas2_driver
+
+`xrdkit.gsas2_driver` is the script that runs inside GSAS-II. Section 28.1
+says why it exists: GSAS-II brings its own Python and its own compiled
+extensions, so nothing in xrdkit imports it, and instead `run_job` of Section
+28.5 writes a job as JSON and runs this file under the GSAS-II Python as a
+subprocess. It imports nothing from xrdkit, because xrdkit is not installed
+there.
+
+It declares no `__all__` and is not re-exported from the package, so it has no
+public names in the sense Section 31 uses. `gsas2.py` does import a handful of
+its checkers, `accumulate_stages`, `check_broadening`, `check_atom_edits` and
+their neighbours, so that a job's stages are checked in your Python before
+GSAS-II is started at all, which is what lets `build_refine_job` of Section
+28.4 report a malformed stage in a tenth of a second rather than after a
+minute of loading.
+
+Everything a refinement can ask for is defined here rather than in `gsas2.py`:
+the two actions, `create` and `refine`; the stage flags Section 28.4 lists;
+the pass loop, the sanity check and the rollback of Section 8.16; and the
+shape of the result JSON that Sections 28.5 and 29.4 read back. The module
+docstring is the reference for all of it, and it is the place to look when a
+stage does not do what you expected.
+
+### 30.4 writeup
+
+`xrdkit.writeup` turns a result JSON into the markdown pages Section 8.14
+reads. It is called by `pipeline.py` of Section 29 after every mode, never by
+a user: its input is the result of a run that has just finished, which a
+script would have to have run to have.
+
+Five names are public. `lebail_markdown`, `fixed_atoms_markdown` and
+`structure_markdown` render a mode's page, the last one serving both the
+coordinates and the occupancies modes, each taking the result, the run's
+inputs and its site plan. `with_esd(value, esd, digits=6)` writes a value with
+its esd in brackets, the esd to one figure or two when it begins with a one,
+and marks a value with no esd as fixed; it is why every number in those pages
+is written the same way. `relative(value, root)` rewrites every absolute path
+in a result, however deeply nested, as a path under the project root with
+forward slashes, which is what keeps a machine's folder layout out of the
+pages a run leaves behind.
+
+The four markdown helpers `pipeline.py` uses around these live in `gsas2.py`
+instead and are in Section 28.5, which is the seam to be aware of: this module
+renders a mode, and those render the frame of a run.
+
+## 31. Every public name
+
+The table lists every public name in the package, alphabetically, with the
+module that defines it and the section of Part II that documents it. Public
+means a name in a module's `__all__`, and every name `xrdkit/__init__.py`
+re-exports, so `from xrdkit import find_peaks` and
+`from xrdkit.peaks import find_peaks` reach the same function and the table
+lists it once, under the module that defines it. The fields of a dataclass are
+not listed separately; they are in the table of the section that documents the
+class.
+
+Two hundred and one names are in it. `__version__`, the package version
+string, is the only one with no section of its own.
+
+Three things are worth knowing before reading it.
+
+A name in the table is one this guide documents, not one the package promises
+forever. The modules of Section 30 are in it too, since they have `__all__` of
+their own, and their rows point at Section 30 rather than at a worked example.
+
+`TetragonalCell` is the one deprecated name. It is kept so that older scripts
+keep working and returns `Cell.tetragonal(a, c)`, which is what to write
+instead, and Section 17 says so.
+
+Seven names are re-exported from `xrdkit/__init__.py` without being in the
+`__all__` of the module that defines them: `accepted_stages`,
+`failure_markdown`, `log_tail`, `stage_status`, `stage_status_table`,
+`stage_statuses` and `summary_markdown`, all of `gsas2`. They are public by
+every other measure, Sections 28.5 and 29.5 use three of them, and they are
+listed here under `gsas2`.
+
+| Name | Module | Documented in |
+| --- | --- | --- |
+| `accepted_stages` | `gsas2` | Section 28.5 |
+| `annotate_hkl` | `plotting` | Section 15.4 |
+| `apply_style` | `plotting` | Section 15.1 |
+| `assess_scan` | `quality` | Section 13.1 |
+| `ATOMIC_MASSES` | `density` | Section 19.1 |
+| `attribute_unexplained` | `phases` | Section 24.5 |
+| `bond_lengths` | `structure` | Section 26.1 |
+| `bond_limits` | `library` | Section 25.3 |
+| `BreadthModelFit` | `broadening` | Section 21.7 |
+| `BreadthModels` | `broadening` | Section 21.7 |
+| `BroadeningCorrection` | `broadening` | Section 21.6 |
+| `build_parser` | `cli` | Section 30.1 |
+| `build_refine_job` | `gsas2` | Section 28.4 |
+| `Caglioti` | `broadening` | Section 21.4 |
+| `Candidate` | `phases` | Section 24.5 |
+| `CandidateMatch` | `phases` | Section 24.4 |
+| `Cell` | `cell` | Section 17.1 |
+| `cell_contents` | `structure` | Section 26.3 |
+| `CELL_PARAMETERS` | `library` | Section 25.3 |
+| `cell_volume` | `density` | Section 19.2 |
+| `CellFit` | `indexing` | Section 16.4 |
+| `check_composition` | `config` | Section 30.2 |
+| `CIF_INDEX_COLUMNS` | `phases` | Section 24.2 |
+| `cod_fetch` | `phases` | Section 24.2 |
+| `cod_search` | `phases` | Section 24.1 |
+| `COD_URL` | `phases` | Section 24.5 |
+| `CodRecord` | `phases` | Section 24.1 |
+| `CommandError` | `cli` | Section 30.1 |
+| `component_size_strain` | `sizestrain` | Section 23.3 |
+| `ComponentSizeStrain` | `sizestrain` | Section 23.3 |
+| `composition_edits` | `structure` | Section 26.4 |
+| `ConfigError` | `config` | Section 30.2 |
+| `coordinates_stages` | `pipeline` | Section 29.2 |
+| `correct_broadening` | `broadening` | Section 21.6 |
+| `CRITERIA` | `quality` | Section 13.1 |
+| `CRYSTAL_SYSTEMS` | `library` | Section 25.3 |
+| `CYCLES` | `pipeline` | Section 29 |
+| `DEFAULT_ANIONS` | `library` | Section 25.3 |
+| `DEFAULT_BOND_LIMITS` | `library` | Section 25.3 |
+| `Distance` | `structure` | Section 26.1 |
+| `doublet_gaps` | `broadening` | Section 21.2 |
+| `estimate_zero_offset` | `indexing` | Section 16.6 |
+| `exchange_edits` | `pipeline` | Section 29.4 |
+| `exclude_kalpha2` | `peaks` | Section 14.4 |
+| `ExplainedPeak` | `phases` | Section 24.4 |
+| `failure_markdown` | `gsas2` | Section 28.5 |
+| `fetch_candidates` | `phases` | Section 24.2 |
+| `find_gsas2` | `gsas2` | Section 28.2 |
+| `find_peaks` | `peaks` | Section 14.2 |
+| `find_project` | `project` | Section 27.1 |
+| `fit_breadth_models` | `broadening` | Section 21.7 |
+| `fit_caglioti` | `broadening` | Section 21.4 |
+| `fit_instrument_widths` | `instrument` | Section 22.1 |
+| `fit_profile` | `broadening` | Section 21.3 |
+| `fixed_atoms_markdown` | `writeup` | Section 30.4 |
+| `fixed_atoms_stages` | `pipeline` | Section 29.2 |
+| `flag_kalpha2` | `peaks` | Section 14.3 |
+| `format_report` | `quality` | Section 13.1 |
+| `FORMS` | `project` | Section 27.2 |
+| `formula_mass` | `density` | Section 19.1 |
+| `generate_reflections` | `indexing` | Section 16.2 |
+| `gsas2_fwhm` | `gsas2` | Section 28.3 |
+| `GSAS2_HOME_VARIABLE` | `gsas2` | Section 28.2 |
+| `GSAS2_PYTHON_VARIABLE` | `gsas2` | Section 28.2 |
+| `Gsas2Error` | `gsas2` | Section 28.2 |
+| `Gsas2Install` | `gsas2` | Section 28.2 |
+| `height_spread_breadth` | `broadening` | Section 21.7 |
+| `HELD_INSTRUMENT` | `pipeline` | Section 29.4 |
+| `holohedry` | `symmetry` | Section 20.4 |
+| `host_elements` | `config` | Section 30.2 |
+| `index_and_refine` | `indexing` | Section 16.5 |
+| `index_peaks` | `indexing` | Section 16.3 |
+| `indexed_to_csv` | `indexing` | Section 16.7 |
+| `IndexedPeak` | `indexing` | Section 16.1 |
+| `indexing_summary` | `indexing` | Section 16.7 |
+| `Inputs` | `pipeline` | Section 29.4 |
+| `Instrument` | `project` | Section 27.2 |
+| `InstrumentRefinement` | `instrument` | Section 22.2 |
+| `integral_breadth` | `broadening` | Section 21.5 |
+| `interatomic_distances` | `structure` | Section 26.1 |
+| `is_absent` | `symmetry` | Section 20.3 |
+| `kalpha2_position` | `broadening` | Section 21.2 |
+| `kalpha2_wavelength` | `instrument` | Section 22.3 |
+| `lattice_fit_to_dict` | `lattice` | Section 18.2 |
+| `LatticeFit` | `lattice` | Section 18.1 |
+| `laue_group` | `symmetry` | Section 20.4 |
+| `laue_orbit` | `symmetry` | Section 20.4 |
+| `LE_BAIL_CYCLES` | `pipeline` | Section 29 |
+| `lebail_markdown` | `writeup` | Section 30.4 |
+| `lebail_stages` | `pipeline` | Section 29.2 |
+| `list_entries` | `library` | Section 25.2 |
+| `load_config` | `config` | Section 30.2 |
+| `load_entry` | `library` | Section 25.2 |
+| `load_project` | `project` | Section 27.1 |
+| `load_project_text` | `project` | Section 27.1 |
+| `log_tail` | `gsas2` | Section 28.5 |
+| `main` | `cli` | Section 30.1 |
+| `mark_peaks` | `plotting` | Section 15.5 |
+| `match_candidate` | `phases` | Section 24.4 |
+| `metric_tensor` | `structure` | Section 26.1 |
+| `MissingPhasesExtra` | `phases` | Section 24.5 |
+| `mode_paths` | `pipeline` | Section 29.4 |
+| `MODES` | `pipeline` | Section 29 |
+| `multiplicity` | `symmetry` | Section 20.4 |
+| `observed_peaks` | `phases` | Section 24.5 |
+| `occupancy_stages` | `pipeline` | Section 29.2 |
+| `Options` | `pipeline` | Section 29.4 |
+| `Outcome` | `pipeline` | Section 29.4 |
+| `parse_formula` | `density` | Section 19.1 |
+| `parse_xyz` | `symmetry` | Section 20.1 |
+| `PASS_TOLERANCE` | `pipeline` | Section 29 |
+| `Peak` | `peaks` | Section 14.2 |
+| `peaks_to_csv` | `peaks` | Section 14.4 |
+| `PhaseInput` | `pipeline` | Section 29.4 |
+| `PHASES_PAUSE_S` | `phases` | Section 24.2 |
+| `PHASES_TOLERANCE` | `phases` | Section 24.5 |
+| `PHASES_WINDOW` | `phases` | Section 24.5 |
+| `PhaseStart` | `pipeline` | Section 29.4 |
+| `PipelineError` | `pipeline` | Section 29.2 |
+| `plot_caglioti` | `plotting` | Section 15.6 |
+| `plot_pattern` | `plotting` | Section 15.2 |
+| `plot_rietveld` | `plotting` | Section 15.6 |
+| `plot_stacked` | `plotting` | Section 15.3 |
+| `ProfileFit` | `broadening` | Section 21.3 |
+| `Project` | `project` | Section 27.1 |
+| `PROJECT_FILE` | `project` | Section 27.1 |
+| `project_template` | `project` | Section 27.3 |
+| `pseudo_voigt` | `broadening` | Section 21.1 |
+| `pseudo_voigt_components` | `broadening` | Section 21.5 |
+| `pseudo_voigt_from_components` | `broadening` | Section 21.5 |
+| `rank_candidates` | `phases` | Section 24.5 |
+| `read_library_atoms` | `config` | Section 30.2 |
+| `read_scan` | `io` | Section 12.2 |
+| `read_sites` | `config` | Section 30.2 |
+| `read_xrdml` | `io` | Section 12.2 |
+| `read_xy` | `io` | Section 12.2 |
+| `Refine` | `project` | Section 27.2 |
+| `refine_cell` | `indexing` | Section 16.4 |
+| `refine_instrument` | `instrument` | Section 22.2 |
+| `refine_lattice` | `lattice` | Section 18.1 |
+| `refine_settings` | `project` | Section 27.3 |
+| `REFINED_KEYS` | `instrument` | Section 22.2 |
+| `Reflection` | `indexing` | Section 16.1 |
+| `relative` | `writeup` | Section 30.4 |
+| `relative_density` | `density` | Section 19.3 |
+| `representative` | `symmetry` | Section 20.4 |
+| `require_phases_extra` | `phases` | Section 24.5 |
+| `resolution_limit` | `sizestrain` | Section 23.4 |
+| `ResolutionLimit` | `sizestrain` | Section 23.4 |
+| `resolve_inputs` | `pipeline` | Section 29.4 |
+| `resolved_cell` | `project` | Section 27.3 |
+| `resolved_z` | `project` | Section 27.3 |
+| `results_dir` | `project` | Section 27.3 |
+| `run_job` | `gsas2` | Section 28.5 |
+| `run_mode` | `pipeline` | Section 29.4 |
+| `run_sequence` | `pipeline` | Section 29.4 |
+| `Sample` | `project` | Section 27.2 |
+| `sample_settings` | `config` | Section 30.2 |
+| `save_figure` | `plotting` | Section 15.7 |
+| `ScanQuality` | `quality` | Section 13.1 |
+| `scherrer_size` | `sizestrain` | Section 23.1 |
+| `scherrer_size_integral` | `sizestrain` | Section 23.1 |
+| `simulate_pattern` | `phases` | Section 24.3 |
+| `SimulatedReflection` | `phases` | Section 24.3 |
+| `Site` | `library` | Section 25.3 |
+| `SITE_KIND` | `config` | Section 30.2 |
+| `site_setup` | `structure` | Section 26.2 |
+| `space_group_operations` | `symmetry` | Section 20.2 |
+| `split_pseudo_voigt` | `broadening` | Section 21.1 |
+| `stage_status` | `gsas2` | Section 28.5 |
+| `stage_status_table` | `gsas2` | Section 28.5 |
+| `stage_statuses` | `gsas2` | Section 28.5 |
+| `standard_stages` | `gsas2` | Section 28.4 |
+| `START_BROADENING` | `pipeline` | Section 29 |
+| `start_from_result` | `pipeline` | Section 29.4 |
+| `StartPoint` | `pipeline` | Section 29.4 |
+| `structure_edits` | `gsas2` | Section 28.5 |
+| `structure_markdown` | `writeup` | Section 30.4 |
+| `StructureEntry` | `library` | Section 25.3 |
+| `StructureSpec` | `project` | Section 27.2 |
+| `summary_markdown` | `gsas2` | Section 28.5 |
+| `SUPPORTED_SPACE_GROUPS` | `symmetry` | Section 20.2 |
+| `TetragonalCell` | `indexing` | Section 17, deprecated; use `Cell.tetragonal` |
+| `theoretical_density` | `density` | Section 19.3 |
+| `toml_string` | `project` | Section 27.3 |
+| `TTB_CELL` | `indexing` | Section 16 |
+| `UnexplainedPeak` | `phases` | Section 24.5 |
+| `validate_config` | `config` | Section 30.2 |
+| `Verdict` | `quality` | Section 13.1 |
+| `__version__` | `xrdkit` | Section 31 |
+| `WIDTH_WINDOW` | `instrument` | Section 22.1 |
+| `WidthFit` | `instrument` | Section 22.1 |
+| `williamson_hall` | `sizestrain` | Section 23.2 |
+| `WilliamsonHall` | `sizestrain` | Section 23.2 |
+| `with_esd` | `writeup` | Section 30.4 |
+| `WORKFLOWS` | `quality` | Section 13.1 |
+| `write_cif_index` | `phases` | Section 24.2 |
+| `write_instprm` | `gsas2` | Section 28.3 |
+| `wyckoff_multiplicity` | `config` | Section 30.2 |
+| `XRDScan` | `io` | Section 12.1 |
+| `ZeroSearch` | `indexing` | Section 16.6 |
