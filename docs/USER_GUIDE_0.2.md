@@ -4822,3 +4822,1261 @@ itself, the largest of the two members with no negative index. A multiplicity
 of eight is what `generate_reflections` puts on that row, and it is the number
 an intensity calculation needs: eight reflections of the same d spacing
 contribute to one peak.
+
+## 21. broadening
+
+`xrdkit.broadening` measures peak widths properly and takes the instrument out
+of them. It has seventeen public names: four line shape functions, two that
+convert between a pseudo-Voigt and the Voigt it approximates, two dataclasses
+and two functions for the two fits, the correction and its dataclass, a model
+of specimen height spread, and the three names of the breadth model
+comparison.
+
+The widths `find_peaks` reports are read straight off the counts at half the
+prominence. They carry no esd, and they include whatever of the K alpha 2
+satellite falls inside the half maximum, which is all of it at low angle and a
+changing fraction of it once the pair begins to separate. That is good enough
+to find a peak and not good enough to measure a broadening, which is what this
+module exists for.
+
+Nothing here makes the instrument parameter file. `xrdkit instrument` does
+that, and Section 3 is the whole of it; Section 22 is the two functions the
+command is built from.
+
+### 21.1 The line shapes
+
+`pseudo_voigt(two_theta, centre, fwhm, eta)` is a line of unit area whose
+Lorentzian and Gaussian components share one FWHM and are mixed as `eta` times
+the Lorentzian plus one minus `eta` times the Gaussian, so `eta` runs from 0
+for a pure Gaussian to 1 for a pure Lorentzian.
+
+`split_pseudo_voigt(two_theta, centre, fwhm, eta, asymmetry)` is the same line
+with different half widths either side. The half width below `centre` is
+`fwhm` times one minus `asymmetry`, over two, and the half width above it
+`fwhm` times one plus `asymmetry`, over two, so `fwhm` is still the full width
+at half maximum and the two halves meet at the same height. A negative
+`asymmetry` puts a tail on the low angle side, which is what axial divergence
+does to a low angle reflection, and an asymmetry of zero is `pseudo_voigt`
+again. The refinement holds it short of plus or minus `MAX_ASYMMETRY`, 0.95,
+at which one half width would vanish.
+
+A symmetric line fitted to an asymmetric reflection misses its top and so
+misreads its width, which is why the split shape rather than the plain one is
+what `fit_profile` uses.
+
+### 21.2 Where the satellite falls, and how much room a doublet has
+
+`kalpha2_position(two_theta, wavelength_ratio=KALPHA2_RATIO)` returns where
+the K alpha 2 line of a K alpha 1 line at `two_theta` falls. The satellite
+diffracts at the same d spacing at the longer wavelength, so it always lies to
+high angle, and by more the higher the angle.
+`KALPHA2_INTENSITY_RATIO`, 0.5, is the integrated intensity of the satellite
+over its parent that `fit_profile` assumes.
+
+`doublet_gaps(two_theta, others, wavelength_ratio=KALPHA2_RATIO)` returns the
+clear space either side of a whole doublet, in degrees. `others` are the K
+alpha 1 positions of every other line that might lie nearby, and each brings
+its own satellite along. The first number runs down from the K alpha 1 line to
+the nearest line below it and the second up from the K alpha 2 line to the
+nearest line above. A line falling between the two members closes both gaps to
+zero, and a side with no line at all is infinitely clear.
+
+That is the function to select reflections with before any width is measured.
+A width is only the sample's if nothing else is under it, and what counts as
+nearby is not the peaks the finder happened to report but every reflection the
+cell calculates, which Section 23.6 uses it on.
+
+### 21.3 ProfileFit and fit_profile
+
+`fit_profile(two_theta, intensity, centre, fwhm_guess, window=None,
+fit_asymmetry=True, wavelength_ratio=KALPHA2_RATIO,
+intensity_ratio=KALPHA2_INTENSITY_RATIO)` fits one reflection as a K alpha 1
+and K alpha 2 doublet of split pseudo-Voigt lines on a linear background.
+
+The satellite is tied to its parent rather than fitted: it sits where the
+parent's d spacing puts the longer wavelength, carries `intensity_ratio` of
+its area, and shares its width, mixing parameter and asymmetry. The free
+parameters are therefore seven, the K alpha 1 position, FWHM, mixing
+parameter, asymmetry and area and the background level and slope, however many
+lines are drawn. Counts are weighted as Poisson, one over the counts or one,
+whichever is larger.
+
+| Argument | What it does |
+| --- | --- |
+| `two_theta`, `intensity` | the pattern, in degrees and counts |
+| `centre` | the starting K alpha 1 position in degrees |
+| `fwhm_guess` | the starting FWHM in degrees; a width read off the raw doublet, such as `Peak.fwhm`, is close enough |
+| `window` | the `(low, high)` range to fit, in degrees. By default it runs `WINDOW_FWHM`, ten, starting widths below `centre` and the same beyond the satellite, cut at the ends of the data |
+| `fit_asymmetry` | refine the asymmetry. `False` holds it at zero and the lines are symmetric |
+| `wavelength_ratio` | K alpha 2 over K alpha 1 wavelength |
+| `intensity_ratio` | K alpha 2 over K alpha 1 integrated intensity. Zero fits a single line, which is what monochromated radiation wants |
+
+It raises `ValueError` when `fwhm_guess` is not positive or the window holds
+no more points than there are free parameters.
+
+`ProfileFit` carries the result. `two_theta` and `fwhm` belong to the K alpha
+1 line and the satellite sits at `kalpha2_two_theta` with the same width and
+shape.
+
+| Field | What it holds |
+| --- | --- |
+| `two_theta`, `esd_two_theta` | the K alpha 1 position and its esd, in degrees |
+| `fwhm`, `esd_fwhm` | its full width at half maximum and its esd, in degrees |
+| `eta`, `esd_eta` | the mixing parameter and its esd |
+| `asymmetry`, `esd_asymmetry` | the asymmetry and its esd, the esd `None` when it was held |
+| `area`, `esd_area` | the integrated intensity of the K alpha 1 line above background, in counts times degrees |
+| `background`, `slope` | the linear background at the middle of the window and its slope per degree |
+| `kalpha2_two_theta` | where the satellite was placed, in degrees |
+| `window`, `n_points` | the range actually fitted and how many points it held |
+| `reduced_chi_squared`, `r_wp` | the residual per degree of freedom and the weighted profile R factor, as a fraction |
+| `converged` | whether the optimiser reported success |
+| `truncated` | whether the data stop within `MIN_MARGIN_FWHM`, three, fitted widths of either end of the doublet, so that a tail and the background under it went unseen |
+| `fitted` | the fitted curve over the window, for drawing or inspecting |
+
+Esds are scaled by the reduced chi squared, as every other fit in the kit
+scales its own.
+
+`converged` is not by itself the test of a good fit, and Section 21.8 shows
+why. A caller has to decide what to reject. `xrdkit lattice` rejects a fit
+that failed, did not converge, or moved the position by more than the found
+peak's own FWHM, and keeps the found position instead; that is the rule
+Section 7.2 describes and the one Section 23.6 applies.
+
+### 21.4 Caglioti and fit_caglioti
+
+`fit_caglioti(two_theta, fwhm, weights=None)` fits the Caglioti relation,
+FWHM squared equals U tan squared theta plus V tan theta plus W, by weighted
+least squares. The relation is linear in U, V and W, so this is a single
+linear solve, and the covariance is scaled by the reduced chi squared so that
+the esds reflect how well the relation really describes the widths. It needs
+at least `MIN_CAGLIOTI_POINTS`, four, widths, one more than the three
+parameters so that a residual is left to scale by.
+
+It raises `ValueError` when the arrays differ in length, there are fewer than
+four points, a position lies outside 0 to 180 degrees, a width is not
+positive, or a weight is negative or not finite.
+
+`Caglioti` carries U, V and W in degrees squared of two theta with their esds,
+`n_peaks`, `rms`, the root mean square of the FWHM residuals in degrees, and
+the 3 by 3 `covariance`. Two methods evaluate it: `fwhm(two_theta)` is the
+width at any angle, taken as zero where a fitted negative V drives the
+quadratic below zero outside the range of the data, and `fwhm_esd(two_theta)`
+is its esd from the covariance, `nan` where the width is zero.
+
+That pair is what makes the relation useful. A sample reflection almost never
+sits at the angle of a standard reflection, and `fwhm` and `fwhm_esd` give the
+instrumental width and its esd wherever it is wanted.
+
+A note on the weights. The docstring of `fit_caglioti` says that for a width
+with esd s the weight in the sum of squared FWHM squared residuals is
+1 / (2 FWHM s) squared, which is the weight that carries the esd of a width
+through to the square of that width. `fit_instrument_widths` in Section 22,
+which is the kit's own caller and what `xrdkit instrument` runs, passes
+1 / s squared instead, which weights the width rather than its square. Both
+are defensible and the fit is judged on the FWHM residuals either way, but the
+two are not the same weighting and the example standard gives U of 0.0107
+against 0.0105 depending on which is used. Pass the weights you mean.
+
+### 21.5 Between a pseudo-Voigt and the Voigt it stands for
+
+A pseudo-Voigt is a sum of a Gaussian and a Lorentzian; a Voigt is their
+convolution. Broadening adds in the convolution, so a correction has to go
+through the Voigt. Thompson, Cox and Hastings give the pair of approximations
+that pass between them, and two functions apply them.
+
+`pseudo_voigt_from_components(fwhm_gaussian, fwhm_lorentzian)` returns the
+FWHM and mixing parameter of the pseudo-Voigt matching the Voigt of those two
+components. It raises `ValueError` when either width is negative or both are
+zero.
+
+`pseudo_voigt_components(fwhm, eta)` is the inverse: the Gaussian and
+Lorentzian FWHM of the Voigt a pseudo-Voigt matches. The cubic is solved for
+the Lorentzian fraction of the width and the quintic then for the Gaussian
+width that makes up the rest, both by bracketed root finding, so the round
+trip closes. It raises `ValueError` when `fwhm` is not positive or `eta` lies
+outside 0 to 1.
+
+`integral_breadth(fwhm_gaussian, fwhm_lorentzian)` is the integral breadth of
+that Voigt, area over height, exact rather than approximated. It is the
+breadth for which the Scherrer constant is 1 whatever the crystallite shape,
+which is why Section 23 has a function that takes it.
+
+### 21.6 correct_broadening and BroadeningCorrection
+
+`correct_broadening(fwhm_obs, eta_obs, fwhm_inst, eta_inst, esd_fwhm_obs=0.0,
+esd_eta_obs=0.0, esd_fwhm_inst=0.0, esd_eta_inst=0.0,
+significance=DEFAULT_SIGNIFICANCE)` takes the instrumental broadening out of
+an observed profile.
+
+Both profiles are split into their Gaussian and Lorentzian FWHM. Lorentzians
+convolve by adding widths and Gaussians by adding squares, so the sample
+Lorentzian is the observed one less the instrumental one and the sample
+Gaussian is the root of the difference of squares, and the two are recombined
+into one pseudo-Voigt. Esds are propagated linearly through numerical
+derivatives, treating the four inputs as independent; the observed width and
+mixing parameter of a fit are in fact correlated, so the esds are indicative
+rather than exact, and the docstring says so.
+
+The important argument is `significance`, `DEFAULT_SIGNIFICANCE` of 2.0 by
+default. The observed width must exceed the instrumental one by that many
+combined esds before any sample breadth is reported at all. Below it the
+correction returns with `unresolved` true and every sample quantity `None`,
+which is the module refusing to turn noise into a crystallite size. `excess`
+is the observed less the instrumental FWHM over their combined esd, reported
+either way, so a caller can see how close a reflection came.
+
+| Field | What it holds |
+| --- | --- |
+| `fwhm`, `esd_fwhm` | the sample FWHM and its esd, in the units given |
+| `eta`, `esd_eta` | its mixing parameter and esd |
+| `fwhm_gaussian`, `fwhm_lorentzian` and their esds | the two components of the sample profile |
+| `integral_breadth`, `esd_integral_breadth` | the integral breadth of the corrected Voigt |
+| `fwhm_linear`, `fwhm_quadrature` and their esds | the two simple estimates for comparison: the plain difference of the widths, as if both were Lorentzian, and the root of the difference of their squares, as if both were Gaussian |
+| `gaussian_clipped`, `lorentzian_clipped` | whether that component came out below zero and was set to zero |
+| `unresolved` | whether the reflection failed the significance test, in which case every field above is `None` |
+| `excess` | the observed less the instrumental FWHM over their combined esd |
+
+A component that comes out below zero is set to zero and flagged rather than
+carried as a negative width, which noise can easily do to the Gaussian part of
+a size broadened peak; its esd is then that of the difference it was clipped
+from.
+
+### 21.7 What a breadth follows with angle
+
+Three things broaden a line and each has its own angular dependence, which is
+what lets them be told apart. Size broadening goes as one over cos theta,
+strain as tan theta, and a spread of specimen heights across the irradiated
+surface as cos theta, so a height spread narrows as the angle rises where the
+other two widen.
+
+`height_spread_breadth(two_theta, delta_s_mm, radius_mm)` is that third one. A
+specimen displaced by s shifts a line by minus two s cos theta over R radians,
+so a surface whose heights spread uniformly over `delta_s_mm` spreads the
+shift over twice that, and that spread is both the FWHM and the integral
+breadth of the broadening it adds. It raises `ValueError` when `delta_s_mm` is
+negative, `radius_mm` is not positive, or a position lies outside 0 to 180
+degrees. It is worth knowing about because a pressed pellet can have one and
+the ground standard of Section 3.1 cannot, so it is broadening the correction
+of Section 21.6 will not have removed.
+
+`fit_breadth_models(two_theta, breadth, esd, wavelength, radius_mm,
+k=BREADTH_MODEL_K)` fits the corrected breadths with four models and returns a
+`BreadthModels`. Three have one parameter each, `size`, `strain` and
+`height`, each a breadth proportional to its own dependence; the fourth,
+`size+height`, adds the size and height breadths in quadrature and is fitted
+in the squares of the two terms, each held at zero or above, which keeps the
+derivatives finite when either vanishes. Every fit weights by the breadth esds
+and is judged by its reduced chi squared on the breadths themselves, so the
+four compare directly. It needs at least `MIN_BREADTH_MODEL_POINTS`, three,
+breadths.
+
+`BreadthModelFit` carries one such fit: the `model` name, the `size` in the
+units of the wavelength, the `strain`, the `delta_s` in millimetres, each with
+its esd and each `None` when the model lacks it or it fits at zero, the
+`chi_squared`, `degrees_of_freedom` and `reduced_chi_squared`, the
+`normalised_residuals`, the three terms in radians, and `at_bound`, which
+marks a two parameter fit that has fallen back onto one term. Its
+`breadth(two_theta)` method evaluates the fitted model. `BreadthModels` holds
+the four by name in `fits` and offers `preferred`, the one with the lowest
+reduced chi squared.
+
+Read `preferred` with the caution the docstring asks for. Size and height
+breadths go as one over cos theta and cos theta, both close to flat over a
+narrow range of angle, so the two parameter fit is strongly correlated and its
+esds are large unless the reflections span widely. A model winning on reduced
+chi squared over a short range of angle is not the same as a model being
+right.
+
+### 21.8 Fitting one reflection of a standard
+
+The script fits the strongest reflection of the example standard, prints every
+field the fit carries, and then does the same thing at an angle where there is
+no reflection at all, which is what a caller has to be able to tell apart.
+
+The whole of `profile_fit.py`:
+
+```python
+from xrdkit.broadening import (
+    doublet_gaps,
+    fit_profile,
+    integral_breadth,
+    kalpha2_position,
+    pseudo_voigt_components,
+    pseudo_voigt_from_components,
+)
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+
+# Edit these lines for each new standard. Nothing below needs changing.
+SCAN_FILE = "data/standards/lab6.xrdml"
+WINDOW = (10.0, 98.0)
+REFLECTION = 1
+EMPTY_AT = 58.0
+
+scan = read_scan(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=WINDOW))
+peak = peaks[REFLECTION]
+print(
+    f"{len(peaks)} reflections; fitting the one found at {peak.two_theta:.3f} degrees"
+)
+print(f"its found width is {peak.fwhm:.4f} degrees, which is only the guess")
+
+fit = fit_profile(scan.two_theta, scan.intensity, peak.two_theta, peak.fwhm)
+print(f"two_theta    {fit.two_theta:.4f} +/- {fit.esd_two_theta:.4f} degrees")
+print(f"fwhm         {fit.fwhm:.4f} +/- {fit.esd_fwhm:.4f} degrees")
+print(f"eta          {fit.eta:.3f} +/- {fit.esd_eta:.3f}")
+print(f"asymmetry    {fit.asymmetry:.3f} +/- {fit.esd_asymmetry:.3f}")
+print(f"area         {fit.area:.1f} +/- {fit.esd_area:.1f} counts degrees")
+print(f"background   {fit.background:.1f} counts, slope {fit.slope:.1f} per degree")
+print(f"kalpha2      {fit.kalpha2_two_theta:.4f} degrees")
+print(f"window       {fit.window[0]:.3f} to {fit.window[1]:.3f}, {fit.n_points} points")
+print(
+    f"reduced chi squared {fit.reduced_chi_squared:.3f}, Rwp {100 * fit.r_wp:.2f} per cent"
+)
+print(
+    f"converged {fit.converged}, truncated {fit.truncated}, fitted {fit.fitted.shape}"
+)
+
+print(f"kalpha2_position of the found centre {kalpha2_position(peak.two_theta):.4f}")
+gaussian, lorentzian = pseudo_voigt_components(fit.fwhm, fit.eta)
+print(f"components   G {gaussian:.4f}, L {lorentzian:.4f} degrees")
+width, mixing = pseudo_voigt_from_components(gaussian, lorentzian)
+print(f"back again   fwhm {width:.4f} degrees, eta {mixing:.3f}")
+print(f"integral breadth {integral_breadth(gaussian, lorentzian):.4f} degrees")
+others = [other.two_theta for other in peaks if other is not peak]
+below, above = doublet_gaps(peak.two_theta, others)
+print(f"clear either side {below:.3f} and {above:.3f} degrees")
+
+empty = fit_profile(scan.two_theta, scan.intensity, EMPTY_AT, peak.fwhm)
+print(f"at {EMPTY_AT:.0f} degrees, where there is no reflection:")
+print(f"  converged {empty.converged}, Rwp {100 * empty.r_wp:.2f} per cent")
+print(f"  fwhm {empty.fwhm:.4f} +/- {empty.esd_fwhm:.4f} degrees")
+print(f"  area {empty.area:.1f} +/- {empty.esd_area:.1f} counts degrees")
+```
+
+It prints the found peak, the fit, the conversions, the clear space around the
+doublet, and then the fit to nothing.
+
+```text
+14 reflections; fitting the one found at 30.365 degrees
+its found width is 0.0971 degrees, which is only the guess
+two_theta    30.3678 +/- 0.0008 degrees
+fwhm         0.0781 +/- 0.0014 degrees
+eta          0.626 +/- 0.026
+asymmetry    -0.364 +/- 0.015
+area         1929.7 +/- 17.3 counts degrees
+background   612.3 counts, slope 34.7 per degree
+kalpha2      30.4451 degrees
+window       29.396 to 31.395, 93 points
+reduced chi squared 7.041, Rwp 5.67 per cent
+converged True, truncated False, fitted (93,)
+kalpha2_position of the found centre 30.4425
+components   G 0.0516, L 0.0430 degrees
+back again   fwhm 0.0781 degrees, eta 0.626
+integral breadth 0.1039 degrees
+clear either side 8.971 and 6.976 degrees
+at 58 degrees, where there is no reflection:
+  converged True, Rwp 3.95 per cent
+  fwhm 0.0115 +/- 0.2145 degrees
+  area 1.2 +/- 9.4 counts degrees
+```
+
+Start with the width. The finder gave 0.0971 degrees and the fit gives 0.0781
+plus or minus 0.0014. The difference is the satellite: at 30 degrees the K
+alpha 2 line sits 0.077 degrees above its parent, well inside the half
+maximum, so the raw width is the width of the pair and the fitted width is the
+width of the K alpha 1 line alone. That is the whole reason this module
+exists: the raw width is a quarter larger than the real one, in a quantity
+that later gets turned into a crystallite size.
+
+The asymmetry is minus 0.364, a genuinely lopsided line with the tail to low
+angle, which is axial divergence and is what the split shape is for. The
+mixing parameter of 0.626 says the line is more Lorentzian than Gaussian, and
+the components bear that out: a Gaussian FWHM of 0.0516 and a Lorentzian of
+0.0430 degrees, which `pseudo_voigt_from_components` turns straight back into
+the 0.0781 and 0.626 they came from. The integral breadth of the same Voigt is
+0.1039 degrees, a third as much again as the FWHM, as it is for any profile
+with appreciable Lorentzian content.
+
+The reduced chi squared of 7.0 is worth a word, because it looks alarming and
+is not a reason to reject this fit. Poisson weights on a strong reflection of
+a standard measure the counting statistics exactly, and everything the split
+pseudo-Voigt does not describe, which on a sharp line is most of the true peak
+shape, lands in the residual. An Rwp of 5.7 per cent on a reflection of this
+height is a good fit of a shape that is not quite the right shape. What the
+number does mean is that the esds are scaled by it, so the esd of 0.0014
+degrees on the width is already widened to account for the misfit.
+
+Now the last three lines. At 58 degrees, where the standard has no reflection,
+the fit still converges, and it reports a width of 0.0115 plus or minus 0.2145
+degrees and an area of 1.2 plus or minus 9.4 counts times degrees. `converged`
+is `True` and the answer is nothing at all: both the width and the area are
+consistent with zero and their esds are larger than their values. A script
+that filters on `converged` alone will collect results like this one and
+average them into whatever comes next. Filter on the esds as well, and on how
+far the position moved from where the peak was found, which Section 23.6 does.
+
+## 22. instrument
+
+`xrdkit.instrument` is the two halves of `xrdkit instrument`. Section 3 is the
+command, what the instrument parameter file holds and why a standard is
+needed; this section is the functions, and it points back rather than
+repeating any of it.
+
+There are seven public names: two constants, the two functions, the frozen
+dataclass each returns, and a reader for the K alpha 2 wavelength of an
+`.xrdml`.
+
+The two functions are separate on purpose. `fit_instrument_widths` fits the
+reflections of a standard and the Caglioti relation through their widths,
+which takes a second or two and needs no GSAS-II at all. `refine_instrument`
+takes that fit as the starting point of a GSAS-II refinement, which measures
+the Lorentzian terms and the asymmetry rather than guessing them and writes
+the file every later refinement reads. Splitting them means the width fit,
+which is quick and answerable on its own, can be looked at before the
+refinement is run, and it means a script that only wants the instrumental
+resolution function never has to have GSAS-II installed.
+
+### 22.1 fit_instrument_widths and WidthFit
+
+`fit_instrument_widths(scan, window=WIDTH_WINDOW)` fits the widths of a
+standard's reflections to the Caglioti relation and returns a `WidthFit`.
+
+Every peak found inside `window` has its K alpha 2 satellites excluded and is
+then fitted as a split pseudo-Voigt doublet by `fit_profile`, and the widths
+of the fits that converged go into `fit_caglioti` weighted by one over the
+square of each width's own esd. `WIDTH_WINDOW` is ten to ninety-eight degrees:
+below the lower limit the reflections of a standard are few and asymmetric,
+and above the upper one the doublet is wide enough that the fit is about the
+splitting rather than the instrument. Section 3.3 is the `--window` option
+that changes it.
+
+It raises `ValueError` when the scan carries no wavelength, or when fewer than
+three reflections converged, three being the least a three parameter relation
+can be fitted to at all.
+
+`WidthFit` is frozen, so nothing downstream can alter a measured instrument by
+accident.
+
+| Field | What it holds |
+| --- | --- |
+| `n_peaks` | how many reflections the fit used |
+| `u`, `v`, `w` and their esds | the Caglioti parameters in degrees squared of two theta |
+| `rms` | the root mean square of the FWHM residuals, in degrees |
+| `wavelength` | the scan's K alpha 1 wavelength, in angstroms |
+| `window` | the two theta range the widths were fitted over |
+| `two_theta`, `fwhm` | the reflections used and their fitted widths, as tuples |
+| `covariance` | the 3 by 3 covariance of U, V and W, as a tuple of tuples |
+
+`fit.caglioti` is the same fit as a `Caglioti` of Section 21.4, which is what
+carries the `fwhm` and `fwhm_esd` methods, and what
+`xrdkit.gsas2.write_instprm` takes. A script wanting the instrumental width
+at an arbitrary angle asks for `fit.caglioti.fwhm(angle)`.
+
+One thing this fit does not give is the instrumental mixing parameter.
+`correct_broadening` needs `eta_inst` beside `fwhm_inst`, and nothing in
+`WidthFit` or `Caglioti` carries one: the Caglioti relation is about widths
+only. A script has to get the instrumental `eta` from the standard's own
+profile fits, which is what Section 23.5 does and says.
+
+### 22.2 refine_instrument and InstrumentRefinement
+
+`refine_instrument(fit, scan_file, cif, phase, cell, folder, stem, work,
+install=None, radius_mm=None)` refines the instrument parameters in GSAS-II,
+starting from a `WidthFit`.
+
+The width fit is written as `<stem>_start.instprm` in `folder` and is what the
+refinement starts from. The standard's phase is held at `cell`, with the
+crystallite size set large and the microstrain at zero, `STANDARD_BROADENING`,
+because a standard is ground and sieved to contribute no broadening of its own
+and leaving those at the GSAS-II defaults would let the instrument terms
+absorb the difference. The stages are `standard_stages` without the cell
+stage, since holding the certified cell is the point of using a standard, and
+each runs `CYCLES`, ten. The file GSAS-II exports is copied to
+`<stem>.instprm` in `folder`, and that is the file every later refinement
+reads.
+
+`REFINED_KEYS` is the order the parameters are freed in: `Zero`, `U`, `V`,
+`W`, `X`, `Y` and `SH/L`, the zero, then the Gaussian width terms, then the
+Lorentzian terms, then the axial divergence.
+
+`InstrumentRefinement`, also frozen, carries `parameters`, a dict of each of
+those keys to its refined `value` and `esd`; `rwp` and `gof` from the last
+stage; `stages`, the names in order; `instprm` and `start_instprm`, the two
+paths; and `result`, the whole job result for a caller that wants more. It
+raises `Gsas2Error` when GSAS-II failed and `KeyError` when the run left no
+final instrument parameters.
+
+This guide does not run it. The refinement writes into `data/standards` and
+under `work/`, which belong to the command, and the record of what it came to
+on the example standard is already in Section 3.2: the five stages, an Rwp of
+7.160 per cent, a goodness of fit of 1.909, and every refined parameter with
+its esd, including the negative `Y` that section says what to do about. The
+refined `U`, `V` and `W` printed there are in the centidegrees squared GSAS-II
+works in, which is why they look nothing like the ones the width fit gives.
+
+### 22.3 kalpha2_wavelength
+
+`kalpha2_wavelength(path)` returns the K alpha 2 wavelength an `.xrdml`
+records, or `None`. Any other suffix gives `None`, as does a file that cannot
+be parsed or that carries no such element, so a two or three column text
+pattern always answers `None` and is taken as K alpha 1 only unless the
+project file says otherwise. It is how `xrdkit instrument` fills in the
+`wavelength` pair of the instrument table it appends, the one Section 3.2
+prints.
+
+### 22.4 The width fit of the example standard
+
+The script is the first half of `xrdkit instrument` and nothing else, run on
+the same standard scan with the same default window, so the numbers can be
+read straight against Section 3.2.
+
+The whole of `instrument_widths.py`:
+
+```python
+from xrdkit.instrument import WIDTH_WINDOW, fit_instrument_widths
+from xrdkit.io import read_scan
+
+# Edit these lines for each new standard. Nothing below needs changing.
+STANDARD_FILE = "data/standards/lab6.xrdml"
+AT = (25.0, 40.0, 60.0, 80.0)
+
+scan = read_scan(STANDARD_FILE)
+fit = fit_instrument_widths(scan)
+print(
+    f"peaks   {fit.n_peaks} fitted from {fit.window[0]:.0f} to {fit.window[1]:.0f} degrees"
+)
+print(f"U = {fit.u:.4f}, V = {fit.v:.4f}, W = {fit.w:.4f} degrees squared")
+print(f"rms of the width fit {fit.rms:.5f} degrees")
+print(f"esds    {fit.esd_u:.4f}, {fit.esd_v:.4f}, {fit.esd_w:.4f}")
+print(f"wavelength {fit.wavelength} angstrom, default window {WIDTH_WINDOW}")
+
+print("  two_theta  measured  Caglioti  difference")
+for angle, width in zip(fit.two_theta, fit.fwhm):
+    modelled = fit.caglioti.fwhm(angle)
+    print(f"  {angle:9.3f}  {width:8.4f}  {modelled:8.4f}  {width - modelled:+10.4f}")
+
+print("the resolution function away from the measured reflections")
+for angle in AT:
+    print(
+        f"  {angle:5.1f} degrees  {fit.caglioti.fwhm(angle):.4f}"
+        f" +/- {fit.caglioti.fwhm_esd(angle):.4f} degrees"
+    )
+```
+
+It prints the fit, then every reflection with the width the relation puts
+there, then the resolution function at four angles no reflection sits at.
+
+```text
+peaks   14 fitted from 10 to 98 degrees
+U = 0.0107, V = -0.0122, W = 0.0085 degrees squared
+rms of the width fit 0.00254 degrees
+esds    0.0017, 0.0020, 0.0006
+wavelength 1.540598 angstrom, default window (10.0, 98.0)
+  two_theta  measured  Caglioti  difference
+     21.346    0.0852    0.0811     +0.0041
+     30.368    0.0781    0.0772     +0.0009
+     37.424    0.0728    0.0747     -0.0019
+     43.488    0.0720    0.0730     -0.0009
+     48.938    0.0710    0.0718     -0.0008
+     53.966    0.0709    0.0710     -0.0001
+     63.196    0.0721    0.0709     +0.0012
+     67.525    0.0728    0.0715     +0.0014
+     71.722    0.0732    0.0725     +0.0008
+     75.820    0.0775    0.0740     +0.0035
+     79.846    0.0823    0.0759     +0.0063
+     83.819    0.0793    0.0784     +0.0009
+     87.769    0.0786    0.0815     -0.0029
+     95.648    0.0884    0.0897     -0.0014
+the resolution function away from the measured reflections
+   25.0 degrees  0.0794 +/- 0.0013 degrees
+   40.0 degrees  0.0739 +/- 0.0007 degrees
+   60.0 degrees  0.0708 +/- 0.0008 degrees
+   80.0 degrees  0.0760 +/- 0.0010 degrees
+```
+
+The first three lines are the first three lines of Section 3.2, figure for
+figure: fourteen reflections from ten to ninety-eight degrees, U of 0.0107, V
+of minus 0.0122, W of 0.0085 degrees squared and an rms of 0.00254 degrees.
+They have to be, because the command calls this function and prints what it
+returns.
+
+The table underneath is what the rms of 0.00254 degrees is made of. The widths
+run from 0.0709 degrees at 54 degrees up to 0.0884 at 95, a shallow bowl with
+its minimum near 60 degrees, which is the shape a negative V gives. Most
+reflections sit within a thousandth of a degree of the relation. Two do not:
+the first reflection at 21.3 degrees is 0.0041 high and the one at 79.8
+degrees is 0.0063 high. The first is the most asymmetric reflection in the
+scan, where the split shape is working hardest; the second is the weakest, at
+four and a half per cent of the strongest, and the same reflection whose
+mixing parameter comes out at 0.31 against 0.6 everywhere else, which is a fit
+with too little signal rather than a real feature of the instrument.
+
+The last four lines are the point of fitting a relation rather than tabulating
+widths. No sample reflection will sit at 21.346 or 30.368 degrees, and the
+instrumental width at 25, 40, 60 and 80 degrees is what a correction actually
+needs. The esds there, one to two thousandths of a degree, are what
+`correct_broadening` combines with the sample's own esd, which on a good
+sample reflection is three to seven thousandths, to decide whether a
+reflection is broadened at all. Two of that combination is the threshold, so a
+reflection on this instrument has to be the best part of a hundredth of a
+degree wider than the standard before anything can be said about it at all.
+Section 23 is what follows from that.
+
+## 23. sizestrain
+
+`xrdkit.sizestrain` turns sample breadths into a crystallite size and a
+microstrain. It is the one module in the kit that no command touches, and that
+is deliberate rather than an omission: every step from a peak width to a size
+rests on a judgement about which reflections to use that a command cannot make
+for you. This section is therefore the longest of the three and carries a
+whole analysis rather than a demonstration.
+
+Every function here takes breadths that already have the instrument taken out,
+in degrees of two theta, such as `correct_broadening` of Section 21.6 gives,
+and works in radians internally. Sizes come out in the units of the
+wavelength, angstroms in practice. There are eight public names: three
+dataclasses, four functions and one alias, together with `SCHERRER_K`, 0.9,
+the constant for a FWHM, and `INTEGRAL_BREADTH_K`, 1.0, the constant for an
+integral breadth.
+
+### 23.1 scherrer_size and scherrer_size_integral
+
+`scherrer_size(fwhm_deg, two_theta, wavelength, k=SCHERRER_K,
+esd_fwhm=0.0)` returns the Scherrer size and its esd, as a pair, from one
+breadth: D equals K lambda over beta cos theta. Scalars give floats and arrays
+give arrays.
+
+The whole breadth is put down to size, so D is an apparent size along the
+normal to the reflecting planes, and a lower bound on the real size if the
+line is also strain broadened. The esd comes from that of the breadth alone,
+the position being taken as exact. It raises `ValueError` when a breadth, the
+wavelength or `k` is not positive, a position lies outside 0 to 180 degrees,
+or an esd is negative.
+
+`scherrer_size_integral(breadth_deg, two_theta, wavelength,
+k=INTEGRAL_BREADTH_K, esd_breadth=0.0)` is the same function with the constant
+for an integral breadth. Area over height is the breadth for which K equal to
+1 gives the volume weighted column length whatever the crystallite shape,
+which is why it has a name of its own rather than being a constant a caller
+has to remember.
+
+Match the constant to the breadth. A FWHM with K of 1, or an integral breadth
+with K of 0.9, is an error of ten per cent in the size and nothing warns about
+it.
+
+### 23.2 williamson_hall and WilliamsonHall
+
+`williamson_hall(two_theta, breadth_deg, esd, wavelength, k=SCHERRER_K)` fits
+beta cos theta equals K lambda over D plus epsilon times 4 sin theta, by
+weighted linear least squares, and returns a `WilliamsonHall`.
+
+Size broadening goes as one over cos theta and strain broadening as tan theta,
+so plotting beta cos theta against 4 sin theta puts the size in the intercept
+and the strain in the slope. Both are free: the line is never forced through
+the origin, so a crystallite too large to broaden anything shows up as an
+intercept consistent with zero rather than being assumed away. Each point is
+weighted by one over the square of its own esd in the plotted quantity. It
+needs at least `MIN_WILLIAMSON_HALL_POINTS`, three, so that a two parameter
+line is left a residual.
+
+It raises `ValueError` when the arrays differ in length, there are fewer than
+three points, a position lies outside 0 to 180 degrees, a breadth is not
+finite, an esd is not positive, or the wavelength or `k` is not positive.
+
+| Field | What it holds |
+| --- | --- |
+| `size`, `esd_size` | K lambda over the intercept, in the units of the wavelength, and its esd. `None` when the intercept is not positive, since no size then fits |
+| `strain`, `esd_strain` | the slope, the apparent strain of beta equals 4 epsilon tan theta, and its esd |
+| `intercept`, `esd_intercept`, `slope`, `esd_slope` | the line itself, the intercept in radians |
+| `covariance` | the 2 by 2 covariance of intercept and slope, scaled by the reduced chi squared |
+| `reduced_chi_squared` | the weighted residual per degree of freedom |
+| `n_reflections`, `k`, `wavelength` | what went in |
+| `x`, `y`, `esd_y` | 4 sin theta, beta cos theta in radians, and its esd, per reflection |
+| `residuals`, `normalised_residuals` | y less the line, in radians, and the same over `esd_y` |
+
+`slope_significance` is the slope over its esd, and `line(x)` and
+`line_esd(x)` evaluate the fitted line and its esd, which is what draws the
+band in Section 23.8.
+
+The strain this returns is an upper limit on the local lattice strain, not a
+measurement of it, because everything that broadens like tan theta lands in
+the slope. The size is the more fragile of the two. The data almost never
+reach x of zero, so the intercept is an extrapolation across a gap, and its
+esd is what says whether the extrapolation was worth making. Read
+`esd_intercept` against `intercept` before quoting a size at all.
+
+### 23.3 component_size_strain and ComponentSizeStrain
+
+`component_size_strain(two_theta, lorentzian_deg, esd_lorentzian,
+gaussian_deg, esd_gaussian, wavelength, k=INTEGRAL_BREADTH_K)` is the cross
+check of de Keijser, Langford, Mittemeijer and Vogels on Williamson-Hall. Size
+broadening is taken to be Lorentzian and strain broadening Gaussian, so the
+size comes from the weighted mean of beta L cos theta and the strain from the
+weighted slope of beta G through 4 tan theta, each component fitted against
+its own dependence alone with no constant term.
+
+The breadths it wants are integral breadths of the two components, which are
+pi over 2 times the Lorentzian FWHM and the square root of pi over log 2, over
+2, times the Gaussian FWHM; `BroadeningCorrection` reports the FWHM of each,
+so a caller converts. A component the correction clipped to zero is a
+measurement of zero, with its esd, and is used as such. It needs at least
+`MIN_COMPONENT_POINTS`, two.
+
+`ComponentSizeStrain` carries `size` and `esd_size`, `size_term` and its esd,
+`strain` and its esd, a `size_reduced_chi_squared` and a
+`strain_reduced_chi_squared` saying how well each dependence held, the counts
+and constants that went in, and the two sets of residuals.
+
+The worked example below does not use it. With six resolved reflections over
+thirty degrees of two theta, a second separation of the same two effects from
+the same six numbers adds a second answer rather than a check on the first,
+and the honest thing is to say so. It earns its place where the reflections
+are many and span widely, which a benchtop scan of a weakly broadened sample
+is not.
+
+### 23.4 resolution_limit and ResolutionLimit
+
+`resolution_limit(two_theta, fwhm_inst, esd_inst, esd_obs, wavelength,
+k=SCHERRER_K, significance=DEFAULT_SIGNIFICANCE, convolution="quadrature")`
+gives the largest crystallite size a reflection could have told apart from the
+instrument. This is the function that keeps an analysis honest, and it should
+be run before the sizes are, not after.
+
+`correct_broadening` counts a reflection as resolved when its FWHM exceeds the
+instrumental one by `significance` combined esds. The sample breadth that just
+reaches that threshold depends on how the two profiles combine. Under
+`"quadrature"` they add as Gaussians, and the breadth is the root of the
+difference of squares, which is the larger breadth and so the smaller size:
+the conservative bound, since a sample breadth of any shape below it could
+have gone unseen. Under `"linear"` they add as Lorentzians and the breadth is
+the threshold itself, the smaller breadth and the larger size, which is the
+bound to use when the sample broadening is known to be Lorentzian. The breadth
+is then turned into a size by `scherrer_size`.
+
+`ResolutionLimit` carries `threshold`, the smallest excess that counts, in
+degrees; `breadth`, the sample FWHM that would produce it; `size`, the
+Scherrer size of that breadth; and `convolution`, `significance` and `k`, so
+that a row written to a file records the assumption it was made under. Each is
+a scalar or an array, following the input.
+
+Read `size` as a lower bound. A reflection that shows no measurable broadening
+has crystallites larger than its own limit, and says nothing at all about how
+much larger. It raises `ValueError` when `convolution` is unknown, an
+instrumental width or `significance` is not positive, both esds of a
+reflection are zero, or an esd is negative.
+
+### 23.5 The instrument side of the analysis
+
+The rest of this section is one analysis of the example pellet against the
+example standard, in four blocks of one script. This first block measures the
+instrument, and it is the width fit of Section 22.4 with one thing added.
+
+`correct_broadening` needs an instrumental mixing parameter as well as an
+instrumental width, and Section 22.1 says that `WidthFit` carries no such
+thing: the Caglioti relation describes widths and says nothing about shape. So
+the standard's reflections are fitted a second time here, with `fit_profile`
+directly, and their mixing parameters are kept alongside their angles. A
+sample reflection then takes the instrumental `eta` interpolated between the
+two standard reflections either side of it. That interpolation is the one step
+in this analysis that no xrdkit function provides, and it is the weakest link
+in the chain; it is also why `ESD_ETA_INST` is set to a frank 0.02 in the
+settings rather than to something the data justify.
+
+Start a new file named `size_strain.py`.
+
+```python
+import numpy as np
+
+from xrdkit.broadening import correct_broadening, doublet_gaps, fit_profile
+from xrdkit.cell import Cell
+from xrdkit.indexing import generate_reflections, index_and_refine
+from xrdkit.instrument import fit_instrument_widths
+from xrdkit.io import read_scan
+from xrdkit.peaks import exclude_kalpha2, find_peaks
+
+# Edit these lines for each new sample. Nothing below needs changing.
+SCAN_FILE = "data/raw/pellet_a.xrdml"
+STANDARD_FILE = "data/standards/lab6.xrdml"
+STEM = "pellet_a"
+START_CELL = Cell.tetragonal(12.45, 3.94)
+SPACE_GROUP = "P4bm"
+WINDOW = (20.0, 90.0)
+STANDARD_WINDOW = (10.0, 98.0)
+MIN_CLEAR = 0.3
+ESD_ETA_INST = 0.02
+
+standard = read_scan(STANDARD_FILE)
+widths = fit_instrument_widths(standard, window=STANDARD_WINDOW)
+resolution = widths.caglioti
+standard_angles, standard_etas = [], []
+for peak in exclude_kalpha2(find_peaks(standard, two_theta_range=STANDARD_WINDOW)):
+    profile = fit_profile(
+        standard.two_theta, standard.intensity, peak.two_theta, peak.fwhm
+    )
+    if profile.converged:
+        standard_angles.append(profile.two_theta)
+        standard_etas.append(profile.eta)
+print(f"instrument: {widths.n_peaks} reflections, rms {widths.rms:.5f} degrees")
+print(f"U = {widths.u:.4f}, V = {widths.v:.4f}, W = {widths.w:.4f} degrees squared")
+print(
+    f"instrumental eta runs {min(standard_etas):.2f} to {max(standard_etas):.2f}"
+    f" over {standard_angles[0]:.1f} to {standard_angles[-1]:.1f} degrees"
+)
+```
+
+It prints the instrument.
+
+```text
+instrument: 14 reflections, rms 0.00254 degrees
+U = 0.0107, V = -0.0122, W = 0.0085 degrees squared
+instrumental eta runs 0.31 to 0.75 over 21.3 to 95.6 degrees
+```
+
+The width fit is the one of Section 22.4 and Section 3.2. The mixing parameter
+runs from 0.31 to 0.75 across the scan, and Section 22.4 has already said that
+the 0.31 belongs to the weakest reflection in the standard and is a fit with
+too little signal rather than the instrument changing shape. Every sample
+reflection used below sits between 25 and 60 degrees, and the instrumental
+mixing parameters the interpolation hands them run from 0.59 to 0.69, so it is
+working across a gently sloping stretch of the standard and the outlier at
+79.8 degrees never enters it at all.
+
+### 23.6 The reflections worth measuring
+
+A width belongs to one reflection or to nothing. The selection here is three
+tests, in order, and each of them throws away reflections that a less careful
+script would have measured.
+
+First, overlap. The peaks are indexed against the refined cell as Section 16
+indexes them, and every calculated reflection of that cell, not merely the
+peaks the finder reported, is offered to `doublet_gaps`. A peak keeps its
+place only if the nearest other calculated line is `MIN_CLEAR` degrees clear
+of its whole doublet. This is the test that catches a peak which is really two
+reflections the instrument never resolved, which no amount of profile fitting
+will separate and which would otherwise be reported as a broad line and turned
+into a small crystallite.
+
+Second, the refit. Each surviving peak is fitted with `fit_profile`, and a fit
+that did not converge or that moved the position by more than the found peak's
+own FWHM is rejected, which is the rule of Section 7.2 and the warning of
+Section 21.8.
+
+Third, significance. `correct_broadening` decides whether what is left is
+broadened at all, at the default two combined esds.
+
+Continues `size_strain.py`. Add these lines at the end of the file.
+
+```python
+scan = read_scan(SCAN_FILE)
+peaks = exclude_kalpha2(find_peaks(scan, two_theta_range=WINDOW))
+indexed, cell_fit = index_and_refine(
+    peaks,
+    start_cell=START_CELL,
+    wavelength=scan.wavelength,
+    space_group=SPACE_GROUP,
+)
+calculated = [
+    reflection.two_theta + cell_fit.zero_offset
+    for reflection in generate_reflections(
+        cell_fit.cell,
+        scan.wavelength,
+        WINDOW[1] + 2.0,
+        WINDOW[0] - 2.0,
+        space_group=SPACE_GROUP,
+    )
+]
+print(f"{len(peaks)} peaks, {len(calculated)} calculated reflections")
+
+rows = []
+for entry in indexed:
+    if not entry.is_indexed:
+        continue
+    own = entry.reflection.two_theta + cell_fit.zero_offset
+    others = [angle for angle in calculated if abs(angle - own) > 1e-9]
+    if min(doublet_gaps(entry.peak.two_theta, others)) < MIN_CLEAR:
+        continue
+    profile = fit_profile(
+        scan.two_theta, scan.intensity, entry.peak.two_theta, entry.peak.fwhm
+    )
+    moved = abs(profile.two_theta - entry.peak.two_theta)
+    if not profile.converged or moved > entry.peak.fwhm:
+        print(f"  refit at {entry.peak.two_theta:.3f} rejected, moved {moved:.3f}")
+        continue
+    fwhm_inst = float(resolution.fwhm(profile.two_theta))
+    esd_inst = float(resolution.fwhm_esd(profile.two_theta))
+    eta_inst = float(np.interp(profile.two_theta, standard_angles, standard_etas))
+    correction = correct_broadening(
+        profile.fwhm,
+        profile.eta,
+        fwhm_inst,
+        eta_inst,
+        profile.esd_fwhm,
+        profile.esd_eta,
+        esd_inst,
+        ESD_ETA_INST,
+    )
+    rows.append(
+        (entry.reflection.hkl, profile, fwhm_inst, esd_inst, eta_inst, correction)
+    )
+
+print(f"{len(rows)} reflections clear of their neighbours by {MIN_CLEAR} degrees")
+print("        hkl  two_theta  observed  instrument  excess  sample breadth")
+for hkl, profile, fwhm_inst, _, _, correction in rows:
+    sample = (
+        "unresolved"
+        if correction.unresolved
+        else f"{correction.fwhm:.4f} +/- {correction.esd_fwhm:.4f}"
+    )
+    print(
+        f"  {hkl!s:>9}  {profile.two_theta:9.3f}  {profile.fwhm:8.4f}"
+        f"  {fwhm_inst:10.4f}  {correction.excess:6.2f}  {sample}"
+    )
+```
+
+It prints what each test left.
+
+```text
+39 peaks, 168 calculated reflections
+  refit at 26.921 rejected, moved 1.030
+10 reflections clear of their neighbours by 0.3 degrees
+        hkl  two_theta  observed  instrument  excess  sample breadth
+  (3, 2, 0)     25.890    0.0926      0.0791    2.01  0.0436 +/- 0.0125
+  (2, 1, 1)     27.904    0.1094      0.0782    2.88  0.0509 +/- 0.0212
+  (4, 0, 0)     28.764    0.0631      0.0779   -0.13  unresolved
+  (4, 1, 0)     29.670    0.0889      0.0775    1.09  unresolved
+  (3, 2, 1)     34.666    0.0868      0.0756    3.08  0.0450 +/- 0.0077
+  (5, 2, 0)     39.013    0.0907      0.0742    1.54  unresolved
+  (5, 3, 0)     42.359    0.0881      0.0732    2.38  0.0490 +/- 0.0150
+  (6, 0, 1)     49.722    0.0972      0.0716    2.02  0.0842 +/- 0.0335
+  (6, 3, 1)     54.701    0.0878      0.0710    2.63  0.0729 +/- 0.0175
+  (8, 0, 0)     59.336    0.0541      0.0707   -0.86  unresolved
+```
+
+Thirty nine peaks go in and ten come out of the first two tests. That is the
+first honest number in this analysis: three quarters of the pattern of a
+tungsten bronze with a twelve angstrom axis is too crowded to measure a width
+on, and the reflections that survive are all below sixty degrees, because the
+higher the angle the more reflections there are per degree.
+
+The rejected refit is the peak found at 26.921 degrees, which moved 1.030
+degrees when it was fitted. That is the peak Section 15.8 marked as
+unexplained and Section 18 deleted from its peak list, and here it fails for a
+third reason: the window `fit_profile` chooses is ten of its starting widths
+wide, and inside that window there is a much stronger neighbour for the fit to
+walk to. Without the shift test this analysis would have measured that
+neighbour twice and called the second measurement (201).
+
+Of the ten that remain, six clear the significance test and four do not. Look
+at the four. Two, (400) at 28.764 and (800) at 59.336 degrees, are actually
+narrower than the instrument, with an excess of minus 0.13 and minus 0.86
+esds. A sample cannot be sharper than the instrument; what this means is that
+those two fitted widths are a little low and their esds are honest. The other
+two, (410) and (520), sit at 1.09 and 1.54 esds, broader than the instrument
+but not by enough to be sure of. The module reports them as `unresolved`
+rather than handing back a small positive breadth with an esd of nearly the
+same size, and that refusal is the whole point of the `significance` argument.
+
+### 23.7 Scherrer, Williamson-Hall and what the scan supports
+
+Continues `size_strain.py`. Add these lines at the end of the file.
+
+```python
+from xrdkit.sizestrain import (
+    SCHERRER_K,
+    resolution_limit,
+    scherrer_size,
+    williamson_hall,
+)
+
+resolved = [row for row in rows if not row[5].unresolved]
+angles = np.array([row[1].two_theta for row in resolved])
+breadths = np.array([row[5].fwhm for row in resolved])
+esd_breadths = np.array([row[5].esd_fwhm for row in resolved])
+sizes, esd_sizes = scherrer_size(
+    breadths, angles, scan.wavelength, esd_fwhm=esd_breadths
+)
+limits = resolution_limit(
+    np.array([row[1].two_theta for row in rows]),
+    np.array([row[2] for row in rows]),
+    np.array([row[3] for row in rows]),
+    np.array([row[1].esd_fwhm for row in rows]),
+    scan.wavelength,
+)
+print(f"{len(resolved)} of {len(rows)} reflections resolved at {SCHERRER_K} Scherrer K")
+print("        hkl  two_theta   Scherrer size       resolution limit")
+for (hkl, profile, *_), size, esd in zip(resolved, sizes, esd_sizes):
+    index = [row[1].two_theta for row in rows].index(profile.two_theta)
+    print(
+        f"  {hkl!s:>9}  {profile.two_theta:9.3f}  {size:6.0f} +/- {esd:5.0f} A"
+        f"  {float(limits.size[index]):10.0f} A"
+    )
+print(f"Scherrer sizes run {sizes.min():.0f} to {sizes.max():.0f} angstrom")
+print(
+    f"resolution limits run {limits.size.min():.0f} to {limits.size.max():.0f}"
+    f" angstrom, {limits.convolution}, {limits.significance:.0f} esds"
+)
+
+fit = williamson_hall(angles, breadths, esd_breadths, scan.wavelength)
+print(f"Williamson-Hall on {fit.n_reflections} reflections")
+print(f"  intercept {fit.intercept:.3e} +/- {fit.esd_intercept:.3e} radians")
+print(f"  size      {fit.size:.0f} +/- {fit.esd_size:.0f} angstrom")
+print(f"  strain    {fit.strain:.2e} +/- {fit.esd_strain:.2e}")
+print(f"  slope over its esd {fit.slope_significance:.2f}")
+print(f"  reduced chi squared {fit.reduced_chi_squared:.3f}")
+bound = SCHERRER_K * scan.wavelength / (fit.intercept + 2.0 * fit.esd_intercept)
+print(f"  intercept is {fit.intercept / fit.esd_intercept:.2f} esds from zero")
+print(f"  so the size is above {bound:.0f} angstrom at two esds, with no upper bound")
+```
+
+It prints the sizes reflection by reflection against the resolution limits,
+then the line through them.
+
+```text
+6 of 10 reflections resolved at 0.9 Scherrer K
+        hkl  two_theta   Scherrer size       resolution limit
+  (3, 2, 0)     25.890    1871 +/-   539 A        1697 A
+  (2, 1, 1)     27.904    1608 +/-   670 A        1318 A
+  (3, 2, 1)     34.666    1850 +/-   318 A        2462 A
+  (5, 3, 0)     42.359    1738 +/-   533 A        1908 A
+  (6, 0, 1)     49.722    1039 +/-   414 A        1339 A
+  (6, 3, 1)     54.701    1227 +/-   295 A        2006 A
+Scherrer sizes run 1039 to 1871 angstrom
+resolution limits run 279 to 2462 angstrom, quadrature, 2 esds
+Williamson-Hall on 6 reflections
+  intercept 3.064e-04 +/- 2.126e-04 radians
+  size      4526 +/- 3140 angstrom
+  strain    4.13e-04 +/- 1.67e-04
+  slope over its esd 2.48
+  reduced chi squared 0.266
+  intercept is 1.44 esds from zero
+  so the size is above 1896 angstrom at two esds, with no upper bound
+```
+
+Read the two columns of the table against each other and not down the page.
+The Scherrer sizes run from 1039 to 1871 angstrom, which looks like a
+measurement until the resolution limits beside them are read: 1697, 1318,
+2462, 1908, 1339 and 2006 angstrom. Four of the six sizes lie below their own
+reflection's limit and two lie above it. A size below its limit is a size the
+reflection could only just have detected, which is exactly what a breadth at
+two or three esds means. These are not six measurements of a crystallite size.
+They are six reflections sitting on the edge of what this instrument can see.
+
+The Williamson-Hall fit says the same thing more sharply. The slope, the
+strain, comes out at 4.13 times ten to the minus four plus or minus 1.67, two
+and a half esds from zero, which is a real if marginal signal. The intercept
+is 3.064 times ten to the minus four radians plus or minus 2.126, one and a
+half esds from zero, so it is consistent with there being no size broadening
+in this pattern at all. The size of 4526 plus or minus 3140 angstrom that
+follows from it is not a crystallite size and must not be quoted as one: its
+esd is seven tenths of its value, and a quantity known to seventy per cent is
+a quantity that has not been measured.
+
+What the scan does support is a bound. Taking the intercept two esds high
+gives a size above 1896 angstrom, about 190 nanometres, with no upper bound at
+all. That is the sentence to write down. The figure of Section 23.8 shows why
+it is the only one available: the six points span 4 sin theta from 0.90 to
+1.84 and the intercept sits at zero, so the line is extrapolated back across
+almost as much x again as it was measured over, and the band opens out as it
+goes.
+
+The reduced chi squared of 0.266 is worth one more word. It is well below one,
+which means the six breadths scatter about the line by less than their esds
+say they should. That is not a good fit; it is a sign that the esds are
+generous, which is what one expects after `correct_broadening` has propagated
+four inputs through numerical derivatives and treated them as independent when
+two of them are correlated. It is a reason to trust the bound above and not to
+sharpen it.
+
+The honest summary of this sample, then, is one line: the crystallites are
+larger than about 190 nanometres, and an apparent strain of four parts in ten
+thousand is present at two and a half esds. A benchtop scan of a well
+crystallised ceramic usually ends here, and a script that reports a crystallite
+size from it has not measured one.
+
+### 23.8 The record and the figure
+
+Every number above rests on choices, and a file of results that does not carry
+them cannot be checked six months later. The last block writes both: a CSV
+with one row per reflection, carrying the inputs beside the outputs, and the
+Williamson-Hall figure.
+
+The CSV follows the standing rule every results file in the kit follows, which
+Section 3.2 describes for `lab6_instrument.csv`: the last three columns are
+the method in one sentence, the date, and the version of xrdkit that wrote the
+row. Beside those go the scan and the standard, the hkl, the observed and
+instrumental widths and mixing parameters with their esds, the excess in esds,
+whether the reflection resolved, the sample breadth, the Scherrer size, the
+resolution limit, and the wavelength, Scherrer constant, significance and
+clearance the run used, then the Williamson-Hall result on every row. Both the
+unresolved reflections and the resolved ones get a row, because which
+reflections did not resolve is part of the answer.
+
+The figure is drawn with matplotlib directly rather than through
+`plot_pattern` or `plot_stacked`, since no function in `xrdkit.plotting` draws
+a Williamson-Hall plot. `apply_style` is called first so the figure matches
+the rest of the kit's, a `Figure` is made and an `Axes` added to it, and
+`save_figure` writes the pair of files; `pyplot` is not used anywhere, as
+Section 15 says it should not be.
+
+Continues `size_strain.py`. Add these lines at the end of the file.
+
+```python
+import csv
+import datetime
+from pathlib import Path
+
+from matplotlib.figure import Figure
+
+from xrdkit import __version__
+from xrdkit.plotting import apply_style, save_figure
+
+METHOD = (
+    "profile fit of each well separated reflection as a K alpha doublet; "
+    "instrumental width from a Caglioti fit to a standard; "
+    "Thompson-Cox-Hastings deconvolution; Scherrer and Williamson-Hall"
+)
+COLUMNS = (
+    "scan",
+    "standard",
+    "h",
+    "k",
+    "l",
+    "two_theta_deg",
+    "fwhm_obs_deg",
+    "esd_fwhm_obs_deg",
+    "eta_obs",
+    "fwhm_inst_deg",
+    "esd_fwhm_inst_deg",
+    "eta_inst",
+    "excess_esds",
+    "resolved",
+    "fwhm_sample_deg",
+    "esd_fwhm_sample_deg",
+    "scherrer_size_a",
+    "esd_scherrer_size_a",
+    "resolution_limit_a",
+    "wavelength_a",
+    "scherrer_k",
+    "significance",
+    "min_clear_deg",
+    "wh_size_a",
+    "esd_wh_size_a",
+    "wh_strain",
+    "esd_wh_strain",
+    "wh_reduced_chi_squared",
+    "wh_size_lower_bound_a",
+    "method",
+    "date",
+    "xrdkit_version",
+)
+
+today = datetime.datetime.now(datetime.UTC).astimezone().date().isoformat()
+path = Path(f"results/library/sizestrain_{STEM}.csv")
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, COLUMNS)
+    writer.writeheader()
+    for index, (hkl, profile, fwhm_inst, esd_inst, eta_inst, correction) in enumerate(
+        rows
+    ):
+        row = dict(zip(COLUMNS, [""] * len(COLUMNS)))
+        size = esd_size = ""
+        if not correction.unresolved:
+            place = resolved.index(rows[index])
+            size, esd_size = f"{sizes[place]:.0f}", f"{esd_sizes[place]:.0f}"
+        row.update(
+            scan=SCAN_FILE,
+            standard=STANDARD_FILE,
+            h=hkl[0],
+            k=hkl[1],
+            l=hkl[2],
+            two_theta_deg=f"{profile.two_theta:.4f}",
+            fwhm_obs_deg=f"{profile.fwhm:.5f}",
+            esd_fwhm_obs_deg=f"{profile.esd_fwhm:.5f}",
+            eta_obs=f"{profile.eta:.4f}",
+            fwhm_inst_deg=f"{fwhm_inst:.5f}",
+            esd_fwhm_inst_deg=f"{esd_inst:.5f}",
+            eta_inst=f"{eta_inst:.4f}",
+            excess_esds=f"{correction.excess:.3f}",
+            resolved=not correction.unresolved,
+            fwhm_sample_deg="" if correction.unresolved else f"{correction.fwhm:.5f}",
+            esd_fwhm_sample_deg=(
+                "" if correction.unresolved else f"{correction.esd_fwhm:.5f}"
+            ),
+            scherrer_size_a=size,
+            esd_scherrer_size_a=esd_size,
+            resolution_limit_a=f"{float(limits.size[index]):.0f}",
+            wavelength_a=scan.wavelength,
+            scherrer_k=SCHERRER_K,
+            significance=limits.significance,
+            min_clear_deg=MIN_CLEAR,
+            wh_size_a=f"{fit.size:.0f}",
+            esd_wh_size_a=f"{fit.esd_size:.0f}",
+            wh_strain=f"{fit.strain:.3e}",
+            esd_wh_strain=f"{fit.esd_strain:.3e}",
+            wh_reduced_chi_squared=f"{fit.reduced_chi_squared:.4f}",
+            wh_size_lower_bound_a=f"{bound:.0f}",
+            method=METHOD,
+            date=today,
+            xrdkit_version=__version__,
+        )
+        writer.writerow(row)
+print(f"{path} ({len(rows)} rows, {len(COLUMNS)} columns)")
+
+
+apply_style()
+figure = Figure(figsize=(3.5, 2.6))
+axes = figure.add_subplot()
+axes.errorbar(
+    fit.x,
+    1000.0 * fit.y,
+    yerr=1000.0 * fit.esd_y,
+    fmt="o",
+    markersize=3.0,
+    color="black",
+    linewidth=0.7,
+    capsize=2.0,
+)
+grid = np.linspace(0.0, 1.05 * fit.x.max(), 100)
+axes.plot(grid, 1000.0 * fit.line(grid), color="black", linewidth=0.7)
+band = 1000.0 * fit.line_esd(grid)
+axes.fill_between(
+    grid,
+    1000.0 * fit.line(grid) - band,
+    1000.0 * fit.line(grid) + band,
+    color="black",
+    alpha=0.12,
+    linewidth=0.0,
+)
+axes.set_xlim(0.0, 1.05 * fit.x.max())
+axes.set_xlabel(r"$4\sin\theta$")
+axes.set_ylabel(r"$\beta\cos\theta$ / mrad")
+axes.set_title(f"{STEM}, Williamson-Hall")
+axes.text(
+    0.03,
+    0.95,
+    f"intercept {1000 * fit.intercept:.2f} +/- {1000 * fit.esd_intercept:.2f} mrad\n"
+    f"strain {fit.strain:.2e} +/- {fit.esd_strain:.2e}\n"
+    f"size > {bound:.0f} angstrom",
+    transform=axes.transAxes,
+    verticalalignment="top",
+    fontsize=5,
+)
+figure.tight_layout()
+print(save_figure(figure, f"figures/library_williamson_hall_{STEM}"))
+```
+
+It prints the two files it wrote.
+
+```text
+results\library\sizestrain_pellet_a.csv (10 rows, 32 columns)
+[WindowsPath('figures/library_williamson_hall_pellet_a.png'), WindowsPath('figures/library_williamson_hall_pellet_a.pdf')]
+```
+
+The figure puts the intercept, the strain and the bound in the corner, and
+draws the esd band of the fitted line across the whole x range so that the
+extrapolation to zero is visible rather than implied. Read it as the picture
+of the last two paragraphs: six points with honest error bars, a line with a
+real slope, and a band at x equal to zero that reaches from the bound down to
+very nearly the axis.
