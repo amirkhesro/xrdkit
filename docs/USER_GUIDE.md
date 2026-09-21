@@ -98,7 +98,7 @@ xrdkit --version
 and everything it printed follows in a block of its own:
 
 ```text
-xrdkit 0.1.0
+xrdkit 0.2.0
 ```
 
 There is no prompt character to delete, so a command can be copied straight

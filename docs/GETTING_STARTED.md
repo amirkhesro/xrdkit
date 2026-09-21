@@ -143,7 +143,7 @@ py -c "import xrdkit; print(xrdkit.__version__)"
 The reply should be a version number:
 
 ```
-0.1.0
+0.2.0
 ```
 
 Part A is finished. Continue at Part C.
@@ -279,7 +279,7 @@ python3 -c "import xrdkit; print(xrdkit.__version__)"
 The reply should be a version number:
 
 ```
-0.1.0
+0.2.0
 ```
 
 Part B is finished. Continue at Part C.

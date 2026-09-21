@@ -11,7 +11,7 @@ authors:
   - given-names: Amir
     family-names: Khesro
     orcid: "https://orcid.org/0000-0002-0015-9332"
-version: 0.1.0
-date-released: "2026-09-12"
+version: 0.2.0
+date-released: "2026-09-21"
 license: MIT
 repository-code: "https://github.com/amirkhesro/xrdkit"

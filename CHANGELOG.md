@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+
+- A reader for plain text column formats (`.xy`, `.xye`) and for Bruker `.raw`
+  and `.brml`; only `.xrdml` is read today.
+- Reflection conditions for space groups beyond the eight in
+  `xrdkit.symmetry`, through pymatgen as an optional dependency.
+- Stage list helpers for Le Bail and Rietveld sequences; `standard_stages` is
+  the instrument calibration sequence only, so the others are written out by
+  hand.
+- `plot_rietveld` to take its Rwp and GOF from the stage the final model came
+  from, rather than from the last stage without an error entry, which is the
+  wrong one whenever a stage was rejected.
+
+## [0.2.0] - 2026-09-21
+
+The release that turns the kit into a set of commands. The instrument
+parameter file now comes from `xrdkit instrument` and phase identification
+from `xrdkit phases`, so the two steps a user had to do elsewhere are
+commands like the rest. `docs/USER_GUIDE.md` is rewritten around the
+commands, Part I the workflows by command and Part II the library
+reference, module by module. No script stands in a user's path: every
+workflow is typed into a terminal, and the library is there for the work
+the commands do not cover.
+
 ### Documentation
 
 - `docs/USER_GUIDE.md` is rewritten around the commands: Part I is the
@@ -21,10 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is freed and its zero held, what a plausible wrong cell from a pseudo-cubic
   pattern looks like, why the refined range is a per sample choice, and that a
   text pattern's counting time reports as unknown.
-- `docs/GETTING_STARTED.md` matches the package as it is: the formats the
-  reader accepts and where a text pattern's wavelength comes from, Section 8
-  as the known limitations rather than a script, the `xrdkit` commands beside
-  the scripts, and the folders `xrdkit init` and the figure writer make.
+- `docs/GETTING_STARTED.md` is a commands only setup: Python, the package and
+  GSAS-II for the three commands that need it, and nothing else, with no
+  editor to install and no script to write or keep. The two scripts it used to
+  give become `xrdkit check` and `xrdkit plot`, the folder layout comes from
+  `xrdkit init`, and every reference into the user guide points at the
+  rewritten sections.
+- Docstrings say what the code does where the library reference found they did
+  not: `XRDScan.sample_id` is the instrument's identifier and not a sample key,
+  `Peak.background` is the lowest intensity either side, `find_peaks` applies
+  its window before the prominence threshold, `apply_style` does not restore
+  the rcParams it changes, `mark_peaks` checks nothing, `parse_xyz` refuses a
+  term after the first with no sign, `fit_caglioti` uses the weights it is
+  given and `fit_instrument_widths` passes 1 / s squared, neither `WidthFit`
+  nor `Caglioti` carries an instrumental eta, and `match_candidate` breaks a
+  tie on intensity in favour of the nearer reflection. `CRITERIA` and
+  `WORKFLOWS` are documented as the programmatic route to the thresholds.
 - The README reads as the page a user meets on PyPI: install from PyPI, a
   worked example of five commands run in a folder of your own, no repository
   in any of them, links that resolve off GitHub, and an email route for a bug
@@ -32,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `xrdkit lebail` and `xrdkit rietveld` take `--two-theta MIN MAX`, the range
+  refined for one run in place of the `two_theta` of the refine table, clipped
+  to the scan the same way, so a range wider than the scan fits the whole of
+  it. Every mode of one `rietveld` call takes the range given rather than the
+  range of the result it starts from. `MIN` not below `MAX`, and a range that
+  does not reach the scan, are refused before anything is written.
+  `pipeline.Options` gains `two_theta` for the same purpose.
 - `xrdkit phases SCAN`, which identifies the phases of a scan against the
   Crystallography Open Database: it takes the peaks, searches the COD for
   entries made of exactly the elements given, fetches their CIFs, simulates
@@ -229,6 +272,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `xrdkit.gsas2.__all__` lists the seven names `xrdkit/__init__.py` re-exports
+  without them: `accepted_stages`, `stage_status`, `stage_statuses`,
+  `stage_status_table`, `log_tail`, `failure_markdown` and `summary_markdown`.
+  `from xrdkit import x` and `from xrdkit.gsas2 import x` now agree, and the
+  set of public names is unchanged.
 - The command help no longer says a scan is a `.xrdml`: `check`, `plot`,
   `stack` and `lattice` describe their argument as a `.xrdml`, `.xy` or `.xye`
   file, or a sample key. No behaviour changed.
@@ -339,6 +387,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `xrdkit phases` printed pymatgen's CIF parser warnings to standard error in
+  the middle of its own output, where they read as errors of xrdkit's: several
+  COD entries draw one over their stoichiometry or over a file with no
+  symmetry operations. The warnings are held back over the calls that reach
+  pymatgen only, so nothing else the command writes changes and a library
+  caller of `xrdkit.phases` still sees them.
+- `pipeline.mode_paths` resolves a relative `Options.out` against the folder
+  the caller is running in. A library caller giving a relative `out` used to
+  fail with `FileNotFoundError` on the driver's own result file, because the
+  GSAS-II driver runs in a working folder of its own; only the command line,
+  which resolved `--out` itself, was safe.
 - A refinement of a `.xy` or `.xye` scan used GSAS-II's default goniometer
   radius of 200 mm: its text pattern importer carries no radius, and nothing
   set one. The instrument parameter file every job reads now carries a
@@ -397,19 +456,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metric, which used to decide the order and so the label. Angles, and distances
   from a peak, within the new `COINCIDENCE_TOLERANCE` of 1e-9 degrees now count
   as equal and are ordered by hkl. Which reflections are generated is unchanged.
-
-### Planned
-
-- A reader for plain text column formats (`.xy`, `.xye`) and for Bruker `.raw`
-  and `.brml`; only `.xrdml` is read today.
-- Reflection conditions for space groups beyond the eight in
-  `xrdkit.symmetry`, through pymatgen as an optional dependency.
-- Stage list helpers for Le Bail and Rietveld sequences; `standard_stages` is
-  the instrument calibration sequence only, so the others are written out by
-  hand.
-- `plot_rietveld` to take its Rwp and GOF from the stage the final model came
-  from, rather than from the last stage without an error entry, which is the
-  wrong one whenever a stage was rejected.
 
 ## [0.1.0] - 2026-09-12
 
