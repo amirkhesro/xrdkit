@@ -2282,21 +2282,43 @@ def _run_phases(args: argparse.Namespace) -> int:
             )
     except MissingPhasesExtra as error:
         raise CommandError(str(error)) from None
-    except ValueError as error:
+    # A candidate whose pattern could not be simulated is set aside: it is
+    # ranked last, never the main phase and never a label.
+    simulated = [c for c in candidates if c.simulated]
+    if not simulated:
         raise CommandError(
-            f"a candidate's pattern could not be simulated: {error}"
-        ) from None
+            f"none of the {len(candidates)} candidates' patterns could be "
+            "simulated, so there is no ranking"
+        )
     for candidate in candidates:
+        if not candidate.simulated:
+            print(
+                f"xrdkit phases: {candidate.cod_id} not simulated: {candidate.error}",
+                file=sys.stderr,
+            )
+    for candidate in candidates:
+        if candidate.simulated:
+            counts = (
+                f"explained {candidate.explained:2d}/{len(observed)}  "
+                f"missing {candidate.missing:2d}  score {candidate.score:3d}"
+            )
+        else:
+            counts = (
+                f"explained {'':2s}/{len(observed)}  missing {'':2s}  score {'':3s}"
+            )
         report(
-            f"  {candidate.cod_id}  explained {candidate.explained:2d}/"
-            f"{len(observed)}  missing {candidate.missing:2d}  "
-            f"score {candidate.score:3d}  "
+            f"  {candidate.cod_id}  {counts}  "
             f"{'rejected, ' + candidate.rejected if candidate.rejected else ''}".rstrip()
         )
 
-    kept = [c for c in candidates if not c.rejected] or list(candidates)
+    kept = [c for c in simulated if not c.rejected] or simulated
     by_id = {candidate.cod_id: candidate for candidate in candidates}
     main = args.main or kept[0].cod_id
+    if main in by_id and not by_id[main].simulated:
+        raise CommandError(
+            f"--main {main} cannot be the main phase: its pattern could not be "
+            f"simulated ({by_id[main].error})"
+        )
     # --main may point at a phase outside the set searched, for one suspected
     # but not found by the search: it is fetched like any other.
     if main in by_id:

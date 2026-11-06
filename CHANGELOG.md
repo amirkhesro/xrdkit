@@ -24,6 +24,14 @@ These changes are for 0.2.1.
   now takes `explained` as the main phase's explained positions, and `cif`
   and `phase` may be sequences of the phases to label with, in order of
   preference; a single CIF and name are still accepted.
+- `xrdkit phases` no longer stops when one candidate's pattern cannot be
+  simulated, such as a COD entry whose atom sites carry no coordinates. The
+  candidate is named on stderr with the error, ranked last with empty counts
+  and score and `rejected` reading `not simulated:` and the message, and is
+  never the main phase or a label; the command refuses only when no candidate
+  can be simulated. `rank_candidates` keeps the message in the new
+  `Candidate.error` rather than raising, and `Candidate.simulated` says
+  whether the pattern was weighed.
 
 ### Planned
 

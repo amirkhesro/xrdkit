@@ -556,18 +556,28 @@ class Candidate:
     ``explained`` and ``missing`` are counts, ``score`` is explained less
     missing, and ``rejected`` says why a candidate is out of the running, or
     is empty. ``cif`` is the file the pattern was simulated from.
+
+    ``error`` is the message of the exception raised when the pattern could
+    not be simulated, and ``None`` when it was; a candidate with an error has
+    ``None`` for its counts and score and is never weighed.
     """
 
     rank: int
     cod_id: str
     formula: str
     space_group: str | None
-    explained: int
-    missing: int
-    score: int
+    explained: int | None
+    missing: int | None
+    score: int | None
     rejected: str
     cif: Path
     explained_positions: tuple[float, ...] = ()
+    error: str | None = None
+
+    @property
+    def simulated(self) -> bool:
+        """Whether the candidate's pattern was simulated and weighed."""
+        return self.error is None
 
 
 @dataclass(frozen=True)
@@ -657,6 +667,12 @@ def rank_candidates(
     always there. The list comes back best first, ties broken by COD id, and
     ``rank`` numbers it from 1.
 
+    A candidate whose pattern cannot be simulated, a COD entry with no atom
+    coordinates for one, does not stop the ranking. The exception is not
+    raised: its message is kept in the candidate's ``error``, ``rejected``
+    reads ``not simulated:`` and the message, the counts and the score are
+    ``None``, and such candidates come last, in COD id order.
+
     ``simulate`` replaces :func:`simulate_pattern`, for a caller that has
     patterns of its own or no pymatgen.
 
@@ -668,12 +684,18 @@ def rank_candidates(
     simulate = simulate or simulate_pattern
     folder = Path(folder)
     weighed = []
+    failed = []
     for record in records:
         cif = folder / record.filename
         try:
             simulated = simulate(cif, wavelength=wavelength, two_theta_range=window)
         except ImportError as error:
             raise MissingPhasesExtra(str(error)) from error
+        # pymatgen raises several kinds of error on a malformed CIF; any of
+        # them sets this one entry aside rather than ending the ranking.
+        except Exception as error:  # noqa: BLE001
+            failed.append((record, cif, str(error) or type(error).__name__))
+            continue
         match = match_candidate(observed, simulated, tolerance=tolerance)
         rejected = ""
         if simulated:
@@ -682,7 +704,8 @@ def rank_candidates(
                 rejected = "strongest line absent"
         weighed.append((record, cif, match, rejected))
     weighed.sort(key=lambda item: (-item[2].score, item[0].cod_id))
-    return [
+    failed.sort(key=lambda item: item[0].cod_id)
+    ranked = [
         Candidate(
             rank=position,
             cod_id=record.cod_id,
@@ -697,6 +720,22 @@ def rank_candidates(
         )
         for position, (record, cif, match, rejected) in enumerate(weighed, start=1)
     ]
+    ranked += [
+        Candidate(
+            rank=position,
+            cod_id=record.cod_id,
+            formula=record.formula,
+            space_group=record.space_group,
+            explained=None,
+            missing=None,
+            score=None,
+            rejected=f"not simulated: {message}",
+            cif=cif,
+            error=message,
+        )
+        for position, (record, cif, message) in enumerate(failed, start=len(ranked) + 1)
+    ]
+    return ranked
 
 
 def attribute_unexplained(

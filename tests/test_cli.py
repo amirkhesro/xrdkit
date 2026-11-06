@@ -3006,6 +3006,71 @@ def test_phases_lists_an_unmatched_peak_beside_a_matched_one(
     assert int(record["n_unexplained"]) == 1
 
 
+def _failing_simulate(monkeypatch, failing: set[str]) -> None:
+    """simulate_pattern raising, as pymatgen does, for the ids in ``failing``."""
+    from xrdkit import phases as phases_module
+
+    simulate = phases_module.simulate_pattern
+
+    def flaky(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        if Path(cif_path).stem in failing:
+            raise ValueError("Invalid CIF file with no structures!")
+        return simulate(
+            cif_path, wavelength=wavelength, two_theta_range=two_theta_range
+        )
+
+    monkeypatch.setattr(phases_module, "simulate_pattern", flaky)
+
+
+def test_phases_sets_aside_a_candidate_that_cannot_be_simulated(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    # 2100722 would rank first; with it set aside the main phase is 2100720.
+    _failing_simulate(monkeypatch, {"2100722"})
+
+    assert main(_phases_argv(phases_scan)) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        "xrdkit phases: 2100722 not simulated: Invalid CIF file with no structures!"
+    ]
+    folder = tmp_path / "results" / "phases" / "sample"
+    rows = _rows(folder / "phases_sample.csv")
+    assert [row["cod_id"] for row in rows] == ["2100720", "2100721", "2100722"]
+    last = rows[-1]
+    assert last["rank"] == "3"
+    assert (last["n_explained"], last["n_missing"], last["score"]) == ("", "", "")
+    assert last["rejected"] == "not simulated: Invalid CIF file with no structures!"
+    (record,) = _rows(folder / "phases_sample_record.csv")
+    assert record["main"] == "2100720"
+    # Never a label: 26.8 is 2100722's line and nobody else's.
+    (unexplained,) = _rows(folder / "phases_sample_unexplained.csv")
+    assert unexplained["phase"] == ""
+    printed = captured.out.splitlines()
+    ranking = [line for line in printed if line.startswith("  21007")][-3:]
+    assert ranking[-1].startswith("  2100722  explained   /3")
+    assert ranking[-1].endswith(
+        "rejected, not simulated: Invalid CIF file with no structures!"
+    )
+
+
+def test_phases_refuses_when_no_candidate_can_be_simulated(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    _failing_simulate(monkeypatch, {"2100720", "2100721", "2100722"})
+
+    assert main(_phases_argv(phases_scan)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        (
+            "xrdkit phases: none of the 3 candidates' patterns could be "
+            "simulated, so there is no ranking"
+        )
+    ]
+    assert not (tmp_path / "results" / "phases" / "sample").exists()
+
+
 def test_phases_json_puts_progress_on_stderr(
     tmp_path, cod, phases_scan, capsys
 ) -> None:

@@ -599,6 +599,42 @@ def test_rank_candidates_orders_by_score_and_rejects_an_absent_strong_line(
     assert ranked[0].explained_positions == (20.0, 30.0)
 
 
+def test_rank_candidates_sets_aside_a_pattern_that_cannot_be_simulated(
+    tmp_path: Path,
+) -> None:
+    observed = [20.0, 30.0, 40.0]
+    patterns = {
+        "2100720": _pattern((20.0, 100.0, (1, 1, 1)), (30.0, 60.0, (2, 0, 0))),
+        "2100722": _pattern((40.0, 100.0, (3, 1, 1))),
+    }
+    stub = _stub(patterns)
+
+    def simulate(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
+        if Path(cif_path).stem == "2100721":
+            raise ValueError("Invalid CIF file with no structures!")
+        return stub(cif_path, wavelength, two_theta_range)
+
+    records = [_record(key) for key in ("2100720", "2100721", "2100722")]
+    ranked = phases.rank_candidates(
+        records, tmp_path, observed, 1.54, (10.0, 80.0), 0.15, simulate=simulate
+    )
+
+    assert [candidate.cod_id for candidate in ranked] == [
+        "2100720",
+        "2100722",
+        "2100721",
+    ]
+    assert [candidate.rank for candidate in ranked] == [1, 2, 3]
+    failed = ranked[2]
+    assert not failed.simulated
+    assert failed.error == "Invalid CIF file with no structures!"
+    assert failed.rejected == "not simulated: Invalid CIF file with no structures!"
+    assert (failed.explained, failed.missing, failed.score) == (None, None, None)
+    assert failed.explained_positions == ()
+    assert failed.cif == tmp_path / "2100721.cif"
+    assert ranked[0].simulated and ranked[0].error is None
+
+
 def test_rank_candidates_without_pymatgen_is_one_error(tmp_path: Path) -> None:
     def absent(cif_path, wavelength=1.0, two_theta_range=(10, 100)):
         raise ImportError("simulate_pattern needs pymatgen: install xrdkit[phases]")
