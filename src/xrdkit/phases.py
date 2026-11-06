@@ -572,11 +572,11 @@ class Candidate:
 
 @dataclass(frozen=True)
 class UnexplainedPeak:
-    """An observed peak no candidate accounts for, and what may cause it.
+    """An observed peak the main phase does not account for, and what may.
 
-    ``phase`` and ``hkl`` name the reflection of the main phase within
-    tolerance of it, ``None`` where there is none, in which case the peak is
-    unidentified.
+    ``phase`` and ``hkl`` name the reflection, within tolerance of the peak, of
+    the phase :func:`attribute_unexplained` labelled it with, ``None`` where no
+    phase it was given has one, in which case the peak is unidentified.
     """
 
     two_theta: float
@@ -588,7 +588,7 @@ class UnexplainedPeak:
 
     @property
     def identified(self) -> bool:
-        """Whether the main phase explains this peak."""
+        """Whether a phase was found with a reflection near this peak."""
         return self.hkl is not None
 
 
@@ -702,45 +702,77 @@ def rank_candidates(
 def attribute_unexplained(
     observed: Sequence[float],
     explained: Iterable[float],
-    cif: str | Path,
+    cif: str | Path | Sequence[str | Path],
     wavelength: float,
-    phase: str,
+    phase: str | Sequence[str],
     window: tuple[float, float] = PHASES_WINDOW,
     tolerance: float = PHASES_TOLERANCE,
     simulate: Callable[..., list[SimulatedReflection]] | None = None,
 ) -> list[UnexplainedPeak]:
-    """The observed peaks not in ``explained``, each against ``cif``'s pattern.
+    """The observed peaks not in ``explained``, each labelled by a phase near it.
 
-    Every peak left over is given its d spacing and, where the main phase has
-    a reflection within ``tolerance`` of it, the strongest such reflection;
-    where it has none the peak is unidentified and is worth chasing.
+    ``explained`` holds the peaks the main phase accounts for, given as the
+    observed positions themselves, which is what
+    :attr:`Candidate.explained_positions` holds. Each peak of ``observed`` is
+    decided on its own: it is left over unless its own position is among
+    ``explained``, so a peak lying close to an explained one is still listed.
+
+    ``cif`` and ``phase`` are one CIF and the name to give it, or two
+    sequences of the same length in order of preference, normally the other
+    candidates that were not rejected, best ranked first. Every peak left over
+    is given its d spacing and is labelled with the first of them whose
+    pattern has a reflection within ``tolerance`` of it, the strongest such
+    reflection being named; where none has, the peak is unidentified and is
+    worth chasing. A pattern is simulated only while some peak is still
+    unlabelled.
 
     Raises
     ------
     MissingPhasesExtra
         If pymatgen is needed and not installed.
+    ValueError
+        If ``cif`` and ``phase`` are sequences of different lengths.
     """
     simulate = simulate or simulate_pattern
+    cifs = [cif] if isinstance(cif, (str, Path)) else list(cif)
+    names = [phase] if isinstance(phase, str) else list(phase)
+    if len(cifs) != len(names):
+        raise ValueError(
+            f"{len(cifs)} CIFs but {len(names)} phase names; give one name per CIF"
+        )
     known = [float(position) for position in explained]
-    try:
-        main = simulate(Path(cif), wavelength=wavelength, two_theta_range=window)
-    except ImportError as error:
-        raise MissingPhasesExtra(str(error)) from error
     left = [
-        position
+        float(position)
         for position in observed
-        if not any(abs(position - other) <= tolerance for other in known)
+        if not any(
+            math.isclose(position, other, rel_tol=0.0, abs_tol=1e-9) for other in known
+        )
     ]
+    causes: dict[int, tuple[str, SimulatedReflection]] = {}
+    for path, name in zip(cifs, names):
+        if len(causes) == len(left):
+            break
+        try:
+            pattern = simulate(
+                Path(path), wavelength=wavelength, two_theta_range=window
+            )
+        except ImportError as error:
+            raise MissingPhasesExtra(str(error)) from error
+        for index, position in enumerate(left):
+            if index in causes:
+                continue
+            near = [r for r in pattern if abs(r.two_theta - position) <= tolerance]
+            if near:
+                causes[index] = (name, max(near, key=lambda r: r.intensity))
     peaks = []
-    for position in left:
+    for index, position in enumerate(left):
         d = wavelength / (2.0 * math.sin(math.radians(position / 2.0)))
-        near = [r for r in main if abs(r.two_theta - position) <= tolerance]
-        cause = max(near, key=lambda r: r.intensity) if near else None
+        name, cause = causes.get(index, (None, None))
         peaks.append(
             UnexplainedPeak(
-                two_theta=float(position),
+                two_theta=position,
                 d_spacing=float(d),
-                phase=phase if cause else None,
+                phase=name,
                 hkl=cause.hkl if cause else None,
                 reflection_two_theta=cause.two_theta if cause else None,
                 intensity=cause.intensity if cause else None,

@@ -2614,12 +2614,17 @@ def cod(tmp_path, monkeypatch):
     return fake_search
 
 
-def _phases_scan(path: Path) -> Path:
+def _phases_scan(
+    path: Path,
+    centres: tuple[float, ...] = (20.0, 30.0, 26.8),
+    width: float = 0.05,
+    step: float = 0.02,
+) -> Path:
     """A scan whose peaks sit where COD_PATTERNS puts its lines, plus one more."""
-    two_theta = np.arange(10.0, 80.0, 0.02)
+    two_theta = np.arange(10.0, 80.0, step)
     counts = np.full(two_theta.size, 100.0)
-    for centre in (20.0, 30.0, 26.8):
-        counts += 5000.0 * np.exp(-0.5 * ((two_theta - centre) / 0.05) ** 2)
+    for centre in centres:
+        counts += 5000.0 * np.exp(-0.5 * ((two_theta - centre) / width) ** 2)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         XRDML.format(
@@ -2909,6 +2914,96 @@ def test_phases_main_names_the_phase_of_the_unexplained(
     ]
     assert rows[0]["phase"] == "" and rows[0]["hkl"] == ""
     assert "unidentified" in capsys.readouterr().out
+
+
+def _unexplained_and_record(tmp_path: Path) -> tuple[list[dict], dict, list[dict]]:
+    folder = tmp_path / "results" / "phases" / "sample"
+    (record,) = _rows(folder / "phases_sample_record.csv")
+    return (
+        _rows(folder / "phases_sample_unexplained.csv"),
+        record,
+        _rows(folder / "phases_sample.csv"),
+    )
+
+
+def test_phases_a_rejected_candidate_does_not_empty_the_unexplained(
+    tmp_path, cod, phases_scan, monkeypatch, capsys
+) -> None:
+    # The main phase explains 20 and 30; the only candidate with a line at
+    # 26.8 is rejected, so the peak is listed and is left unlabelled.
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "COD_PATTERNS",
+        {
+            "2100720": [(20.0, 100.0, (1, 1, 1)), (30.0, 60.0, (2, 0, 0))],
+            "2100721": [(55.0, 100.0, (2, 2, 0)), (26.8, 40.0, (2, 0, 1))],
+        },
+    )
+
+    assert main(_phases_argv(phases_scan)) == 0
+
+    rows, record, candidates = _unexplained_and_record(tmp_path)
+    assert record["main"] == "2100720"
+    assert candidates[1]["rejected"] == "strongest line absent"
+    assert [float(row["two_theta_deg"]) for row in rows] == [
+        pytest.approx(26.8, abs=0.05)
+    ]
+    assert rows[0]["phase"] == "" and rows[0]["hkl"] == ""
+    assert rows[0]["reflection_two_theta_deg"] == ""
+    assert int(record["n_unexplained"]) == 1
+    assert int(record["n_unexplained"]) == int(record["n_peaks_observed"]) - int(
+        candidates[0]["n_explained"]
+    )
+    assert "1 of 3 peaks not explained by the main phase 2100720" in (
+        capsys.readouterr().out
+    )
+
+
+def test_phases_labels_the_unexplained_by_the_next_candidate(
+    tmp_path, cod, phases_scan
+) -> None:
+    # 2100720 is named the main phase and misses 26.8; 2100722 ranks first,
+    # is not rejected and has its 201 line there.
+    assert main(_phases_argv(phases_scan, "--main", "2100720")) == 0
+
+    rows, record, _ = _unexplained_and_record(tmp_path)
+    (row,) = rows
+    assert float(row["two_theta_deg"]) == pytest.approx(26.8, abs=0.05)
+    assert row["phase"] == "2100722"
+    assert row["hkl"] == "2 0 1"
+    assert float(row["reflection_two_theta_deg"]) == pytest.approx(26.8)
+    assert int(record["n_unexplained"]) == 1
+
+
+def test_phases_lists_an_unmatched_peak_beside_a_matched_one(
+    tmp_path, cod, monkeypatch
+) -> None:
+    # The main phase's line at 29.9 explains the peak at 30.0 but not the one
+    # at 30.2, which lies within the tolerance of the explained peak. The
+    # peaks are 0.2 apart because find_peaks keeps peaks 0.15 apart at least.
+    monkeypatch.chdir(tmp_path)
+    scan = _phases_scan(
+        tmp_path / "data" / "raw" / "sample.xrdml",
+        centres=(20.0, 30.0, 30.2),
+        width=0.03,
+        step=0.01,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "COD_PATTERNS",
+        {"2100720": [(20.0, 100.0, (1, 1, 1)), (29.9, 60.0, (2, 0, 0))]},
+    )
+
+    assert main(_phases_argv(scan, "--tolerance", "0.25")) == 0
+
+    rows, record, candidates = _unexplained_and_record(tmp_path)
+    assert int(record["n_peaks_observed"]) == 3
+    assert candidates[0]["n_explained"] == "2"
+    assert [float(row["two_theta_deg"]) for row in rows] == [
+        pytest.approx(30.2, abs=0.01)
+    ]
+    assert rows[0]["phase"] == ""
+    assert int(record["n_unexplained"]) == 1
 
 
 def test_phases_json_puts_progress_on_stderr(

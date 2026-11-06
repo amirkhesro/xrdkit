@@ -656,6 +656,80 @@ def test_attribute_unexplained_says_unidentified_with_nothing_near(
     assert peak.reflection_two_theta is None and peak.intensity is None
 
 
+def test_attribute_unexplained_lists_a_peak_beside_an_explained_one(
+    tmp_path: Path,
+) -> None:
+    # 30.1 lies within the tolerance of the explained 30.0 but is not itself
+    # explained, so it is listed.
+    left = phases.attribute_unexplained(
+        [20.0, 30.0, 30.1],
+        [20.0, 30.0],
+        tmp_path / "2100720.cif",
+        1.5406,
+        "2100720",
+        (10.0, 80.0),
+        0.15,
+        simulate=_stub({"2100720": _pattern((60.0, 100.0, (2, 2, 0)))}),
+    )
+
+    assert [peak.two_theta for peak in left] == [30.1]
+    assert not left[0].identified
+
+
+def test_attribute_unexplained_labels_by_the_first_phase_with_a_line_near(
+    tmp_path: Path,
+) -> None:
+    patterns = {
+        "2100721": _pattern((44.0, 100.0, (2, 2, 0))),
+        "2100722": _pattern((26.80, 8.0, (2, 0, 1)), (44.05, 50.0, (3, 1, 1))),
+    }
+    simulated: list[str] = []
+    stub = _stub(patterns)
+
+    def counting(cif_path, **kwargs):
+        simulated.append(Path(cif_path).stem)
+        return stub(cif_path, **kwargs)
+
+    left = phases.attribute_unexplained(
+        [20.0, 26.75, 44.0, 70.0],
+        [20.0],
+        [tmp_path / "2100721.cif", tmp_path / "2100722.cif"],
+        1.5406,
+        ["2100721", "2100722"],
+        (10.0, 80.0),
+        0.15,
+        simulate=counting,
+    )
+
+    assert [peak.two_theta for peak in left] == [26.75, 44.0, 70.0]
+    assert [peak.phase for peak in left] == ["2100722", "2100721", None]
+    assert [peak.hkl for peak in left] == [(2, 0, 1), (2, 2, 0), None]
+    assert left[0].reflection_two_theta == 26.80
+    assert simulated == ["2100721", "2100722"]
+
+
+def test_attribute_unexplained_with_no_other_phase_leaves_every_peak_unlabelled(
+    tmp_path: Path,
+) -> None:
+    left = phases.attribute_unexplained(
+        [20.0, 26.75], [20.0], [], 1.5406, [], simulate=_stub({})
+    )
+
+    assert [(peak.two_theta, peak.phase) for peak in left] == [(26.75, None)]
+
+
+def test_attribute_unexplained_wants_one_name_per_cif(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="one name per CIF"):
+        phases.attribute_unexplained(
+            [20.0],
+            [],
+            [tmp_path / "a.cif", tmp_path / "b.cif"],
+            1.5406,
+            ["a"],
+            simulate=_stub({}),
+        )
+
+
 def test_require_phases_extra_when_it_is_there() -> None:
     pytest.importorskip("pymatgen")
 

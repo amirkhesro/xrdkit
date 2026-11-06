@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+These changes are for 0.2.1.
+
+### Fixed
+
+- `xrdkit phases`: the unexplained peak file lists every observed peak the
+  main phase does not explain, so its row count is the peak count less the
+  main phase's `n_explained`. It used to list only the peaks no candidate
+  explained, rejected candidates included, so a rejected entry could empty
+  it. Each row is labelled with the best ranked other candidate that is not
+  rejected and has a reflection within `--tolerance` of the peak, and is
+  blank where none has. `n_unexplained` in the record file and the JSON
+  output, and a new summary line, give the same count.
+- `attribute_unexplained` decides each peak on its own, so a peak lying
+  within the tolerance of an explained neighbour is no longer dropped. It
+  now takes `explained` as the main phase's explained positions, and `cif`
+  and `phase` may be sequences of the phases to label with, in order of
+  preference; a single CIF and name are still accepted.
+
 ### Planned
 
 - A reader for plain text column formats (`.xy`, `.xye`) and for Bruker `.raw`

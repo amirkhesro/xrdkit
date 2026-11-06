@@ -45,6 +45,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from xrdkit import __version__
+from xrdkit import phases as phases_module
 from xrdkit.broadening import KALPHA2_INTENSITY_RATIO, fit_profile
 from xrdkit.cell import Cell
 from xrdkit.density import (
@@ -92,6 +93,7 @@ from xrdkit.phases import (
     cod_fetch,
     cod_search,
     fetch_candidates,
+    match_candidate,
     observed_peaks,
     rank_candidates,
     require_phases_extra,
@@ -2295,8 +2297,8 @@ def _run_phases(args: argparse.Namespace) -> int:
     kept = [c for c in candidates if not c.rejected] or list(candidates)
     by_id = {candidate.cod_id: candidate for candidate in candidates}
     main = args.main or kept[0].cod_id
-    # A peak no candidate accounts for is worth naming, so --main may point at
-    # a phase outside the set searched: it is fetched like any other.
+    # --main may point at a phase outside the set searched, for one suspected
+    # but not found by the search: it is fetched like any other.
     if main in by_id:
         main_cif = by_id[main].cif
     else:
@@ -2311,26 +2313,38 @@ def _run_phases(args: argparse.Namespace) -> int:
                     f"fetching the main phase {main} from the COD failed: {error}"
                 ) from None
             fetched.append(main_cif)
-    explained_positions = sorted(
-        {
-            position
-            for candidate in candidates
-            for position in candidate.explained_positions
-        }
-    )
+    # The peaks left over are those the main phase does not explain, each
+    # labelled by the best ranked other candidate that was not rejected.
+    others = [c for c in candidates if not c.rejected and c.cod_id != main]
     try:
         with _quiet_pymatgen():
+            if main in by_id:
+                main_explained = by_id[main].explained_positions
+            else:
+                simulated = phases_module.simulate_pattern(
+                    main_cif, wavelength=wavelength, two_theta_range=(low, high)
+                )
+                matched = match_candidate(observed, simulated, args.tolerance)
+                main_explained = tuple(peak.observed for peak in matched.explained)
             unexplained = attribute_unexplained(
                 observed,
-                explained_positions,
-                main_cif,
+                main_explained,
+                [c.cif for c in others],
                 wavelength,
-                main,
+                [c.cod_id for c in others],
                 (low, high),
                 args.tolerance,
             )
-    except MissingPhasesExtra as error:
+    except (ImportError, MissingPhasesExtra) as error:
         raise CommandError(str(error)) from None
+    except ValueError as error:
+        raise CommandError(
+            f"the main phase's pattern could not be simulated: {error}"
+        ) from None
+    report(
+        f"{len(unexplained)} of {len(observed)} peaks not explained by the main "
+        f"phase {main}"
+    )
     for peak in unexplained:
         if peak.identified:
             report(
@@ -2419,6 +2433,7 @@ def _run_phases(args: argparse.Namespace) -> int:
             asdict(candidate) | {"cif": str(candidate.cif)} for candidate in candidates
         ],
         main=main,
+        n_unexplained=len(unexplained),
         unexplained=[asdict(peak) for peak in unexplained],
     )
 
