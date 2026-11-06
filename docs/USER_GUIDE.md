@@ -1030,8 +1030,9 @@ xrdkit phases pellet_a --elements Sr Ba Nb O --zero 0.170
 ```
 
 The run prints the peaks it found, the entries the search returned, where the
-index went, the ranking, and every file it wrote. It took about fifteen
-seconds, most of it fetching eleven CIFs.
+index went, the ranking, how many peaks the main phase leaves unexplained and
+each of them, and every file it wrote. It took about thirteen seconds, most of
+it fetching eleven CIFs.
 
 ```text
 35 peaks observed from 10 to 80 degrees
@@ -1059,6 +1060,8 @@ index written to C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-
   1537507  explained 14/35  missing  6  score   8
   2020161  explained 16/35  missing  8  score   8
   2100722  explained 16/35  missing 19  score  -3  rejected, strongest line absent
+1 of 35 peaks not explained by the main phase 2100721
+76.216 degrees, d = 1.2482 angstrom: 2311739 (3, 1, 6) at 76.158, 8.4 per cent
 C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\1520953.cif
 C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\1537507.cif
 C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\cifs\cod\2020161.cif
@@ -1076,9 +1079,10 @@ C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c
 C:\Users\amirk\AppData\Local\Temp\claude\C--Users-amirk-Source-repos-xrdkit\742c29b6-8095-4509-8f93-500b972aa5a3\scratchpad\guide_project\results\phases\pellet_a\phases_pellet_a_record.csv
 ```
 
-That block is the run of 18 September 2026. The database is live and is added
-to continually, so a rerun may return an entry that was not there before, and
-the ranking may shift when it does. This is a feature rather than a nuisance,
+That block is the run of 6 November 2026, which returned the same eleven
+entries and the same ranking as a run of 18 September. The database is live
+and is added to continually, so a rerun may return an entry that was not there
+before, and the ranking may shift when it does. This is a feature rather than a nuisance,
 but it means the numbers here are a record of one run rather than a constant,
 and it is why every run writes a record of its own.
 
@@ -1088,10 +1092,10 @@ register of reference CIFs, with the source, the identifier, the formula, the
 space group, the cell and the citation of each, and it is updated rather than
 rewritten, so notes you add to a row by hand survive a fresh download. Under
 `results/phases/pellet_a` go three files: the candidates with their counts and
-scores, the peaks no candidate explained, and a record of the run carrying the
-scan, the elements, the zero, the window, the tolerance, how many entries were
-searched and fetched, the main phase, the method, the date and the version of
-xrdkit.
+scores, the peaks the main phase does not explain, and a record of the run
+carrying the scan, the elements, the zero, the window, the tolerance, how many
+entries were searched and fetched, how many peaks were left unexplained, the
+main phase, the method, the date and the version of xrdkit.
 
 ### 6.3 Reading the ranking
 
@@ -1135,25 +1139,50 @@ Where two candidates score the same, as 2311739 and 2311740 do here, they are
 ordered by COD id, which is arbitrary and is meant to be: the command does not
 pretend to separate what it cannot.
 
-### 6.4 The peaks nothing explained
+### 6.4 The peaks the main phase does not explain
 
 The last file is the one to open when the ranking has been read. It lists every
-observed peak that no candidate accounted for, each with its two theta and its
-d spacing, which is the form a spacing is quoted in and searched on, and beside
-it the reflection of the main phase that falls within the tolerance of it, or
-the word unidentified where none does.
+observed peak the main phase does not explain, one row per peak, so its length
+is always the peak count less the main phase's explained count, and the
+command prints the same number. Each row gives the peak's two theta and its d
+spacing, which is the form a spacing is quoted in and searched on. Beside them
+is a label: the best ranked other candidate that was not rejected and has a
+reflection within the tolerance of the peak, with that reflection's hkl,
+position and intensity, or nothing where no candidate has one, which the
+command prints as unidentified.
 
-For this run the file holds its header and nothing else: every one of the
-thirty-five peaks was explained by at least one candidate, which is what a
-single phase sample should give.
+A label is not an identification. It says that a candidate has a reflection at
+that position, and in a crowded pattern some candidate usually will. Whether
+the candidate is present is decided by its own row of the ranking, its
+explained and missing counts and whether it was rejected, read as Section 6.3
+reads them; a label from an entry that misses strong lines is a coincidence of
+position until the ranking says otherwise.
 
-`--main` names the phase those peaks are attributed to, and defaults to the
-top ranked candidate that was not rejected. Give it the COD id you have
-decided on, which here would be `--main 2100720`, so that the attribution is
-made against the structure you intend to carry forward rather than against
-whichever entry happened to score highest. It may also name an entry outside
-the candidate set, which is fetched like any other, for the case where you
-suspect a particular impurity and want the leftover peaks checked against it.
+For this run the main phase is 2100721, which explains thirty-four of the
+thirty-five peaks, and the file holds the thirty-fifth. This is an extract of
+`phases_pellet_a_unexplained.csv`, the whole of it as the command wrote it.
+
+```text
+two_theta_deg,d_angstrom,phase,hkl,reflection_two_theta_deg,intensity_percent
+76.2162241178218,1.2481607208676566,2311739,3 1 6,76.15817621593126,8.35309486145434
+```
+
+The peak at 76.216 degrees is labelled by 2311739, the second entry of the
+ranking, through its (3 1 6) reflection 0.058 degrees below it at 8.4 per
+cent of its strongest line. 2311739 is the same tungsten bronze described in a
+cell with c doubled, which is why its indices differ, and it misses two strong
+lines of its own, so the label says that this structure type can put a weak
+reflection there, not that a second phase is present. What it does say is that
+the peak is not unidentified: nothing here asks for a wider search.
+
+`--main` names the phase whose unexplained peaks are listed, and defaults to
+the top ranked candidate that was not rejected. Give it the COD id you have
+decided on, which here would be `--main 2100720`, so that the list is made
+against the structure you intend to carry forward rather than against
+whichever entry happened to score highest; with 2100720, which explains
+twenty-seven peaks, it would hold eight. It may also name an entry outside the
+candidate set, which is fetched like any other, and the list is then the peaks
+that entry does not explain, labelled from the candidates as before.
 
 A weak reflection of the phase you already have is the commonest explanation
 of a peak the indexing passed over, and it is worth ruling out before anything
@@ -1204,8 +1233,9 @@ tungsten bronzes and the hexagonal perovskites that is far larger than the
 noise. What it cannot be trusted to say is that there is no second phase. A
 phase at one or two weight per cent shows itself in the background, and on this
 scan the background is not counted deeply enough for such a phase to rise
-clearly out of it; the empty unexplained list is therefore weak evidence of
-purity rather than strong evidence. If phase purity is the question being
+clearly out of it. The main phase leaving one peak of thirty-five, and that one
+at the position of a weak reflection of the same structure type, is therefore
+weak evidence of purity rather than strong evidence. If phase purity is the question being
 asked, the scan to answer it with is a longer one, counted three to five times
 as long, and the verdict in Section 4 is the command telling you so in advance.
 
@@ -1245,7 +1275,7 @@ COD id order, which is a way to keep a first look quick when the search comes
 back with dozens of entries. By default every entry found is fetched and
 weighed.
 
-`--main` names the phase the peaks left over are attributed to, as Section 6.4
+`--main` names the phase whose unexplained peaks are listed, as Section 6.4
 describes.
 
 `--wavelength` overrides the K alpha 1 wavelength, which is otherwise the
@@ -2370,9 +2400,10 @@ so a row you have annotated survives a fresh download.
 Under `results/phases/KEY` go three files. `phases_KEY.csv` is the ranking,
 with the rank, COD id, formula, space group, the explained and missing counts,
 the score, the rejection reason and the path of the CIF.
-`phases_KEY_unexplained.csv` is one row per peak no candidate explained, with
-its two theta, d spacing, and the main phase and reflection that account for
-it or nothing where none does. `phases_KEY_record.csv` is the record of the
+`phases_KEY_unexplained.csv` is one row per peak the main phase does not
+explain, with its two theta, its d spacing, and the best ranked other
+candidate that is not rejected and has a reflection within the tolerance of
+it, with that reflection, or nothing where no such candidate has one. `phases_KEY_record.csv` is the record of the
 run, appended one row per run: the scan, the sample, the wavelength, the
 elements, the space group filter, the zero, the window, the tolerance, the
 peaks observed, the candidates searched and fetched, the peaks left over, the
@@ -6270,13 +6301,23 @@ the rule Section 6.3 watches do its job on two of the eleven entries.
 string, the `cif` the pattern came from, and `explained_positions`.
 
 `attribute_unexplained(observed, explained, cif, wavelength, phase,
-window=PHASES_WINDOW, tolerance=PHASES_TOLERANCE, simulate=None)` takes the
-peaks no candidate accounted for and tries the main phase's own pattern on
-each. It returns a list of `UnexplainedPeak`, each with its `two_theta` and
-`d_spacing` and, where the main phase has a reflection within tolerance, that
-reflection's `phase`, `hkl`, `reflection_two_theta` and `intensity`; its
-`identified` property says whether there was one. A peak with none is
-unidentified and is the one worth chasing, which Section 6.4 discusses.
+window=PHASES_WINDOW, tolerance=PHASES_TOLERANCE, simulate=None)` lists the
+peaks the main phase does not explain and labels each with another phase that
+has a reflection near it. `explained` is the main phase's
+`explained_positions`, the observed positions themselves, and each peak of
+`observed` is decided on its own: it is left over unless its own position is
+among them, so a peak lying close to an explained one is still listed. `cif`
+and `phase` are one CIF and the name to give it, or two lists of the same
+length in order of preference; the command passes the candidates that are not
+rejected and are not the main phase, best ranked first. Every peak left over
+is labelled with the first of them whose pattern has a reflection within
+`tolerance` of it, and a pattern is simulated only while some peak is still
+unlabelled. It returns a list of `UnexplainedPeak`, each with its `two_theta`
+and `d_spacing` and, where a phase was found, its `phase`, `hkl`,
+`reflection_two_theta` and `intensity`; its `identified` property says whether
+one was. It raises `ValueError` when `cif` and `phase` are lists of different
+lengths. A label is a reflection at that position and not an identification,
+which Section 6.4 discusses, and a peak with none is the one worth chasing.
 
 Both take a `simulate` callable that replaces `simulate_pattern`. That is the
 seam for a caller who has patterns from elsewhere, or a test with no pymatgen,
